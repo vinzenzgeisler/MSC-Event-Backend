@@ -1,0 +1,22 @@
+{
+  "name": "dreiecksrennen-infra",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -w -p tsconfig.json",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy --all",
+    "diff": "cdk diff"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "aws-cdk": "2.177.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.177.0",
+    "constructs": "^10.3.0"
+  }
+}

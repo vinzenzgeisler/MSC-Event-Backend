@@ -27,17 +27,11 @@ export class ApiStack extends Stack {
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
 
-    const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'ApiLambdaSecurityGroup', {
-      vpc: props.dataStack.vpc,
-      securityGroupName: `${props.config.prefix}-api-lambda-sg`,
-      description: 'Security Group for API Lambda function'
-    });
-
-    props.dataStack.dbSecurityGroup.addIngressRule(lambdaSecurityGroup, ec2.Port.tcp(5432), 'Allow API Lambda to connect to PostgreSQL');
+    const lambdaSecurityGroup = props.dataStack.apiLambdaSecurityGroup;
 
     const apiHandler = new NodejsFunction(this, 'ApiHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
-      entry: path.join(__dirname, '../../../services/api/src/handler.ts'),
+      entry: path.join(__dirname, '../../../api/src/handler.ts'),
       handler: 'handler',
       functionName: `${props.config.prefix}-api-handler`,
       memorySize: 256,
@@ -101,6 +95,20 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/ping',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/db/ping',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/db/schema',
       methods: [apigwv2.HttpMethod.GET],
       integration,
       authorizer: jwtAuthorizer

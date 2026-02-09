@@ -1,0 +1,20 @@
+{
+  "name": "dreiecksrennen",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "api",
+    "infra"
+  ],
+  "scripts": {
+    "build": "npm run -ws --if-present build",
+    "infra:build": "npm --workspace infra run build",
+    "synth": "npm --workspace infra run synth",
+    "deploy": "npm --workspace infra run deploy",
+    "diff": "npm --workspace infra run diff",
+    "api:build": "npm --workspace api run build",
+    "api:db:generate": "npm --workspace api run db:generate",
+    "api:db:migrate": "npm --workspace api run db:migrate",
+    "api:start": "npm --workspace api run start"
+  }
+}

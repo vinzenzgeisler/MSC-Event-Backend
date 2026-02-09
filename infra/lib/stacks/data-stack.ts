@@ -11,6 +11,7 @@ interface DataStackProps extends StackProps {
 export class DataStack extends Stack {
   public readonly vpc: ec2.Vpc;
   public readonly dbSecurityGroup: ec2.SecurityGroup;
+  public readonly apiLambdaSecurityGroup: ec2.SecurityGroup;
   public readonly dbSecret: rds.DatabaseSecret;
   public readonly dbInstance: rds.DatabaseInstance;
 
@@ -44,6 +45,18 @@ export class DataStack extends Stack {
       description: 'Security Group for PostgreSQL RDS instance'
     });
 
+    this.apiLambdaSecurityGroup = new ec2.SecurityGroup(this, 'ApiLambdaSecurityGroup', {
+      vpc: this.vpc,
+      securityGroupName: `${props.config.prefix}-api-lambda-sg`,
+      description: 'Security Group for API Lambda function'
+    });
+
+    this.dbSecurityGroup.addIngressRule(
+      this.apiLambdaSecurityGroup,
+      ec2.Port.tcp(5432),
+      'Allow API Lambda to connect to PostgreSQL'
+    );
+
     this.dbSecret = new rds.DatabaseSecret(this, 'DbSecret', {
       username: 'eventadmin',
       secretName: `${props.config.prefix}/rds/postgres`
@@ -57,7 +70,7 @@ export class DataStack extends Stack {
     this.dbInstance = new rds.DatabaseInstance(this, 'Postgres', {
       instanceIdentifier: `${props.config.prefix}-postgres`,
       engine: rds.DatabaseInstanceEngine.postgres({
-        version: rds.PostgresEngineVersion.VER_16_3
+        version: rds.PostgresEngineVersion.VER_16
       }),
       vpc: this.vpc,
       credentials: rds.Credentials.fromSecret(this.dbSecret),

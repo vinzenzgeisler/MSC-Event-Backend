@@ -80,7 +80,9 @@ export class DataStack extends Stack {
     );
 
     this.dbInstance = new rds.DatabaseInstance(this, 'Postgres', {
-      instanceIdentifier: `${props.config.prefix}-postgres`,
+      instanceIdentifier: props.config.dbPublicAccess
+        ? `${props.config.prefix}-postgres-public`
+        : `${props.config.prefix}-postgres`,
       engine: rds.DatabaseInstanceEngine.postgres({
         version: rds.PostgresEngineVersion.VER_16
       }),

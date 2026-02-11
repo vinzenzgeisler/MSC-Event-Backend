@@ -94,14 +94,18 @@ export class MigrationRunnerStack extends Stack {
             }
           },
           pre_build: {
-            commands: ['npm ci --workspace api']
+            commands: [
+              'npm ci --workspace api',
+              'curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-global-bundle.pem',
+              'export DB_SSL_CA_PATH=/tmp/rds-global-bundle.pem'
+            ]
           },
           build: {
             commands: [
               'cd api',
               "USER_ENC=$(node -e \"process.stdout.write(encodeURIComponent(process.env.DB_USERNAME || ''))\")",
               "PASS_ENC=$(node -e \"process.stdout.write(encodeURIComponent(process.env.DB_PASSWORD || ''))\")",
-              'export DATABASE_URL="postgres://$USER_ENC:$PASS_ENC@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=require"',
+              'export DATABASE_URL="postgres://$USER_ENC:$PASS_ENC@$DB_HOST:$DB_PORT/$DB_NAME"',
               'npm run db:migrate'
             ]
           }

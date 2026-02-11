@@ -10,6 +10,18 @@ const getDatabaseUrl = () => {
   return value;
 };
 
+const buildSslConfig = () => {
+  const caPath = process.env.DB_SSL_CA_PATH;
+  if (!caPath) {
+    throw new Error('DB_SSL_CA_PATH is not set');
+  }
+  const ca = fs.readFileSync(caPath, 'utf8');
+  return {
+    rejectUnauthorized: true,
+    ca
+  };
+};
+
 const ensureMigrationsTable = async (client) => {
   await client.query(`
     create table if not exists schema_migrations (
@@ -26,7 +38,8 @@ const loadAppliedMigrations = async (client) => {
 
 const run = async () => {
   const client = new Client({
-    connectionString: getDatabaseUrl()
+    connectionString: getDatabaseUrl(),
+    ssl: buildSslConfig()
   });
 
   await client.connect();

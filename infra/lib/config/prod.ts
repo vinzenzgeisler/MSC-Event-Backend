@@ -12,5 +12,6 @@ export const prodConfig: StageConfig = {
     instanceClass: 'BURSTABLE3',
     instanceSize: 'MICRO'
   },
+  dbPublicAccess: false,
   removalPolicy: 'retain'
 };

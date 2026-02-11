@@ -10,5 +10,6 @@ export interface StageConfig {
     instanceClass: string;
     instanceSize: string;
   };
+  dbPublicAccess: boolean;
   removalPolicy: 'destroy' | 'retain';
 }

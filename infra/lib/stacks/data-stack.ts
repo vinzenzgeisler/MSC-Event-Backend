@@ -75,7 +75,7 @@ export class DataStack extends Stack {
       vpc: this.vpc,
       credentials: rds.Credentials.fromSecret(this.dbSecret),
       vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_ISOLATED
+        subnetType: props.config.dbPublicAccess ? ec2.SubnetType.PUBLIC : ec2.SubnetType.PRIVATE_ISOLATED
       },
       securityGroups: [this.dbSecurityGroup],
       allocatedStorage: 20,
@@ -86,7 +86,7 @@ export class DataStack extends Stack {
       removalPolicy: props.config.removalPolicy === 'destroy' ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN,
       deleteAutomatedBackups: props.config.removalPolicy === 'destroy',
       deletionProtection: props.config.removalPolicy !== 'destroy',
-      publiclyAccessible: false,
+      publiclyAccessible: props.config.dbPublicAccess,
       storageEncrypted: true
     });
 
@@ -103,6 +103,11 @@ export class DataStack extends Stack {
     new CfnOutput(this, 'DbName', {
       value: props.config.dbName,
       exportName: `${props.config.prefix}-db-name`
+    });
+
+    new CfnOutput(this, 'DbSecurityGroupId', {
+      value: this.dbSecurityGroup.securityGroupId,
+      exportName: `${props.config.prefix}-db-security-group-id`
     });
   }
 }

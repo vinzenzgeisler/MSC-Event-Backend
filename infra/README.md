@@ -65,6 +65,10 @@ STAGE=dev npx cdk deploy --all
 
 Die CDK App liest die Stage über `-c stage=<dev|prod>` oder über die Umgebungsvariable `STAGE`.
 
+Netzwerkmodus:
+- `dev`: `dbPublicAccess: true` (DB in public subnets, Zugriff weiter über Security Group Regeln steuern)
+- `prod`: `dbPublicAccess: false` (DB privat/isolated)
+
 ## Phase 3 Konfiguration (Mail/Jobs)
 
 Setze vor `cdk deploy` folgende Umgebungsvariablen:
@@ -92,3 +96,10 @@ So startest du Migrationen:
 
 1. Secret in Secrets Manager aktualisieren (`/dreiecksrennen/github/pat`) mit neuem JSON-Wert `{"token":"<NEW_PAT>"}`.
 2. Build erneut starten.
+
+## Dev Zugriff auf DB per eigener IP
+
+1. Aktuelle Public IP holen:
+   - PowerShell: `(Invoke-RestMethod https://checkip.amazonaws.com).Trim()`
+2. Ingress-Regel auf DB-SG setzen (Port 5432, nur `x.x.x.x/32`).
+3. Bei IP-Wechsel alte Regel entfernen und neue setzen.

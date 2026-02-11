@@ -81,7 +81,7 @@ So startest du Migrationen:
 
 1. Lege das GitHub PAT in Secrets Manager ab (kein Klartext im Code):
    - Secret Name: `/dreiecksrennen/github/pat`
-   - Secret Value: reines Token als Plaintext
+   - Secret Value (JSON): `{"token":"<PAT>"}`
 2. Minimale PAT-Scopes:
    - Privates Repo klonen: `repo`
 3. Starte den Build über CLI:
@@ -90,7 +90,5 @@ So startest du Migrationen:
 
 ### PAT Rotation
 
-1. Secret in Secrets Manager aktualisieren (`/dreiecksrennen/github/pat`).
-2. Migration Runner Stack neu deployen:
-   - `npx cdk deploy <stage-prefix>-migration-runner-stack`
-3. Build erneut starten.
+1. Secret in Secrets Manager aktualisieren (`/dreiecksrennen/github/pat`) mit neuem JSON-Wert `{"token":"<NEW_PAT>"}`.
+2. Build erneut starten.

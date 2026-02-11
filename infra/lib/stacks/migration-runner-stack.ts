@@ -1,9 +1,7 @@
 import { CfnOutput, Duration, Stack, StackProps } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
-import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { StageConfig } from '../config/types';
 import { DataStack } from './data-stack';
@@ -24,39 +22,6 @@ export class MigrationRunnerStack extends Stack {
       'GithubPatSecret',
       '/dreiecksrennen/github/pat'
     );
-
-    // Explicitly import PAT credentials for CodeBuild GitHub source.
-    new cr.AwsCustomResource(this, 'ImportGithubPatCredentials', {
-      onCreate: {
-        service: 'CodeBuild',
-        action: 'importSourceCredentials',
-        parameters: {
-          serverType: 'GITHUB',
-          authType: 'PERSONAL_ACCESS_TOKEN',
-          token: githubPatSecret.secretValue.toString(),
-          shouldOverwrite: true
-        },
-        physicalResourceId: cr.PhysicalResourceId.of('codebuild-github-pat-credentials')
-      },
-      onUpdate: {
-        service: 'CodeBuild',
-        action: 'importSourceCredentials',
-        parameters: {
-          serverType: 'GITHUB',
-          authType: 'PERSONAL_ACCESS_TOKEN',
-          token: githubPatSecret.secretValue.toString(),
-          shouldOverwrite: true
-        },
-        physicalResourceId: cr.PhysicalResourceId.of('codebuild-github-pat-credentials')
-      },
-      policy: cr.AwsCustomResourcePolicy.fromStatements([
-        new iam.PolicyStatement({
-          actions: ['codebuild:ImportSourceCredentials'],
-          resources: ['*']
-        })
-      ]),
-      installLatestAwsSdk: false
-    });
 
     const migrationSecurityGroup = new ec2.SecurityGroup(this, 'MigrationRunnerSecurityGroup', {
       vpc: props.dataStack.vpc,
@@ -129,7 +94,12 @@ export class MigrationRunnerStack extends Stack {
       })
     });
 
+    const cfnProject = this.project.node.defaultChild as codebuild.CfnProject;
+    cfnProject.addPropertyOverride('Source.Auth.Type', 'SECRETS_MANAGER');
+    cfnProject.addPropertyOverride('Source.Auth.Resource', githubPatSecret.secretArn);
+
     props.dataStack.dbSecret.grantRead(this.project);
+    githubPatSecret.grantRead(this.project);
 
     new CfnOutput(this, 'MigrationRunnerProjectName', {
       value: this.project.projectName,

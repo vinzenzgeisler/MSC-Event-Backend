@@ -1,0 +1,35 @@
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+
+const getDocumentsBucket = (): string => {
+  const bucket = process.env.DOCUMENTS_BUCKET;
+  if (!bucket) {
+    throw new Error('DOCUMENTS_BUCKET is not set');
+  }
+  return bucket;
+};
+
+const getS3Client = () => new S3Client({});
+
+export const uploadPdf = async (key: string, body: Buffer) => {
+  const client = getS3Client();
+  const bucket = getDocumentsBucket();
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: body,
+      ContentType: 'application/pdf'
+    })
+  );
+};
+
+export const getPresignedDownloadUrl = async (key: string, expiresInSeconds = 300) => {
+  const client = getS3Client();
+  const bucket = getDocumentsBucket();
+  const command = new GetObjectCommand({
+    Bucket: bucket,
+    Key: key
+  });
+  return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+};

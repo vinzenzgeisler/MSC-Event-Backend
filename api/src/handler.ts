@@ -1,14 +1,15 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { ZodError } from 'zod';
 import { sql } from 'drizzle-orm';
 import { getDb } from './db/client';
+import { getAuthContext, hasAnyGroup, hasGroup } from './http/auth';
+import { errorJson, json } from './http/response';
+import { parseJsonBody } from './http/parse';
+import { queueMail, queuePaymentReminders, validateQueueMailInput, validateReminderInput } from './routes/adminMail';
+import { createTechCheckDocument, createWaiverDocument, getDocumentDownload, validateDocumentRequest } from './routes/adminDocs';
 
-const json = (statusCode: number, body: Record<string, unknown>): APIGatewayProxyStructuredResultV2 => ({
-  statusCode,
-  headers: {
-    'content-type': 'application/json'
-  },
-  body: JSON.stringify(body)
-});
+const isInvalidJson = (error: unknown): boolean =>
+  error instanceof Error && error.message === 'Invalid JSON body';
 
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyStructuredResultV2> => {
   const method = event.requestContext.http.method;
@@ -20,15 +21,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   if (method === 'GET' && path === '/admin/ping') {
-    const claims = ((event.requestContext as { authorizer?: { jwt?: { claims?: unknown } } }).authorizer?.jwt?.claims ??
-      {}) as Record<string, string | undefined>;
-    const rawGroups = claims['cognito:groups'];
-    const groups = rawGroups ? rawGroups.split(',').map((group) => group.trim()).filter(Boolean) : [];
+    const auth = getAuthContext(event);
 
     return json(200, {
       ok: true,
-      sub: claims.sub ?? null,
-      groups
+      sub: auth.sub,
+      groups: auth.groups
     });
   }
 
@@ -64,6 +62,125 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       });
     } catch (error) {
       return json(500, { ok: false, message: 'Schema query failed' });
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/mail/queue') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateQueueMailInput(payload);
+      const result = await queueMail(input, auth.sub);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
+        return errorJson(409, 'Duplicate request');
+      }
+      return errorJson(500, 'Mail queue failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/payment/reminders/queue') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateReminderInput(payload);
+      const result = await queuePaymentReminders(input, auth.sub);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
+        return errorJson(409, 'Duplicate request');
+      }
+      return errorJson(500, 'Reminder queue failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/documents/waiver') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateDocumentRequest(payload);
+      const doc = await createWaiverDocument(input, auth.sub);
+      if (!doc) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, documentId: doc.id });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Document generation failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/documents/tech-check') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateDocumentRequest(payload);
+      const doc = await createTechCheckDocument(input, auth.sub);
+      if (!doc) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, documentId: doc.id });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Document generation failed');
+    }
+  }
+
+  const docDownloadMatch = path.match(/^\/admin\/documents\/([^/]+)\/download$/);
+  if (method === 'GET' && docDownloadMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'checkin', 'viewer'])) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    const id = docDownloadMatch[1];
+    try {
+      const result = await getDocumentDownload(id);
+      if (!result) {
+        return errorJson(404, 'Document not found');
+      }
+      return json(200, { ok: true, url: result.url });
+    } catch (error) {
+      return errorJson(500, 'Download failed');
     }
   }
 

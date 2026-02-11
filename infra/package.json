@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "aws-cdk-lib": "2.177.0",
-    "constructs": "^10.3.0"
+    "constructs": "^10.3.0",
+    "psql": "^0.0.1"
   }
 }

@@ -186,3 +186,90 @@ export const auditLog = pgTable(
     eventIndex: index('audit_log_event_idx').on(table.eventId)
   })
 );
+
+export const emailOutbox = pgTable(
+  'email_outbox',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').references(() => event.id, { onDelete: 'set null' }),
+    toEmail: text('to_email').notNull(),
+    subject: text('subject').notNull(),
+    templateId: text('template_id').notNull(),
+    templateData: jsonb('template_data'),
+    status: text('status').notNull().default('queued'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastError: text('last_error'),
+    sendAfter: timestamp('send_after', { withTimezone: true }).notNull().defaultNow(),
+    idempotencyKey: text('idempotency_key'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    statusCheck: check('email_outbox_status_check', sql`${table.status} in ('queued', 'sending', 'sent', 'failed')`),
+    statusSendAfterIndex: index('email_outbox_status_send_after_idx').on(table.status, table.sendAfter),
+    idempotencyUnique: uniqueIndex('email_outbox_idempotency_unique')
+      .on(table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`)
+  })
+);
+
+export const emailDelivery = pgTable(
+  'email_delivery',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    outboxId: uuid('outbox_id')
+      .notNull()
+      .references(() => emailOutbox.id, { onDelete: 'cascade' }),
+    sesMessageId: text('ses_message_id'),
+    status: text('status').notNull().default('sent'),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    providerResponse: jsonb('provider_response')
+  },
+  (table) => ({
+    statusCheck: check('email_delivery_status_check', sql`${table.status} in ('sent', 'failed')`)
+  })
+);
+
+export const document = pgTable(
+  'document',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').references(() => event.id, { onDelete: 'set null' }),
+    entryId: uuid('entry_id').references(() => entry.id, { onDelete: 'set null' }),
+    driverPersonId: uuid('driver_person_id').references(() => person.id, { onDelete: 'set null' }),
+    type: text('type').notNull(),
+    templateVersion: text('template_version').notNull(),
+    sha256: text('sha256').notNull(),
+    s3Key: text('s3_key').notNull(),
+    status: text('status').notNull().default('generated'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text('created_by')
+  },
+  (table) => ({
+    typeCheck: check('document_type_check', sql`${table.type} in ('waiver', 'tech_check')`),
+    statusCheck: check('document_status_check', sql`${table.status} in ('generated', 'failed')`),
+    eventTypeIndex: index('document_event_type_idx').on(table.eventId, table.type)
+  })
+);
+
+export const documentGenerationJob = pgTable(
+  'document_generation_job',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => document.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('queued'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    statusCheck: check(
+      'document_generation_job_status_check',
+      sql`${table.status} in ('queued', 'processing', 'succeeded', 'failed')`
+    ),
+    statusIndex: index('document_generation_job_status_idx').on(table.status)
+  })
+);

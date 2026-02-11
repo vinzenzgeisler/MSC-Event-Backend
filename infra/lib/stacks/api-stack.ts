@@ -4,6 +4,8 @@ import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -41,7 +43,58 @@ export class ApiStack extends Stack {
         DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
         ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
         DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
-        COGNITO_ISSUER: props.authStack.userPoolIssuerUrl
+        COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
+        SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? ''
+      },
+      bundling: {
+        target: 'node20',
+        sourceMap: true,
+        minify: false
+      },
+      vpc: props.dataStack.vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS
+      },
+      securityGroups: [lambdaSecurityGroup]
+    });
+
+    const emailWorker = new NodejsFunction(this, 'EmailWorker', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(__dirname, '../../../api/src/jobs/emailWorker.ts'),
+      handler: 'handler',
+      functionName: `${props.config.prefix}-email-worker`,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        STAGE: props.config.stage,
+        DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
+        SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? '',
+        EMAIL_WORKER_BATCH_SIZE: '20'
+      },
+      bundling: {
+        target: 'node20',
+        sourceMap: true,
+        minify: false
+      },
+      vpc: props.dataStack.vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS
+      },
+      securityGroups: [lambdaSecurityGroup]
+    });
+
+    const paymentReminderScheduler = new NodejsFunction(this, 'PaymentReminderScheduler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(__dirname, '../../../api/src/jobs/paymentReminderScheduler.ts'),
+      handler: 'handler',
+      functionName: `${props.config.prefix}-payment-reminder`,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        STAGE: props.config.stage,
+        DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
+        PAYMENT_REMINDER_TEMPLATE_ID: process.env.PAYMENT_REMINDER_TEMPLATE_ID ?? 'payment-reminder',
+        PAYMENT_REMINDER_SUBJECT: process.env.PAYMENT_REMINDER_SUBJECT ?? 'Zahlungserinnerung'
       },
       bundling: {
         target: 'node20',
@@ -75,6 +128,34 @@ export class ApiStack extends Stack {
           resources: [`${bucket.bucketArn}/*`]
         })
       );
+    });
+
+    [apiHandler, emailWorker, paymentReminderScheduler].forEach((fn) => {
+      fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['ses:SendEmail', 'ses:SendRawEmail'],
+          resources: ['*']
+        })
+      );
+    });
+
+    [emailWorker, paymentReminderScheduler].forEach((fn) => {
+      fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['secretsmanager:GetSecretValue'],
+          resources: [props.dataStack.dbSecret.secretArn]
+        })
+      );
+    });
+
+    new events.Rule(this, 'EmailWorkerSchedule', {
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      targets: [new targets.LambdaFunction(emailWorker)]
+    });
+
+    new events.Rule(this, 'PaymentReminderSchedule', {
+      schedule: events.Schedule.rate(cdk.Duration.hours(24)),
+      targets: [new targets.LambdaFunction(paymentReminderScheduler)]
     });
 
     const integration = new integrations.HttpLambdaIntegration('ApiIntegration', apiHandler);

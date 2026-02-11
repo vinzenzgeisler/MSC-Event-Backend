@@ -2,6 +2,7 @@ import { CfnOutput, Duration, Stack, StackProps } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { StageConfig } from '../config/types';
 import { DataStack } from './data-stack';
@@ -22,6 +23,20 @@ export class MigrationRunnerStack extends Stack {
       'GithubPatSecret',
       '/dreiecksrennen/github/pat'
     );
+    const githubPatSecretArnLookup = new cr.AwsCustomResource(this, 'GithubPatSecretArnLookup', {
+      onUpdate: {
+        service: 'SecretsManager',
+        action: 'describeSecret',
+        parameters: {
+          SecretId: '/dreiecksrennen/github/pat'
+        },
+        physicalResourceId: cr.PhysicalResourceId.of('github-pat-secret-arn-lookup')
+      },
+      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
+        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE
+      }),
+      installLatestAwsSdk: false
+    });
 
     const migrationSecurityGroup = new ec2.SecurityGroup(this, 'MigrationRunnerSecurityGroup', {
       vpc: props.dataStack.vpc,
@@ -96,7 +111,7 @@ export class MigrationRunnerStack extends Stack {
 
     const cfnProject = this.project.node.defaultChild as codebuild.CfnProject;
     cfnProject.addPropertyOverride('Source.Auth.Type', 'SECRETS_MANAGER');
-    cfnProject.addPropertyOverride('Source.Auth.Resource', githubPatSecret.secretArn);
+    cfnProject.addPropertyOverride('Source.Auth.Resource', githubPatSecretArnLookup.getResponseField('ARN'));
 
     props.dataStack.dbSecret.grantRead(this.project);
     githubPatSecret.grantRead(this.project);

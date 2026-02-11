@@ -39,6 +39,9 @@ set DATABASE_URL=postgres://user:pass@localhost:5432/dbname
 npm run db:migrate
 ```
 
+Hinweis: `db:migrate` verwendet einen SQL-Runner (`api/migrations/*.sql`) und benoetigt kein `drizzle-kit` Meta-Journal.
+Falls du explizit den Drizzle-Migrator nutzen willst: `npm run db:migrate:drizzle`.
+
 ## Hinweis
 
 Die Lambda holt DB-Credentials aus Secrets Manager (`DB_SECRET_ARN`) und nutzt die RDS-Postgres Instanz aus Phase 1.

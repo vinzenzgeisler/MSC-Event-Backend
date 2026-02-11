@@ -67,6 +67,18 @@ export class DataStack extends Stack {
       ec2.InstanceSize[props.config.dbInstanceType.instanceSize as keyof typeof ec2.InstanceSize]
     );
 
+    const dbSubnetGroup = new rds.SubnetGroup(
+      this,
+      props.config.dbPublicAccess ? 'DbSubnetGroupPublic' : 'DbSubnetGroupPrivate',
+      {
+        description: 'Subnet group for PostgreSQL RDS',
+        vpc: this.vpc,
+        vpcSubnets: {
+          subnetType: props.config.dbPublicAccess ? ec2.SubnetType.PUBLIC : ec2.SubnetType.PRIVATE_ISOLATED
+        }
+      }
+    );
+
     this.dbInstance = new rds.DatabaseInstance(this, 'Postgres', {
       instanceIdentifier: `${props.config.prefix}-postgres`,
       engine: rds.DatabaseInstanceEngine.postgres({
@@ -74,9 +86,7 @@ export class DataStack extends Stack {
       }),
       vpc: this.vpc,
       credentials: rds.Credentials.fromSecret(this.dbSecret),
-      vpcSubnets: {
-        subnetType: props.config.dbPublicAccess ? ec2.SubnetType.PUBLIC : ec2.SubnetType.PRIVATE_ISOLATED
-      },
+      subnetGroup: dbSubnetGroup,
       securityGroups: [this.dbSecurityGroup],
       allocatedStorage: 20,
       maxAllocatedStorage: 100,

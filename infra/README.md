@@ -79,7 +79,18 @@ Der Migration Runner nutzt CodeBuild in der VPC und führt `npm run db:migrate` 
 
 So startest du Migrationen:
 
-1. Stelle sicher, dass CodeBuild Zugriff auf das GitHub-Repo hat (OAuth-Token oder CodeStar-Connection im AWS Account).
-2. Starte den Build über CLI:
+1. Lege das GitHub PAT in Secrets Manager ab (kein Klartext im Code):
+   - Secret Name: `/dreiecksrennen/github/pat`
+   - Secret Value: reines Token als Plaintext
+2. Minimale PAT-Scopes:
+   - Privates Repo klonen: `repo`
+3. Starte den Build über CLI:
    - `aws codebuild start-build --project-name <MigrationRunnerProjectName>`
-3. Logs findest du in CloudWatch Logs unter dem CodeBuild-Projekt.
+4. Logs findest du in CloudWatch Logs unter dem CodeBuild-Projekt.
+
+### PAT Rotation
+
+1. Secret in Secrets Manager aktualisieren (`/dreiecksrennen/github/pat`).
+2. Migration Runner Stack neu deployen:
+   - `npx cdk deploy <stage-prefix>-migration-runner-stack`
+3. Build erneut starten.

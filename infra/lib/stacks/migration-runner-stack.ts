@@ -1,6 +1,9 @@
 import { CfnOutput, Duration, Stack, StackProps } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { StageConfig } from '../config/types';
 import { DataStack } from './data-stack';
@@ -15,6 +18,45 @@ export class MigrationRunnerStack extends Stack {
 
   constructor(scope: Construct, id: string, props: MigrationRunnerStackProps) {
     super(scope, id, props);
+
+    const githubPatSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'GithubPatSecret',
+      '/dreiecksrennen/github/pat'
+    );
+
+    // Explicitly import PAT credentials for CodeBuild GitHub source.
+    new cr.AwsCustomResource(this, 'ImportGithubPatCredentials', {
+      onCreate: {
+        service: 'CodeBuild',
+        action: 'importSourceCredentials',
+        parameters: {
+          serverType: 'GITHUB',
+          authType: 'PERSONAL_ACCESS_TOKEN',
+          token: githubPatSecret.secretValue.toString(),
+          shouldOverwrite: true
+        },
+        physicalResourceId: cr.PhysicalResourceId.of('codebuild-github-pat-credentials')
+      },
+      onUpdate: {
+        service: 'CodeBuild',
+        action: 'importSourceCredentials',
+        parameters: {
+          serverType: 'GITHUB',
+          authType: 'PERSONAL_ACCESS_TOKEN',
+          token: githubPatSecret.secretValue.toString(),
+          shouldOverwrite: true
+        },
+        physicalResourceId: cr.PhysicalResourceId.of('codebuild-github-pat-credentials')
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['codebuild:ImportSourceCredentials'],
+          resources: ['*']
+        })
+      ]),
+      installLatestAwsSdk: false
+    });
 
     const migrationSecurityGroup = new ec2.SecurityGroup(this, 'MigrationRunnerSecurityGroup', {
       vpc: props.dataStack.vpc,
@@ -36,13 +78,14 @@ export class MigrationRunnerStack extends Stack {
       timeout: Duration.minutes(15),
       vpc: props.dataStack.vpc,
       subnetSelection: {
-        subnetType: ec2.SubnetType.PUBLIC
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS
       },
       securityGroups: [migrationSecurityGroup],
       environment: {
         buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
         computeType: codebuild.ComputeType.SMALL
       },
+      cache: codebuild.Cache.local(codebuild.LocalCacheMode.CUSTOM),
       source: codebuild.Source.gitHub({
         owner: 'dariakoz',
         repo: 'MSC-Event-Backend',
@@ -52,6 +95,9 @@ export class MigrationRunnerStack extends Stack {
       }),
       buildSpec: codebuild.BuildSpec.fromObject({
         version: '0.2',
+        cache: {
+          paths: ['/root/.npm/**/*']
+        },
         env: {
           'secrets-manager': {
             DB_USERNAME: `${props.dataStack.dbSecret.secretArn}:username`,
@@ -68,7 +114,7 @@ export class MigrationRunnerStack extends Stack {
             }
           },
           pre_build: {
-            commands: ['cd api', 'npm ci']
+            commands: ['npm ci --workspace api']
           },
           build: {
             commands: [

@@ -44,7 +44,7 @@ export class MigrationRunnerStack extends Stack {
         computeType: codebuild.ComputeType.SMALL
       },
       source: codebuild.Source.gitHub({
-        owner: 'VinzenzGeisler',
+        owner: 'dariakoz',
         repo: 'MSC-Event-Backend',
         branchOrRef: 'main',
         cloneDepth: 1,

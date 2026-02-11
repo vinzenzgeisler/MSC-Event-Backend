@@ -101,7 +101,7 @@ export class MigrationRunnerStack extends Stack {
               'cd api',
               "USER_ENC=$(node -e \"process.stdout.write(encodeURIComponent(process.env.DB_USERNAME || ''))\")",
               "PASS_ENC=$(node -e \"process.stdout.write(encodeURIComponent(process.env.DB_PASSWORD || ''))\")",
-              'export DATABASE_URL="postgres://$USER_ENC:$PASS_ENC@$DB_HOST:$DB_PORT/$DB_NAME"',
+              'export DATABASE_URL="postgres://$USER_ENC:$PASS_ENC@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=require"',
               'npm run db:migrate'
             ]
           }

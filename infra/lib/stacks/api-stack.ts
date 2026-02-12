@@ -41,6 +41,7 @@ export class ApiStack extends Stack {
       environment: {
         STAGE: props.config.stage,
         DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
+        DB_SSL: 'true',
         ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
         DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
         COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
@@ -68,6 +69,7 @@ export class ApiStack extends Stack {
       environment: {
         STAGE: props.config.stage,
         DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
+        DB_SSL: 'true',
         SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? '',
         EMAIL_WORKER_BATCH_SIZE: '20'
       },
@@ -93,6 +95,7 @@ export class ApiStack extends Stack {
       environment: {
         STAGE: props.config.stage,
         DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
+        DB_SSL: 'true',
         PAYMENT_REMINDER_TEMPLATE_ID: process.env.PAYMENT_REMINDER_TEMPLATE_ID ?? 'payment-reminder',
         PAYMENT_REMINDER_SUBJECT: process.env.PAYMENT_REMINDER_SUBJECT ?? 'Zahlungserinnerung'
       },

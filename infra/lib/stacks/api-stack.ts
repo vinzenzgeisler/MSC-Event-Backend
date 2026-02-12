@@ -202,6 +202,41 @@ export class ApiStack extends Stack {
       authorizer: jwtAuthorizer
     });
 
+    this.api.addRoutes({
+      path: '/admin/mail/queue',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/payment/reminders/queue',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/documents/waiver',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/documents/tech-check',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/documents/{id}/download',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
     new CfnOutput(this, 'ApiUrl', {
       value: this.api.url ?? 'n/a',
       exportName: `${props.config.prefix}-api-url`

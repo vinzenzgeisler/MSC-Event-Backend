@@ -56,6 +56,7 @@ const buildPool = (secret: DbSecret): Pool => {
     typeof secret.port === 'string' ? Number.parseInt(secret.port, 10) : secret.port ?? 5432;
 
   const sslEnabled = process.env.DB_SSL === 'true';
+  const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';
 
   return new Pool({
     host: secret.host,
@@ -63,7 +64,7 @@ const buildPool = (secret: DbSecret): Pool => {
     user: secret.username,
     password: secret.password,
     database,
-    ssl: sslEnabled ? { rejectUnauthorized: true } : undefined
+    ssl: sslEnabled ? { rejectUnauthorized } : undefined
   });
 };
 

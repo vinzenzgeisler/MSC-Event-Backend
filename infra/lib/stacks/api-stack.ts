@@ -30,6 +30,7 @@ export class ApiStack extends Stack {
     super(scope, id, props);
 
     const lambdaSecurityGroup = props.dataStack.apiLambdaSecurityGroup;
+    const sslRejectUnauthorized = props.config.stage === 'prod' ? 'true' : 'false';
 
     const apiHandler = new NodejsFunction(this, 'ApiHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -42,6 +43,7 @@ export class ApiStack extends Stack {
         STAGE: props.config.stage,
         DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
         DB_SSL: 'true',
+        DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
         ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
         DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
         COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
@@ -70,6 +72,7 @@ export class ApiStack extends Stack {
         STAGE: props.config.stage,
         DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
         DB_SSL: 'true',
+        DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
         SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? '',
         EMAIL_WORKER_BATCH_SIZE: '20'
       },
@@ -96,6 +99,7 @@ export class ApiStack extends Stack {
         STAGE: props.config.stage,
         DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
         DB_SSL: 'true',
+        DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
         PAYMENT_REMINDER_TEMPLATE_ID: process.env.PAYMENT_REMINDER_TEMPLATE_ID ?? 'payment-reminder',
         PAYMENT_REMINDER_SUBJECT: process.env.PAYMENT_REMINDER_SUBJECT ?? 'Zahlungserinnerung'
       },

@@ -1,4 +1,6 @@
-import PDFDocument from 'pdfkit';
+// Use standalone build so Lambda bundling does not depend on external AFM font files.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const PDFDocument = require('pdfkit/js/pdfkit.standalone');
 import { format } from 'node:util';
 
 type PersonInfo = {
@@ -42,7 +44,7 @@ const renderPdf = (title: string, bodyLines: string[]): Promise<Buffer> =>
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
     const chunks: Buffer[] = [];
 
-    doc.on('data', (chunk) => chunks.push(chunk as Buffer));
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 

@@ -130,13 +130,15 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       return json(200, { ok: true, documentId: doc.id });
     } catch (error) {
+      console.error('create waiver document failed', error);
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
       }
-      return errorJson(500, 'Document generation failed');
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Document generation failed', details);
     }
   }
 
@@ -155,13 +157,15 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       return json(200, { ok: true, documentId: doc.id });
     } catch (error) {
+      console.error('create tech-check document failed', error);
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
       }
-      return errorJson(500, 'Document generation failed');
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Document generation failed', details);
     }
   }
 

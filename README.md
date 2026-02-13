@@ -30,20 +30,12 @@ npm install
 
 - API: `api/README.md`
 - Infra: `infra/README.md`
+- Handover Phase 4: `docs/phase4-handover.md`
+- Smoke Test (PowerShell): `scripts/phase3-smoke-test.ps1`
 
-## Ablauf (Bootstrap + Deploy)
+## Ablauf (Kurz)
 
-1. Docker-unabhängiges Bundling für Lambda aktivieren:
-   - `infra/`:
-     - `npm i -D esbuild`
-2. Zirkuläre Stack-Abhängigkeit behoben:
-   - Security Group für die API-Lambda in `DataStack` definiert.
-   - `ApiStack` nutzt diese Security Group (keine Gegenabhängigkeit mehr).
-3. Bootstrap in `eu-central-1`:
-   - `npx cdk bootstrap aws://195275675655/eu-central-1`
-4. Fehlende API-Dependencies installieren (für Bundling):
-   - `api/`:
-     - `npm install`
-5. Deploy:
-   - `infra/`:
-     - `npx cdk deploy --all`
+1. Installieren: `npm install`
+2. Dev kostenarm deployen: `cd infra && npx cdk deploy --all -c stage=dev -c devProfile=idle`
+3. Für funktionale Tests: `cd infra && npx cdk deploy --all -c stage=dev -c devProfile=test`
+4. Smoke-Test ausführen: `pwsh ./scripts/phase3-smoke-test.ps1`

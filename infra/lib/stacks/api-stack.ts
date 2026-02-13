@@ -74,6 +74,7 @@ export class ApiStack extends Stack {
         DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
         DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
         DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+        DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
         ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
         DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
         COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
@@ -105,6 +106,7 @@ export class ApiStack extends Stack {
         DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
         DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
         DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+        DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
         SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? '',
         EMAIL_WORKER_BATCH_SIZE: '20'
       },
@@ -134,6 +136,7 @@ export class ApiStack extends Stack {
         DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
         DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
         DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+        DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
         PAYMENT_REMINDER_TEMPLATE_ID: process.env.PAYMENT_REMINDER_TEMPLATE_ID ?? 'payment-reminder',
         PAYMENT_REMINDER_SUBJECT: process.env.PAYMENT_REMINDER_SUBJECT ?? 'Zahlungserinnerung'
       },

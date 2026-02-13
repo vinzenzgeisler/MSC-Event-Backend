@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as https from 'https';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import { Signer } from '@aws-sdk/rds-signer';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -25,6 +26,8 @@ type DbConnectionSettings = {
 let cachedSecret: DbSecret | null = null;
 let cachedPool: Pool | null = null;
 let cachedDb: ReturnType<typeof drizzle> | null = null;
+let cachedCaBundle: string | undefined;
+let caBundleLoadPromise: Promise<string | undefined> | null = null;
 
 const getSecretArn = (): string => {
   const arn = process.env.DB_SECRET_ARN;
@@ -88,14 +91,76 @@ const resolveConnectionSettings = (secret: DbSecret): DbConnectionSettings => {
   };
 };
 
-const resolveSslConfig = () => {
+const downloadFile = async (url: string, destination: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(destination);
+    https
+      .get(url, (response) => {
+        if (response.statusCode !== 200) {
+          file.close();
+          fs.unlink(destination, () => undefined);
+          reject(new Error(`Failed to download DB CA bundle: HTTP ${response.statusCode ?? 'unknown'}`));
+          return;
+        }
+
+        response.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          resolve();
+        });
+      })
+      .on('error', (error) => {
+        file.close();
+        fs.unlink(destination, () => undefined);
+        reject(error);
+      });
+  });
+
+const loadCaBundle = async (): Promise<string | undefined> => {
+  if (cachedCaBundle !== undefined) {
+    return cachedCaBundle;
+  }
+  if (caBundleLoadPromise) {
+    return caBundleLoadPromise;
+  }
+
+  caBundleLoadPromise = (async () => {
+    const explicitPath = process.env.DB_SSL_CA_PATH;
+    if (explicitPath) {
+      cachedCaBundle = fs.readFileSync(explicitPath, 'utf8');
+      return cachedCaBundle;
+    }
+
+    if (process.env.DB_SSL_AUTO_DOWNLOAD_CA === 'false') {
+      return undefined;
+    }
+
+    const bundleUrl =
+      process.env.DB_SSL_CA_BUNDLE_URL ?? 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem';
+    const localPath = '/tmp/rds-global-bundle.pem';
+
+    if (!fs.existsSync(localPath)) {
+      await downloadFile(bundleUrl, localPath);
+    }
+
+    cachedCaBundle = fs.readFileSync(localPath, 'utf8');
+    return cachedCaBundle;
+  })();
+
+  try {
+    return await caBundleLoadPromise;
+  } finally {
+    caBundleLoadPromise = null;
+  }
+};
+
+const resolveSslConfig = async () => {
   if (process.env.DB_SSL !== 'true') {
     return undefined;
   }
 
   const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';
-  const caPath = process.env.DB_SSL_CA_PATH;
-  const ca = caPath ? fs.readFileSync(caPath, 'utf8') : undefined;
+  const ca = rejectUnauthorized ? await loadCaBundle() : undefined;
 
   return {
     rejectUnauthorized,
@@ -105,7 +170,7 @@ const resolveSslConfig = () => {
 
 const buildPool = async (secret: DbSecret): Promise<Pool> => {
   const settings = resolveConnectionSettings(secret);
-  const ssl = resolveSslConfig();
+  const ssl = await resolveSslConfig();
   const useIamAuth = process.env.DB_IAM_AUTH === 'true';
 
   if (!useIamAuth) {

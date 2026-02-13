@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
 import { Tags } from 'aws-cdk-lib';
-import { devConfig } from '../lib/config/dev';
+import { resolveDevConfig } from '../lib/config/dev';
 import { prodConfig } from '../lib/config/prod';
 import { StageConfig } from '../lib/config/types';
 import { ApiStack } from '../lib/stacks/api-stack';
@@ -13,8 +13,10 @@ import { StorageStack } from '../lib/stacks/storage-stack';
 const app = new cdk.App();
 
 const stageContext = (app.node.tryGetContext('stage') as string | undefined) ?? process.env.STAGE ?? 'dev';
+const devProfileContext =
+  (app.node.tryGetContext('devProfile') as string | undefined) ?? process.env.DEV_PROFILE ?? 'idle';
 
-const config: StageConfig = stageContext === 'prod' ? prodConfig : devConfig;
+const config: StageConfig = stageContext === 'prod' ? prodConfig : resolveDevConfig(devProfileContext);
 const needsDataStack = config.stage === 'dev' || config.enableRds || config.enableApi || config.enableMigrationRunner;
 
 if (config.enableApi && !config.enableRds) {

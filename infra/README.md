@@ -23,6 +23,21 @@ cd infra
 npx cdk deploy --all -c stage=dev
 ```
 
+Für Dev gibt es zwei Profile:
+
+- `idle` (Default): keine API/DB, minimale Kosten
+- `test`: API+RDS aktiv für Smoke-/Integrationstests
+
+Beispiele:
+
+```bash
+# Dev idle (default, fast keine laufenden Kosten)
+npx cdk deploy --all -c stage=dev -c devProfile=idle
+
+# Dev test (API + DB aktiv)
+npx cdk deploy --all -c stage=dev -c devProfile=test
+```
+
 ## Stage-Konfiguration
 
 Die zentralen Einstellungen liegen in:
@@ -52,6 +67,18 @@ Wichtige Schalter:
 - Migration Runner aus
 
 Zusätzlich gibt es einen Dev-Cleanup-Job (alle 6 Stunden), der markierte RDS-Instanzen stoppt und verwaiste EIPs freigibt.
+
+## Dev Test-Profil
+
+`devProfile=test` ist für funktionale Tests gedacht:
+
+- `enableApi: true`
+- `enableRds: true`
+- `apiInVpc: false`
+- `dbConnectivityMode: public_budget`
+- `dbUseIamAuth: false` (damit Tests ohne IAM-DB-Grant laufen)
+
+Nach dem Test wieder auf `devProfile=idle` deployen, damit die laufenden Kosten zurück auf Minimum gehen.
 
 ## Prod Budget-Modus
 

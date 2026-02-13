@@ -1,6 +1,8 @@
 import { StageConfig } from './types';
 
-export const devConfig: StageConfig = {
+export type DevProfile = 'idle' | 'test';
+
+const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrationRunner' | 'apiInVpc' | 'dbConnectivityMode' | 'dbUseIamAuth' | 'dbPublicAccess'> = {
   stage: 'dev',
   prefix: 'dreiecksrennen-dev',
   env: {
@@ -9,12 +11,6 @@ export const devConfig: StageConfig = {
   },
   maxAzs: 2,
   enableNatGateway: false,
-  enableRds: false,
-  enableApi: false,
-  enableMigrationRunner: false,
-  apiInVpc: true,
-  dbConnectivityMode: 'private',
-  dbUseIamAuth: false,
   dbRequireTls: true,
   ttlHours: 24,
   dbName: 'eventdb',
@@ -26,6 +22,35 @@ export const devConfig: StageConfig = {
   dbAllocatedStorage: 20,
   dbMaxAllocatedStorage: 20,
   dbBackupRetentionDays: 1,
-  dbPublicAccess: false,
   removalPolicy: 'destroy'
+};
+
+const devIdleConfig: StageConfig = {
+  ...baseDevConfig,
+  enableRds: false,
+  enableApi: false,
+  enableMigrationRunner: false,
+  apiInVpc: true,
+  dbConnectivityMode: 'private',
+  dbUseIamAuth: false,
+  dbPublicAccess: false
+};
+
+const devTestConfig: StageConfig = {
+  ...baseDevConfig,
+  enableRds: true,
+  enableApi: true,
+  enableMigrationRunner: false,
+  apiInVpc: false,
+  dbConnectivityMode: 'public_budget',
+  dbUseIamAuth: false,
+  dbPublicAccess: true
+};
+
+export const resolveDevConfig = (profile?: string): StageConfig => {
+  const normalized = (profile ?? 'idle').toLowerCase() as DevProfile;
+  if (normalized === 'test') {
+    return devTestConfig;
+  }
+  return devIdleConfig;
 };

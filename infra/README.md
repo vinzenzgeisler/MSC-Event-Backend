@@ -81,6 +81,11 @@ Pflichtmaßnahmen:
 - TLS wird per Parameter Group erzwungen (`rds.force_ssl=1`)
 - API nutzt IAM-Token statt statischem DB-Passwort
 
+Einmalige DB-Voraussetzung:
+
+- Der App-User muss in PostgreSQL die Rolle `rds_iam` erhalten (z. B. `GRANT rds_iam TO eventadmin;`).
+- Ohne diese Rolle schlägt IAM-Login trotz korrekter AWS-IAM-Rechte fehl.
+
 Hinweis: Das ist ein bewusster Tradeoff zugunsten niedriger Kosten. Ein privates DB-Netzwerkmodell ist sicherer, verursacht aber in dieser Architektur typischerweise höhere monatliche Fixkosten.
 
 ## Migration Runner

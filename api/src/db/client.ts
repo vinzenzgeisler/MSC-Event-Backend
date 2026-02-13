@@ -1,4 +1,6 @@
+import * as fs from 'fs';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+import { Signer } from '@aws-sdk/rds-signer';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema';
@@ -10,6 +12,14 @@ type DbSecret = {
   password?: string;
   dbname?: string;
   database?: string;
+};
+
+type DbConnectionSettings = {
+  host: string;
+  port: number;
+  user: string;
+  database: string;
+  password?: string;
 };
 
 let cachedSecret: DbSecret | null = null;
@@ -25,8 +35,20 @@ const getSecretArn = (): string => {
 };
 
 const parseSecret = (secretString: string): DbSecret => {
-  const parsed = JSON.parse(secretString) as DbSecret;
-  return parsed;
+  return JSON.parse(secretString) as DbSecret;
+};
+
+const parsePort = (value?: number | string): number => {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'string' && value.length > 0) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  return 5432;
 };
 
 const loadDbSecret = async (): Promise<DbSecret> => {
@@ -46,25 +68,80 @@ const loadDbSecret = async (): Promise<DbSecret> => {
   return cachedSecret;
 };
 
-const buildPool = (secret: DbSecret): Pool => {
-  const database = secret.dbname ?? secret.database ?? process.env.DB_NAME;
-  if (!secret.host || !secret.username || !secret.password || !database) {
-    throw new Error('DB secret is missing required fields');
+const resolveConnectionSettings = (secret: DbSecret): DbConnectionSettings => {
+  const host = process.env.DB_HOST ?? secret.host;
+  const user = process.env.DB_USER ?? secret.username;
+  const database = process.env.DB_NAME ?? secret.dbname ?? secret.database;
+  const port = parsePort(process.env.DB_PORT ?? secret.port);
+  const password = secret.password;
+
+  if (!host || !user || !database) {
+    throw new Error('DB config is missing required host/user/database fields');
   }
 
-  const port =
-    typeof secret.port === 'string' ? Number.parseInt(secret.port, 10) : secret.port ?? 5432;
+  return {
+    host,
+    port,
+    user,
+    database,
+    password
+  };
+};
 
-  const sslEnabled = process.env.DB_SSL === 'true';
+const resolveSslConfig = () => {
+  if (process.env.DB_SSL !== 'true') {
+    return undefined;
+  }
+
   const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';
+  const caPath = process.env.DB_SSL_CA_PATH;
+  const ca = caPath ? fs.readFileSync(caPath, 'utf8') : undefined;
+
+  return {
+    rejectUnauthorized,
+    ca
+  };
+};
+
+const buildPool = async (secret: DbSecret): Promise<Pool> => {
+  const settings = resolveConnectionSettings(secret);
+  const ssl = resolveSslConfig();
+  const useIamAuth = process.env.DB_IAM_AUTH === 'true';
+
+  if (!useIamAuth) {
+    if (!settings.password) {
+      throw new Error('DB password is missing in secret for password auth mode');
+    }
+
+    return new Pool({
+      host: settings.host,
+      port: settings.port,
+      user: settings.user,
+      password: settings.password,
+      database: settings.database,
+      ssl
+    });
+  }
+
+  const region = process.env.DB_REGION ?? process.env.AWS_REGION;
+  if (!region) {
+    throw new Error('DB_REGION (or AWS_REGION) is required for IAM auth mode');
+  }
+
+  const signer = new Signer({
+    hostname: settings.host,
+    port: settings.port,
+    username: settings.user,
+    region
+  });
 
   return new Pool({
-    host: secret.host,
-    port,
-    user: secret.username,
-    password: secret.password,
-    database,
-    ssl: sslEnabled ? { rejectUnauthorized } : undefined
+    host: settings.host,
+    port: settings.port,
+    user: settings.user,
+    password: async () => signer.getAuthToken(),
+    database: settings.database,
+    ssl
   });
 };
 
@@ -74,7 +151,7 @@ export const getDb = async () => {
   }
 
   const secret = await loadDbSecret();
-  cachedPool = buildPool(secret);
+  cachedPool = await buildPool(secret);
   cachedDb = drizzle(cachedPool, { schema });
   return cachedDb;
 };
@@ -85,6 +162,6 @@ export const getPool = async () => {
   }
 
   const secret = await loadDbSecret();
-  cachedPool = buildPool(secret);
+  cachedPool = await buildPool(secret);
   return cachedPool;
 };

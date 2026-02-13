@@ -44,7 +44,18 @@ Falls du explizit den Drizzle-Migrator nutzen willst: `npm run db:migrate:drizzl
 
 ## Hinweis
 
-Die Lambda holt DB-Credentials aus Secrets Manager (`DB_SECRET_ARN`) und nutzt die RDS-Postgres Instanz aus Phase 1.
+Die Lambda holt DB-Verbindungsdaten aus Secrets Manager (`DB_SECRET_ARN`) und nutzt die RDS-Postgres Instanz aus Phase 1.
+
+Unterstützte Modi:
+
+- Passwort-Auth (klassisch)
+- IAM DB Auth (`DB_IAM_AUTH=true`) mit kurzlebigem Token pro Verbindungsaufbau
+
+Relevante Runtime-Variablen:
+
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_REGION`
+- `DB_IAM_AUTH`
+- `DB_SSL`, `DB_SSL_REJECT_UNAUTHORIZED`, optional `DB_SSL_CA_PATH`
 
 ## Mail (SES Sandbox)
 

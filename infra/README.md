@@ -1,13 +1,13 @@
-# Dreiecksrennen Infrastruktur (Phase 1)
+# Dreiecksrennen Infrastruktur (CDK v2)
 
-Dieses Verzeichnis enthält eine AWS CDK v2 App (TypeScript) für die Basis-Infrastruktur des Event-Verwaltungstools.
+Dieses Verzeichnis enthält die AWS CDK App für Auth, Storage, API, Datenbank und Migration Runner.
 
 ## Voraussetzungen
 
 - Node.js 20+
 - npm 10+
 - AWS CLI mit konfigurierten Credentials
-- AWS CDK v2 (`npx cdk` über lokale Dependencies)
+- AWS CDK v2 (`npx cdk`)
 
 ## Installation
 
@@ -16,90 +16,73 @@ cd infra
 npm install
 ```
 
-## CDK Bootstrap
-
-Vor dem ersten Deploy pro AWS Account/Region:
-
-```bash
-cd infra
-npx cdk bootstrap aws://<ACCOUNT_ID>/<REGION>
-```
-
-## Deploy (dev)
+## Deploy
 
 ```bash
 cd infra
 npx cdk deploy --all -c stage=dev
 ```
 
-Optional per Umgebungsvariable:
-
-```bash
-cd infra
-STAGE=dev npx cdk deploy --all
-```
-
-## Wichtige Outputs
-
-- **AuthStack**
-  - `UserPoolId`
-  - `UserPoolClientId`
-  - `UserPoolIssuerUrl`
-- **DataStack**
-  - `DbSecretArn`
-  - `DbEndpoint`
-  - `DbName`
-- **StorageStack**
-  - `AssetsBucketName`
-  - `DocumentsBucketName`
-- **ApiStack**
-  - `ApiUrl`
-- **MigrationRunnerStack**
-  - `MigrationRunnerProjectName`
-  - `MigrationRunnerProjectArn`
-
 ## Stage-Konfiguration
 
-- `lib/config/dev.ts`
-- `lib/config/prod.ts`
+Die zentralen Einstellungen liegen in:
 
-Die CDK App liest die Stage über `-c stage=<dev|prod>` oder über die Umgebungsvariable `STAGE`.
+- `infra/lib/config/types.ts`
+- `infra/lib/config/dev.ts`
+- `infra/lib/config/prod.ts`
 
-Netzwerkmodus:
-- `dev`: `dbPublicAccess: true` (DB in public subnets, Zugriff weiter über Security Group Regeln steuern)
-- `prod`: `dbPublicAccess: false` (DB privat/isolated)
+Wichtige Schalter:
 
-## Phase 3 Konfiguration (Mail/Jobs)
+- `enableNatGateway`
+- `enableRds`
+- `enableApi`
+- `enableMigrationRunner`
+- `apiInVpc`
+- `dbConnectivityMode` (`private` | `public_budget`)
+- `dbUseIamAuth`
+- `dbRequireTls`
 
-Setze vor `cdk deploy` folgende Umgebungsvariablen:
+## Dev (kostenarm Default)
 
-- `SES_FROM_EMAIL` (verifizierte Absender-Adresse für SES Sandbox)
-- `PAYMENT_REMINDER_TEMPLATE_ID` (z. B. `payment-reminder`)
-- `PAYMENT_REMINDER_SUBJECT` (Betreff der Zahlungserinnerung)
+`dev` ist standardmäßig auf minimale laufende Kosten gesetzt:
 
-## Migration Runner (DB Migrations)
+- NAT aus
+- RDS aus
+- API aus
+- Migration Runner aus
 
-Der Migration Runner nutzt CodeBuild in der VPC und führt `npm run db:migrate` im API-Ordner aus.
+Zusätzlich gibt es einen Dev-Cleanup-Job (alle 6 Stunden), der markierte RDS-Instanzen stoppt und verwaiste EIPs freigibt.
 
-So startest du Migrationen:
+## Prod Budget-Modus
 
-1. Lege das GitHub PAT in Secrets Manager ab (kein Klartext im Code):
-   - Secret Name: `/dreiecksrennen/github/pat`
-   - Secret Value (JSON): `{"token":"<PAT>"}`
-2. Minimale PAT-Scopes:
-   - Privates Repo klonen: `repo`
-3. Starte den Build über CLI:
-   - `aws codebuild start-build --project-name <MigrationRunnerProjectName>`
-4. Logs findest du in CloudWatch Logs unter dem CodeBuild-Projekt.
+Das aktuelle Prod-Profil ist auf niedrige Monatskosten optimiert:
 
-### PAT Rotation
+- `enableNatGateway: false`
+- `apiInVpc: false` (Lambda ohne VPC)
+- `dbConnectivityMode: public_budget`
+- `dbPublicAccess: true`
+- `dbUseIamAuth: true`
+- `dbRequireTls: true`
 
-1. Secret in Secrets Manager aktualisieren (`/dreiecksrennen/github/pat`) mit neuem JSON-Wert `{"token":"<NEW_PAT>"}`.
-2. Build erneut starten.
+Konsequenz:
 
-## Dev Zugriff auf DB per eigener IP
+- Keine NAT-Gateway-Stunden
+- Keine EIP-Kosten durch NAT
+- Keine Interface-Endpoint-Dauerkosten
+- RDS bleibt als Hauptkostenblock
 
-1. Aktuelle Public IP holen:
-   - PowerShell: `(Invoke-RestMethod https://checkip.amazonaws.com).Trim()`
-2. Ingress-Regel auf DB-SG setzen (Port 5432, nur `x.x.x.x/32`).
-3. Bei IP-Wechsel alte Regel entfernen und neue setzen.
+## Sicherheitsprofil im Budget-Modus
+
+Im `public_budget`-Modus ist die DB öffentlich erreichbar (`5432`).
+
+Pflichtmaßnahmen:
+
+- IAM DB Auth ist aktiv
+- TLS wird per Parameter Group erzwungen (`rds.force_ssl=1`)
+- API nutzt IAM-Token statt statischem DB-Passwort
+
+Hinweis: Das ist ein bewusster Tradeoff zugunsten niedriger Kosten. Ein privates DB-Netzwerkmodell ist sicherer, verursacht aber in dieser Architektur typischerweise höhere monatliche Fixkosten.
+
+## Migration Runner
+
+Der Migration Runner ist ein eigener Stack und bleibt standardmäßig deaktiviert. Für Migrationen temporär aktivieren und danach wieder deaktivieren.

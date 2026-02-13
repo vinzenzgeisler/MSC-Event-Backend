@@ -17,6 +17,10 @@ export class MigrationRunnerStack extends Stack {
 
   constructor(scope: Construct, id: string, props: MigrationRunnerStackProps) {
     super(scope, id, props);
+    if (!props.dataStack.dbSecret) {
+      throw new Error('DataStack DB secret is missing. Enable RDS before enabling MigrationRunner.');
+    }
+    const dbSecretArn = props.dataStack.dbSecret.secretArn;
 
     const githubPatSecret = secretsmanager.Secret.fromSecretNameV2(
       this,
@@ -80,11 +84,11 @@ export class MigrationRunnerStack extends Stack {
         },
         env: {
           'secrets-manager': {
-            DB_USERNAME: `${props.dataStack.dbSecret.secretArn}:username`,
-            DB_PASSWORD: `${props.dataStack.dbSecret.secretArn}:password`,
-            DB_HOST: `${props.dataStack.dbSecret.secretArn}:host`,
-            DB_PORT: `${props.dataStack.dbSecret.secretArn}:port`,
-            DB_NAME: `${props.dataStack.dbSecret.secretArn}:dbname`
+            DB_USERNAME: `${dbSecretArn}:username`,
+            DB_PASSWORD: `${dbSecretArn}:password`,
+            DB_HOST: `${dbSecretArn}:host`,
+            DB_PORT: `${dbSecretArn}:port`,
+            DB_NAME: `${dbSecretArn}:dbname`
           }
         },
         phases: {

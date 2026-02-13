@@ -29,8 +29,32 @@ export class ApiStack extends Stack {
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
 
-    const lambdaSecurityGroup = props.dataStack.apiLambdaSecurityGroup;
-    const sslRejectUnauthorized = props.config.stage === 'prod' ? 'true' : 'false';
+    const sslRejectUnauthorized = props.config.dbRequireTls ? 'true' : 'false';
+    if (!props.dataStack.dbSecret) {
+      throw new Error('DataStack DB secret is missing. Enable RDS before enabling the API stack.');
+    }
+    if (!props.dataStack.dbInstance) {
+      throw new Error('DataStack DB instance is missing. Enable RDS before enabling the API stack.');
+    }
+    if (props.config.apiInVpc && !props.dataStack.apiLambdaSecurityGroup) {
+      throw new Error('DataStack API Lambda security group is missing for VPC mode.');
+    }
+    const dbSecretArn = props.dataStack.dbSecret.secretArn;
+    const dbHost = props.dataStack.dbInstance.instanceEndpoint.hostname;
+    const dbPort = props.dataStack.dbInstance.instanceEndpoint.port.toString();
+    const dbRegion = Stack.of(this).region;
+    const dbUser = props.config.dbUsername;
+    const dbResourceId = props.dataStack.dbInstance.instanceResourceId;
+    const dbConnectArn = `arn:aws:rds-db:${dbRegion}:${Stack.of(this).account}:dbuser:${dbResourceId}/${dbUser}`;
+    const lambdaVpcConfig = props.config.apiInVpc
+      ? {
+          vpc: props.dataStack.vpc,
+          vpcSubnets: {
+            subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS
+          },
+          securityGroups: [props.dataStack.apiLambdaSecurityGroup!]
+        }
+      : {};
 
     const apiHandler = new NodejsFunction(this, 'ApiHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -41,8 +65,14 @@ export class ApiStack extends Stack {
       timeout: cdk.Duration.seconds(10),
       environment: {
         STAGE: props.config.stage,
-        DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
-        DB_SSL: 'true',
+        DB_SECRET_ARN: dbSecretArn,
+        DB_HOST: dbHost,
+        DB_PORT: dbPort,
+        DB_NAME: props.config.dbName,
+        DB_USER: dbUser,
+        DB_REGION: dbRegion,
+        DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+        DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
         DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
         ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
         DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
@@ -54,11 +84,7 @@ export class ApiStack extends Stack {
         sourceMap: true,
         minify: false
       },
-      vpc: props.dataStack.vpc,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS
-      },
-      securityGroups: [lambdaSecurityGroup]
+      ...lambdaVpcConfig
     });
 
     const emailWorker = new NodejsFunction(this, 'EmailWorker', {
@@ -70,8 +96,14 @@ export class ApiStack extends Stack {
       timeout: cdk.Duration.seconds(30),
       environment: {
         STAGE: props.config.stage,
-        DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
-        DB_SSL: 'true',
+        DB_SECRET_ARN: dbSecretArn,
+        DB_HOST: dbHost,
+        DB_PORT: dbPort,
+        DB_NAME: props.config.dbName,
+        DB_USER: dbUser,
+        DB_REGION: dbRegion,
+        DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+        DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
         DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
         SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? '',
         EMAIL_WORKER_BATCH_SIZE: '20'
@@ -81,11 +113,7 @@ export class ApiStack extends Stack {
         sourceMap: true,
         minify: false
       },
-      vpc: props.dataStack.vpc,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS
-      },
-      securityGroups: [lambdaSecurityGroup]
+      ...lambdaVpcConfig
     });
 
     const paymentReminderScheduler = new NodejsFunction(this, 'PaymentReminderScheduler', {
@@ -97,8 +125,14 @@ export class ApiStack extends Stack {
       timeout: cdk.Duration.seconds(30),
       environment: {
         STAGE: props.config.stage,
-        DB_SECRET_ARN: props.dataStack.dbSecret.secretArn,
-        DB_SSL: 'true',
+        DB_SECRET_ARN: dbSecretArn,
+        DB_HOST: dbHost,
+        DB_PORT: dbPort,
+        DB_NAME: props.config.dbName,
+        DB_USER: dbUser,
+        DB_REGION: dbRegion,
+        DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+        DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
         DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
         PAYMENT_REMINDER_TEMPLATE_ID: process.env.PAYMENT_REMINDER_TEMPLATE_ID ?? 'payment-reminder',
         PAYMENT_REMINDER_SUBJECT: process.env.PAYMENT_REMINDER_SUBJECT ?? 'Zahlungserinnerung'
@@ -108,19 +142,24 @@ export class ApiStack extends Stack {
         sourceMap: true,
         minify: false
       },
-      vpc: props.dataStack.vpc,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS
-      },
-      securityGroups: [lambdaSecurityGroup]
+      ...lambdaVpcConfig
     });
 
     apiHandler.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['secretsmanager:GetSecretValue'],
-        resources: [props.dataStack.dbSecret.secretArn]
+        resources: [dbSecretArn]
       })
     );
+
+    [apiHandler, emailWorker, paymentReminderScheduler].forEach((fn) => {
+      fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['rds-db:connect'],
+          resources: [dbConnectArn]
+        })
+      );
+    });
 
     [props.storageStack.assetsBucket, props.storageStack.documentsBucket].forEach((bucket) => {
       apiHandler.addToRolePolicy(
@@ -150,7 +189,7 @@ export class ApiStack extends Stack {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['secretsmanager:GetSecretValue'],
-          resources: [props.dataStack.dbSecret.secretArn]
+          resources: [dbSecretArn]
         })
       );
     });

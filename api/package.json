@@ -12,8 +12,9 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.645.0",
-    "@aws-sdk/client-ses": "^3.645.0",
     "@aws-sdk/client-secrets-manager": "^3.645.0",
+    "@aws-sdk/client-ses": "^3.645.0",
+    "@aws-sdk/rds-signer": "^3.645.0",
     "@aws-sdk/s3-request-presigner": "^3.645.0",
     "@types/aws-lambda": "^8.10.137",
     "drizzle-orm": "^0.33.0",
@@ -22,8 +23,8 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/pg": "^8.11.6",
     "@types/pdfkit": "^0.17.4",
+    "@types/pg": "^8.11.6",
     "drizzle-kit": "^0.24.0",
     "typescript": "^5.4.5"
   }

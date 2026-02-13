@@ -7,11 +7,24 @@ export const prodConfig: StageConfig = {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION ?? 'eu-central-1'
   },
+  maxAzs: 2,
+  enableNatGateway: false,
+  enableRds: true,
+  enableApi: true,
+  enableMigrationRunner: false,
+  apiInVpc: false,
+  dbConnectivityMode: 'public_budget',
+  dbUseIamAuth: true,
+  dbRequireTls: true,
   dbName: 'eventdb',
+  dbUsername: 'eventadmin',
   dbInstanceType: {
     instanceClass: 'BURSTABLE3',
     instanceSize: 'MICRO'
   },
-  dbPublicAccess: false,
+  dbAllocatedStorage: 20,
+  dbMaxAllocatedStorage: 100,
+  dbBackupRetentionDays: 7,
+  dbPublicAccess: true,
   removalPolicy: 'retain'
 };

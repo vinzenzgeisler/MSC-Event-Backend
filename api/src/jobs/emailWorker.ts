@@ -1,13 +1,17 @@
 import { getPool } from '../db/client';
-import { renderTemplate } from '../mail/templates';
+import { renderTemplateString } from '../mail/templates';
 import { sendEmail } from '../mail/ses';
+import { getTemplateVersion } from '../mail/templateStore';
 
 type OutboxRow = {
   id: string;
   to_email: string;
   subject: string;
   template_id: string;
+  template_version: number;
   template_data: Record<string, unknown> | null;
+  attempt_count: number;
+  max_attempts: number;
 };
 
 const claimOutbox = async (batchSize: number): Promise<OutboxRow[]> => {
@@ -29,7 +33,7 @@ const claimOutbox = async (batchSize: number): Promise<OutboxRow[]> => {
         for update skip locked
         limit $1
       )
-      returning id, to_email, subject, template_id, template_data
+      returning id, to_email, subject, template_id, template_version, template_data, attempt_count, max_attempts
     `,
       [batchSize]
     );
@@ -48,7 +52,7 @@ const markSent = async (id: string, messageId: string | null, providerResponse: 
   await pool.query(
     `
     update email_outbox
-    set status = 'sent', updated_at = now(), last_error = null
+    set status = 'sent', updated_at = now(), error_last = null
     where id = $1
   `,
     [id]
@@ -62,23 +66,37 @@ const markSent = async (id: string, messageId: string | null, providerResponse: 
   );
 };
 
-const markFailed = async (id: string, error: unknown) => {
+const retryDelayMinutes = (attemptCount: number): number => {
+  if (attemptCount <= 1) return 1;
+  if (attemptCount === 2) return 5;
+  if (attemptCount === 3) return 15;
+  if (attemptCount === 4) return 60;
+  return 360;
+};
+
+const markFailed = async (id: string, attemptCount: number, maxAttempts: number, error: unknown) => {
   const pool = await getPool();
   const message = error instanceof Error ? error.message : 'Unknown error';
+  const shouldRetry = attemptCount < maxAttempts;
+  const delayMinutes = retryDelayMinutes(attemptCount);
+
   await pool.query(
     `
     update email_outbox
-    set status = 'failed', updated_at = now(), last_error = $2
+    set status = case when $3 then 'queued' else 'failed' end,
+        updated_at = now(),
+        error_last = $2,
+        send_after = case when $3 then now() + (($4 || ' minutes')::interval) else send_after end
     where id = $1
   `,
-    [id, message]
+    [id, message, shouldRetry, delayMinutes]
   );
   await pool.query(
     `
     insert into email_delivery (id, outbox_id, status, sent_at, provider_response)
     values (gen_random_uuid(), $1, 'failed', now(), $2)
   `,
-    [id, JSON.stringify({ error: message })]
+    [id, JSON.stringify({ error: message, retried: shouldRetry })]
   );
 };
 
@@ -88,11 +106,17 @@ export const handler = async () => {
 
   for (const row of rows) {
     try {
-      const body = renderTemplate(row.template_id, row.template_data);
-      const response = await sendEmail(row.to_email, row.subject, body);
+      const template = await getTemplateVersion(row.template_id, row.template_version);
+      if (!template) {
+        throw new Error(`Template not found: ${row.template_id}@${row.template_version}`);
+      }
+
+      const subject = renderTemplateString(row.subject, row.template_data);
+      const body = renderTemplateString(template.bodyTemplate, row.template_data);
+      const response = await sendEmail(row.to_email, subject, body);
       await markSent(row.id, response.MessageId ?? null, response);
     } catch (error) {
-      await markFailed(row.id, error);
+      await markFailed(row.id, row.attempt_count, row.max_attempts, error);
     }
   }
 

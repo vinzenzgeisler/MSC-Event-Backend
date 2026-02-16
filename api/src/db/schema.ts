@@ -123,6 +123,9 @@ export const entry = pgTable(
     idVerified: boolean('id_verified').notNull().default(false),
     idVerifiedAt: timestamp('id_verified_at', { withTimezone: true }),
     idVerifiedBy: text('id_verified_by'),
+    checkinIdVerified: boolean('checkin_id_verified').notNull().default(false),
+    checkinIdVerifiedAt: timestamp('checkin_id_verified_at', { withTimezone: true }),
+    checkinIdVerifiedBy: text('checkin_id_verified_by'),
     entryFeeCents: integer('entry_fee_cents').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
@@ -195,12 +198,14 @@ export const emailOutbox = pgTable(
     toEmail: text('to_email').notNull(),
     subject: text('subject').notNull(),
     templateId: text('template_id').notNull(),
+    templateVersion: integer('template_version').notNull().default(1),
     templateData: jsonb('template_data'),
     status: text('status').notNull().default('queued'),
     attemptCount: integer('attempt_count').notNull().default(0),
-    lastError: text('last_error'),
+    maxAttempts: integer('max_attempts').notNull().default(5),
+    errorLast: text('error_last'),
     sendAfter: timestamp('send_after', { withTimezone: true }).notNull().defaultNow(),
-    idempotencyKey: text('idempotency_key'),
+    idempotencyKey: text('idempotency_key').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
@@ -226,7 +231,40 @@ export const emailDelivery = pgTable(
     providerResponse: jsonb('provider_response')
   },
   (table) => ({
-    statusCheck: check('email_delivery_status_check', sql`${table.status} in ('sent', 'failed')`)
+    statusCheck: check('email_delivery_status_check', sql`${table.status} in ('sent', 'failed', 'bounced', 'complaint')`)
+  })
+);
+
+export const emailTemplate = pgTable(
+  'email_template',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    templateKey: text('template_key').notNull(),
+    description: text('description'),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    templateKeyUnique: uniqueIndex('email_template_key_unique').on(table.templateKey)
+  })
+);
+
+export const emailTemplateVersion = pgTable(
+  'email_template_version',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    templateId: uuid('template_id')
+      .notNull()
+      .references(() => emailTemplate.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    subjectTemplate: text('subject_template').notNull(),
+    bodyTemplate: text('body_template').notNull(),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    templateVersionUnique: uniqueIndex('email_template_version_unique').on(table.templateId, table.version)
   })
 );
 
@@ -238,6 +276,7 @@ export const document = pgTable(
     entryId: uuid('entry_id').references(() => entry.id, { onDelete: 'set null' }),
     driverPersonId: uuid('driver_person_id').references(() => person.id, { onDelete: 'set null' }),
     type: text('type').notNull(),
+    templateVariant: text('template_variant'),
     templateVersion: text('template_version').notNull(),
     sha256: text('sha256').notNull(),
     s3Key: text('s3_key').notNull(),
@@ -248,6 +287,10 @@ export const document = pgTable(
   (table) => ({
     typeCheck: check('document_type_check', sql`${table.type} in ('waiver', 'tech_check')`),
     statusCheck: check('document_status_check', sql`${table.status} in ('generated', 'failed')`),
+    templateVariantCheck: check(
+      'document_template_variant_check',
+      sql`${table.type} != 'tech_check' or ${table.templateVariant} in ('auto', 'moto')`
+    ),
     eventTypeIndex: index('document_event_type_idx').on(table.eventId, table.type)
   })
 );

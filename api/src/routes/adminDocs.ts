@@ -13,18 +13,19 @@ const documentRequestSchema = z.object({
 });
 
 type DocumentRequest = z.infer<typeof documentRequestSchema>;
+type TechCheckVariant = 'auto' | 'moto';
 
 const buildPayload = async (input: DocumentRequest) => {
   const db = await getDb();
-    const rows = await db
-      .select({
-        eventName: event.name,
-        eventStartsAt: event.startsAt,
-        eventEndsAt: event.endsAt,
-        className: eventClass.name,
-        driverPersonId: entry.driverPersonId,
-        driverFirstName: person.firstName,
-        driverLastName: person.lastName,
+  const rows = await db
+    .select({
+      eventName: event.name,
+      eventStartsAt: event.startsAt,
+      eventEndsAt: event.endsAt,
+      className: eventClass.name,
+      driverPersonId: entry.driverPersonId,
+      driverFirstName: person.firstName,
+      driverLastName: person.lastName,
       driverBirthdate: person.birthdate,
       driverNationality: person.nationality,
       driverStreet: person.street,
@@ -91,12 +92,14 @@ const storeDocument = async (
   entryId: string,
   driverPersonId: string,
   type: 'waiver' | 'tech_check',
+  templateVariant: TechCheckVariant | null,
+  templateVersion: string,
   pdfBuffer: Buffer,
   actorUserId: string | null
 ) => {
   const db = await getDb();
   const hash = createHash('sha256').update(pdfBuffer).digest('hex');
-  const key = `documents/${eventId}/${type}/${randomUUID()}.pdf`;
+  const key = `documents/${eventId}/${entryId}/${type}/${templateVariant ?? 'none'}/${templateVersion}/${randomUUID()}.pdf`;
 
   await uploadPdf(key, pdfBuffer);
 
@@ -107,7 +110,8 @@ const storeDocument = async (
       entryId,
       driverPersonId,
       type,
-      templateVersion: 'v1',
+      templateVariant,
+      templateVersion,
       sha256: hash,
       s3Key: key,
       status: 'generated',
@@ -130,11 +134,15 @@ const storeDocument = async (
     entityId: docRow?.id ?? null,
     payload: {
       type,
-      entryId
+      entryId,
+      templateVariant,
+      templateVersion,
+      sha256: hash,
+      s3Key: key
     }
   });
 
-  return docRow;
+  return docRow ? { ...docRow, templateVariant, templateVersion, sha256: hash } : null;
 };
 
 export const createWaiverDocument = async (input: DocumentRequest, actorUserId: string | null) => {
@@ -150,7 +158,7 @@ export const createWaiverDocument = async (input: DocumentRequest, actorUserId: 
     vehicle: payload.vehicle
   });
 
-  return storeDocument(input.eventId, input.entryId, payload.driverPersonId, 'waiver', pdfBuffer, actorUserId);
+  return storeDocument(input.eventId, input.entryId, payload.driverPersonId, 'waiver', null, 'v1', pdfBuffer, actorUserId);
 };
 
 export const createTechCheckDocument = async (input: DocumentRequest, actorUserId: string | null) => {
@@ -159,16 +167,30 @@ export const createTechCheckDocument = async (input: DocumentRequest, actorUserI
     return null;
   }
 
+  if (payload.vehicle.vehicleType !== 'auto' && payload.vehicle.vehicleType !== 'moto') {
+    throw new Error('INVALID_VEHICLE_TYPE');
+  }
+  const templateVariant: TechCheckVariant = payload.vehicle.vehicleType;
   const pdfBuffer = await renderTechCheckPdf({
     event: payload.event,
     driver: payload.driver,
-    vehicle: payload.vehicle
+    vehicle: payload.vehicle,
+    templateVariant
   });
 
-  return storeDocument(input.eventId, input.entryId, payload.driverPersonId, 'tech_check', pdfBuffer, actorUserId);
+  return storeDocument(
+    input.eventId,
+    input.entryId,
+    payload.driverPersonId,
+    'tech_check',
+    templateVariant,
+    'v1',
+    pdfBuffer,
+    actorUserId
+  );
 };
 
-export const getDocumentDownload = async (id: string) => {
+export const getDocumentDownload = async (id: string, actorUserId: string | null) => {
   const db = await getDb();
   const rows = await db.select().from(document).where(eq(document.id, id));
   if (rows.length === 0) {
@@ -176,6 +198,16 @@ export const getDocumentDownload = async (id: string) => {
   }
   const doc = rows[0];
   const url = await getPresignedDownloadUrl(doc.s3Key, 300);
+  await writeAuditLog(db as never, {
+    eventId: doc.eventId,
+    actorUserId,
+    action: 'document_download_url_issued',
+    entityType: 'document',
+    entityId: doc.id,
+    payload: {
+      expiresInSeconds: 300
+    }
+  });
   return { doc, url };
 };
 

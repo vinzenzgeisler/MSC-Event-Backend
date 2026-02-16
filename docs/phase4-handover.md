@@ -83,3 +83,19 @@ npx cdk deploy --all -c stage=prod
 2. Offene Kosten-Alarme prüfen (Budget + CloudWatch).
 3. Phase-4 Scope auf bestehender API/DB-Schema-Basis planen.
 4. Smoke-Test vor jedem größeren Infrastruktur-Change erneut ausführen.
+
+## Phase 4 Erweiterungen (implementiert)
+
+- Technische Abnahme PDF unterscheidet jetzt AUTO/MOTO über `document.template_variant`.
+- Mail-Templates sind DB-versioniert (`email_template`, `email_template_version`).
+- Outbox wurde für Retry/Idempotenz erweitert (`template_version`, `max_attempts`, `error_last`, dedupe required).
+- Neue Admin-Endpunkte:
+  - `POST /admin/mail/lifecycle/queue`
+  - `POST /admin/mail/broadcast/queue`
+  - `PATCH /admin/entries/{id}/checkin/id-verify`
+- Payment Reminder läuft in Phase 4 nur manuell per API (kein geplanter Timer).
+
+## Zukunftshook (nicht umgesetzt)
+
+- Scrutineering-Bestätigung im Tool ist vorbereitet als zukünftiger Endpoint/Statusmodell, aber in Phase 4 bewusst nicht persistiert.
+- Signatur-Flow bleibt außerhalb von Phase 4; später sinnvoll über separate Tabelle (z. B. `document_signature`) und Referenz auf `document.id`.

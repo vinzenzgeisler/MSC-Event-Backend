@@ -1,7 +1,9 @@
 import { and, eq } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 import { getDb } from '../db/client';
 import { emailOutbox, invoice, person } from '../db/schema';
 import { writeAuditLog } from '../audit/log';
+import { getTemplateVersion } from '../mail/templateStore';
 
 const getTemplateId = () => {
   const templateId = process.env.PAYMENT_REMINDER_TEMPLATE_ID;
@@ -23,6 +25,10 @@ export const handler = async () => {
   const db = await getDb();
   const templateId = getTemplateId();
   const subject = getSubject();
+  const template = await getTemplateVersion(templateId);
+  if (!template) {
+    throw new Error(`Template not found: ${templateId}`);
+  }
 
   const rows = await db
     .select({ email: person.email, eventId: invoice.eventId })
@@ -41,9 +47,13 @@ export const handler = async () => {
       toEmail: target.email as string,
       subject,
       templateId,
+      templateVersion: template.version,
       templateData: null,
       status: 'queued',
-      sendAfter: new Date()
+      sendAfter: new Date(),
+      idempotencyKey: createHash('sha256')
+        .update(JSON.stringify({ source: 'scheduler', eventId: target.eventId, email: target.email, templateId }))
+        .digest('hex')
     }))
   );
 

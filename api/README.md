@@ -7,10 +7,13 @@ Minimaler TypeScript-Lambda-Handler mit Datenbankzugriff (Postgres via Drizzle):
 - `GET /admin/db/ping` → `{ "ok": true, "database": "...", "now": "..." }`
 - `GET /admin/db/schema` → `{ "ok": true, "tables": ["..."] }`
 - `POST /admin/mail/queue` → Outbox-Einträge für Sammelmails
+- `POST /admin/mail/lifecycle/queue` → Statusbasierte Mail pro Nennung/Fahrer
+- `POST /admin/mail/broadcast/queue` → Broadcast-Mail mit Filtern
 - `POST /admin/payment/reminders/queue` → Outbox-Einträge für Zahlungserinnerungen
 - `POST /admin/documents/waiver` → PDF Haftverzicht generieren
 - `POST /admin/documents/tech-check` → PDF Technische Abnahme generieren
 - `GET /admin/documents/:id/download` → presigned Download-URL
+- `PATCH /admin/entries/:id/checkin/id-verify` → ID-Verifikation am Check-in setzen
 
 ## Voraussetzungen
 

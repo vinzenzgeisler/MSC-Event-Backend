@@ -29,7 +29,7 @@ export const getAuthContext = (event: APIGatewayProxyEventV2): AuthContext => {
     }
 
     return rawGroups
-      .split(',')
+      .split(/[,\s]+/)
       .map((group) => group.trim().replace(/^\[|\]$/g, '').replace(/^"|"$/g, ''))
       .filter((group) => group.length > 0);
   })();

@@ -118,36 +118,6 @@ export class ApiStack extends Stack {
       ...lambdaVpcConfig
     });
 
-    const paymentReminderScheduler = new NodejsFunction(this, 'PaymentReminderScheduler', {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      entry: path.join(__dirname, '../../../api/src/jobs/paymentReminderScheduler.ts'),
-      handler: 'handler',
-      functionName: `${props.config.prefix}-payment-reminder`,
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(30),
-      environment: {
-        STAGE: props.config.stage,
-        DB_SECRET_ARN: dbSecretArn,
-        DB_HOST: dbHost,
-        DB_PORT: dbPort,
-        DB_NAME: props.config.dbName,
-        DB_USER: dbUser,
-        DB_REGION: dbRegion,
-        DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
-        DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
-        DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
-        DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
-        PAYMENT_REMINDER_TEMPLATE_ID: process.env.PAYMENT_REMINDER_TEMPLATE_ID ?? 'payment-reminder',
-        PAYMENT_REMINDER_SUBJECT: process.env.PAYMENT_REMINDER_SUBJECT ?? 'Zahlungserinnerung'
-      },
-      bundling: {
-        target: 'node20',
-        sourceMap: true,
-        minify: false
-      },
-      ...lambdaVpcConfig
-    });
-
     apiHandler.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['secretsmanager:GetSecretValue'],
@@ -155,7 +125,7 @@ export class ApiStack extends Stack {
       })
     );
 
-    [apiHandler, emailWorker, paymentReminderScheduler].forEach((fn) => {
+    [apiHandler, emailWorker].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['rds-db:connect'],
@@ -179,7 +149,7 @@ export class ApiStack extends Stack {
       );
     });
 
-    [apiHandler, emailWorker, paymentReminderScheduler].forEach((fn) => {
+    [apiHandler, emailWorker].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['ses:SendEmail', 'ses:SendRawEmail'],
@@ -188,7 +158,7 @@ export class ApiStack extends Stack {
       );
     });
 
-    [emailWorker, paymentReminderScheduler].forEach((fn) => {
+    [emailWorker].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['secretsmanager:GetSecretValue'],
@@ -200,11 +170,6 @@ export class ApiStack extends Stack {
     new events.Rule(this, 'EmailWorkerSchedule', {
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
       targets: [new targets.LambdaFunction(emailWorker)]
-    });
-
-    new events.Rule(this, 'PaymentReminderSchedule', {
-      schedule: events.Schedule.rate(cdk.Duration.hours(24)),
-      targets: [new targets.LambdaFunction(paymentReminderScheduler)]
     });
 
     const integration = new integrations.HttpLambdaIntegration('ApiIntegration', apiHandler);
@@ -252,8 +217,29 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/mail/lifecycle/queue',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/broadcast/queue',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/payment/reminders/queue',
       methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/entries/{id}/checkin/id-verify',
+      methods: [apigwv2.HttpMethod.PATCH],
       integration,
       authorizer: jwtAuthorizer
     });

@@ -2,6 +2,8 @@
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PDFDocument = require('pdfkit/js/pdfkit.standalone');
 import { format } from 'node:util';
+import { renderAutoChecklistV1 } from './templates/tech-check/auto/v1';
+import { renderMotoChecklistV1 } from './templates/tech-check/moto/v1';
 
 type PersonInfo = {
   fullName: string;
@@ -37,6 +39,7 @@ type TechCheckPayload = {
   event: EventInfo;
   driver: PersonInfo;
   vehicle: VehicleInfo;
+  templateVariant: 'auto' | 'moto';
 };
 
 const renderPdf = (title: string, bodyLines: string[]): Promise<Buffer> =>
@@ -103,26 +106,19 @@ export const renderWaiverPdf = async (payload: WaiverPayload): Promise<Buffer> =
 };
 
 export const renderTechCheckPdf = async (payload: TechCheckPayload): Promise<Buffer> => {
-  const lines: string[] = [
-    format('Event: %s', payload.event.name),
-    format('Datum: %s bis %s', payload.event.startsAt, payload.event.endsAt),
-    format('Klasse: %s', payload.event.className),
-    '',
-    'Fahrer',
-    ...formatPerson(payload.driver),
-    '',
-    'Fahrzeug',
-    ...formatVehicle(payload.vehicle),
-    '',
-    'Technische Abnahme (Checkliste)',
-    '- Bremsen geprüft',
-    '- Reifenzustand geprüft',
-    '- Lenkung geprüft',
-    '- Sicherheitsausstattung geprüft',
-    '',
-    'Prüfer: ________________________________',
-    'Datum: _________________________________'
-  ];
+  const baseData = {
+    eventName: payload.event.name,
+    eventStartsAt: payload.event.startsAt,
+    eventEndsAt: payload.event.endsAt,
+    className: payload.event.className,
+    driverName: payload.driver.fullName,
+    vehicleMake: payload.vehicle.make ?? null,
+    vehicleModel: payload.vehicle.model ?? null,
+    vehicleYear: payload.vehicle.year ?? null,
+    startNumber: payload.vehicle.startNumber ?? null
+  };
+  const lines: string[] =
+    payload.templateVariant === 'auto' ? renderAutoChecklistV1(baseData) : renderMotoChecklistV1(baseData);
 
   return renderPdf('Technische Abnahme', lines);
 };

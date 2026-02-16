@@ -5,8 +5,18 @@ import { getDb } from './db/client';
 import { getAuthContext, hasAnyGroup, hasGroup } from './http/auth';
 import { errorJson, json } from './http/response';
 import { parseJsonBody } from './http/parse';
-import { queueMail, queuePaymentReminders, validateQueueMailInput, validateReminderInput } from './routes/adminMail';
+import {
+  queueBroadcastMail,
+  queueLifecycleMail,
+  queueMail,
+  queuePaymentReminders,
+  validateBroadcastInput,
+  validateLifecycleInput,
+  validateQueueMailInput,
+  validateReminderInput
+} from './routes/adminMail';
 import { createTechCheckDocument, createWaiverDocument, getDocumentDownload, validateDocumentRequest } from './routes/adminDocs';
+import { setCheckinIdVerified, validateIdVerifyInput } from './routes/adminCheckin';
 
 const isInvalidJson = (error: unknown): boolean =>
   error instanceof Error && error.message === 'Invalid JSON body';
@@ -86,6 +96,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
         return errorJson(409, 'Duplicate request');
       }
+      if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
+        return errorJson(404, 'Template not found');
+      }
       return errorJson(500, 'Mail queue failed');
     }
   }
@@ -111,7 +124,66 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
         return errorJson(409, 'Duplicate request');
       }
+      if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
+        return errorJson(404, 'Template not found');
+      }
       return errorJson(500, 'Reminder queue failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/mail/lifecycle/queue') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateLifecycleInput(payload);
+      const result = await queueLifecycleMail(input, auth.sub);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
+        return errorJson(409, 'Duplicate request');
+      }
+      if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
+        return errorJson(404, 'Template not found');
+      }
+      return errorJson(500, 'Lifecycle mail queue failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/mail/broadcast/queue') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateBroadcastInput(payload);
+      const result = await queueBroadcastMail(input, auth.sub);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
+        return errorJson(409, 'Duplicate request');
+      }
+      if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
+        return errorJson(404, 'Template not found');
+      }
+      return errorJson(500, 'Broadcast mail queue failed');
     }
   }
 
@@ -137,6 +209,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
       }
+      if (error instanceof Error && error.message === 'INVALID_VEHICLE_TYPE') {
+        return errorJson(409, 'Vehicle type not supported for tech-check');
+      }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
       return errorJson(500, 'Document generation failed', details);
     }
@@ -144,7 +219,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/documents/tech-check') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasAnyGroup(auth, ['admin', 'checkin'])) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -155,7 +230,14 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!doc) {
         return errorJson(404, 'Entry not found');
       }
-      return json(200, { ok: true, documentId: doc.id });
+      return json(200, {
+        ok: true,
+        documentId: doc.id,
+        type: doc.type,
+        templateVariant: doc.templateVariant,
+        templateVersion: doc.templateVersion,
+        sha256: doc.sha256
+      });
     } catch (error) {
       console.error('create tech-check document failed', error);
       if (error instanceof ZodError) {
@@ -178,13 +260,45 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
     const id = docDownloadMatch[1];
     try {
-      const result = await getDocumentDownload(id);
+      const result = await getDocumentDownload(id, auth.sub);
       if (!result) {
         return errorJson(404, 'Document not found');
       }
-      return json(200, { ok: true, url: result.url });
+      return json(200, {
+        ok: true,
+        url: result.url,
+        type: result.doc.type,
+        templateVariant: result.doc.templateVariant ?? null,
+        templateVersion: result.doc.templateVersion
+      });
     } catch (error) {
       return errorJson(500, 'Download failed');
+    }
+  }
+
+  const checkinMatch = path.match(/^\/admin\/entries\/([^/]+)\/checkin\/id-verify$/);
+  if (method === 'PATCH' && checkinMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'checkin'])) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateIdVerifyInput(payload);
+      const result = await setCheckinIdVerified(checkinMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Check-in update failed');
     }
   }
 

@@ -78,7 +78,10 @@ export class ApiStack extends Stack {
         ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
         DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
         COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
-        SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? ''
+        SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? '',
+        PAYMENT_IBAN: process.env.PAYMENT_IBAN ?? '',
+        PAYMENT_BIC: process.env.PAYMENT_BIC ?? '',
+        PAYMENT_RECIPIENT: process.env.PAYMENT_RECIPIENT ?? ''
       },
       bundling: {
         target: 'node20',
@@ -217,6 +220,41 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/events',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/current',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{id}/activate',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{id}/close',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{id}/archive',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/mail/lifecycle/queue',
       methods: [apigwv2.HttpMethod.POST],
       integration,
@@ -259,7 +297,70 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/documents/waiver/batch',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/documents/tech-check/batch',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/documents/{id}/download',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{id}/pricing-rules',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{id}/invoices/recalculate',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/invoices',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/invoices/{id}/payments',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/exports/entries',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/exports/{id}',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/exports/{id}/download',
       methods: [apigwv2.HttpMethod.GET],
       integration,
       authorizer: jwtAuthorizer

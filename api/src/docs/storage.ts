@@ -12,6 +12,10 @@ const getDocumentsBucket = (): string => {
 const getS3Client = () => new S3Client({});
 
 export const uploadPdf = async (key: string, body: Buffer) => {
+  await uploadFile(key, body, 'application/pdf');
+};
+
+export const uploadFile = async (key: string, body: Buffer, contentType: string) => {
   const client = getS3Client();
   const bucket = getDocumentsBucket();
   await client.send(
@@ -19,7 +23,7 @@ export const uploadPdf = async (key: string, body: Buffer) => {
       Bucket: bucket,
       Key: key,
       Body: body,
-      ContentType: 'application/pdf'
+      ContentType: contentType
     })
   );
 };

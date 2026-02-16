@@ -6,6 +6,7 @@ import { emailOutbox, entry, event, eventClass, invoice, person } from '../db/sc
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { writeAuditLog } from '../audit/log';
 import { getTemplateVersion } from '../mail/templateStore';
+import { assertEventStatusAllowed } from '../domain/eventStatus';
 
 const queueMailSchema = z
   .object({
@@ -280,6 +281,7 @@ const insertOutboxRows = async (
 
 export const queueMail = async (input: QueueMailInput, actorUserId: string | null) => {
   const db = await getDb();
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
   const targets = await resolveTargets(input);
   if (targets.length === 0) {
     return { queued: 0 };
@@ -336,6 +338,7 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
 
 export const queuePaymentReminders = async (input: ReminderInput, actorUserId: string | null) => {
   const db = await getDb();
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
   const template = await resolveTemplate(input.templateId, input.templateVersion, input.subject);
   const sendAfter = toIsoDate(input.sendAfter);
 
@@ -432,6 +435,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
 
 export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: string | null) => {
   const db = await getDb();
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
   const templateKey = templateKeyFromEventType(input.eventType);
   const template = await resolveTemplate(templateKey, input.templateVersion);
   const sendAfter = toIsoDate(input.sendAfter);
@@ -474,7 +478,10 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     registrationStatus: row.registrationStatus,
     acceptanceStatus: row.acceptanceStatus,
     paymentStatus: row.paymentStatus ?? null,
-    amountOpenCents: row.totalCents ?? 0
+    amountOpenCents: row.totalCents ?? 0,
+    paymentIban: process.env.PAYMENT_IBAN ?? '',
+    paymentBic: process.env.PAYMENT_BIC ?? '',
+    paymentRecipient: process.env.PAYMENT_RECIPIENT ?? ''
   };
 
   await insertOutboxRows(
@@ -520,6 +527,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
 
 export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: string | null) => {
   const db = await getDb();
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
   const template = await resolveTemplate(input.templateKey, input.templateVersion, input.subjectOverride);
   const sendAfter = toIsoDate(input.sendAfter);
 

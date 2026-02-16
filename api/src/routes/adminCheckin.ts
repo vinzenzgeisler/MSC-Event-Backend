@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { entry } from '../db/schema';
 import { writeAuditLog } from '../audit/log';
+import { assertEventStatusAllowed } from '../domain/eventStatus';
 
 const idVerifySchema = z.object({
   checkinIdVerified: z.boolean()
@@ -13,6 +14,17 @@ type IdVerifyInput = z.infer<typeof idVerifySchema>;
 export const setCheckinIdVerified = async (entryId: string, input: IdVerifyInput, actorUserId: string | null) => {
   const db = await getDb();
   const now = new Date();
+  const rows = await db
+    .select({
+      eventId: entry.eventId
+    })
+    .from(entry)
+    .where(eq(entry.id, entryId))
+    .limit(1);
+  if (rows.length === 0) {
+    return null;
+  }
+  await assertEventStatusAllowed(rows[0].eventId, ['open', 'closed']);
 
   const [updated] = await db
     .update(entry)

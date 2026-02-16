@@ -21,11 +21,18 @@ export const event = pgTable(
     startsAt: date('starts_at').notNull(),
     endsAt: date('ends_at').notNull(),
     status: text('status').notNull(),
+    isCurrent: boolean('is_current').notNull().default(false),
+    openedAt: timestamp('opened_at', { withTimezone: true }),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
   (table) => ({
-    statusCheck: check('event_status_check', sql`${table.status} in ('active', 'archived')`)
+    statusCheck: check('event_status_check', sql`${table.status} in ('draft', 'open', 'closed', 'archived')`),
+    singleCurrentEvent: uniqueIndex('event_single_current_unique')
+      .on(table.isCurrent)
+      .where(sql`${table.isCurrent} = true`)
   })
 );
 
@@ -160,6 +167,7 @@ export const invoice = pgTable(
       .notNull()
       .references(() => person.id),
     totalCents: integer('total_cents').notNull().default(0),
+    pricingSnapshot: jsonb('pricing_snapshot').notNull().default(sql`'{}'::jsonb`),
     paymentStatus: text('payment_status').notNull(),
     paidAt: timestamp('paid_at', { withTimezone: true }),
     paidAmountCents: integer('paid_amount_cents'),
@@ -170,6 +178,66 @@ export const invoice = pgTable(
   (table) => ({
     paymentStatusCheck: check('invoice_payment_status_check', sql`${table.paymentStatus} in ('due', 'paid')`),
     uniqueDriverEvent: uniqueIndex('invoice_event_driver_unique').on(table.eventId, table.driverPersonId)
+  })
+);
+
+export const eventPricingRule = pgTable(
+  'event_pricing_rule',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    earlyDeadline: timestamp('early_deadline', { withTimezone: true }).notNull(),
+    lateFeeCents: integer('late_fee_cents').notNull().default(0),
+    secondVehicleDiscountCents: integer('second_vehicle_discount_cents').notNull().default(8000),
+    currency: text('currency').notNull().default('EUR'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    eventUnique: uniqueIndex('event_pricing_rule_event_unique').on(table.eventId),
+    currencyCheck: check('event_pricing_rule_currency_check', sql`${table.currency} in ('EUR')`)
+  })
+);
+
+export const classPricingRule = pgTable(
+  'class_pricing_rule',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    classId: uuid('class_id')
+      .notNull()
+      .references(() => eventClass.id, { onDelete: 'cascade' }),
+    baseFeeCents: integer('base_fee_cents').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    eventClassUnique: uniqueIndex('class_pricing_rule_event_class_unique').on(table.eventId, table.classId)
+  })
+);
+
+export const invoicePayment = pgTable(
+  'invoice_payment',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    invoiceId: uuid('invoice_id')
+      .notNull()
+      .references(() => invoice.id, { onDelete: 'cascade' }),
+    amountCents: integer('amount_cents').notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true }).notNull(),
+    method: text('method').notNull(),
+    recordedBy: text('recorded_by'),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    methodCheck: check('invoice_payment_method_check', sql`${table.method} in ('bank_transfer', 'cash', 'card', 'other')`),
+    amountCheck: check('invoice_payment_amount_check', sql`${table.amountCents} > 0`),
+    invoiceIndex: index('invoice_payment_invoice_idx').on(table.invoiceId, table.paidAt)
   })
 );
 
@@ -285,13 +353,37 @@ export const document = pgTable(
     createdBy: text('created_by')
   },
   (table) => ({
-    typeCheck: check('document_type_check', sql`${table.type} in ('waiver', 'tech_check')`),
+    typeCheck: check('document_type_check', sql`${table.type} in ('waiver', 'tech_check', 'waiver_batch', 'tech_check_batch')`),
     statusCheck: check('document_status_check', sql`${table.status} in ('generated', 'failed')`),
     templateVariantCheck: check(
       'document_template_variant_check',
       sql`${table.type} != 'tech_check' or ${table.templateVariant} in ('auto', 'moto')`
     ),
     eventTypeIndex: index('document_event_type_idx').on(table.eventId, table.type)
+  })
+);
+
+export const exportJob = pgTable(
+  'export_job',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    filters: jsonb('filters').notNull().default(sql`'{}'::jsonb`),
+    status: text('status').notNull().default('queued'),
+    s3Key: text('s3_key'),
+    errorLast: text('error_last'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true })
+  },
+  (table) => ({
+    typeCheck: check('export_job_type_check', sql`${table.type} in ('entries_csv')`),
+    statusCheck: check('export_job_status_check', sql`${table.status} in ('queued', 'processing', 'succeeded', 'failed')`),
+    statusIndex: index('export_job_status_idx').on(table.status, table.createdAt),
+    eventTypeIndex: index('export_job_event_type_idx').on(table.eventId, table.type)
   })
 );
 

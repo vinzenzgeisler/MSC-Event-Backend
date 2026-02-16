@@ -7,12 +7,24 @@ Minimaler TypeScript-Lambda-Handler mit Datenbankzugriff (Postgres via Drizzle):
 - `GET /admin/db/ping` → `{ "ok": true, "database": "...", "now": "..." }`
 - `GET /admin/db/schema` → `{ "ok": true, "tables": ["..."] }`
 - `POST /admin/mail/queue` → Outbox-Einträge für Sammelmails
+- `GET /admin/events` / `POST /admin/events` → Event-Liste + Event anlegen
+- `GET /admin/events/current` → aktuelles Event lesen
+- `POST /admin/events/:id/activate|close|archive` → Event-Lifecycle steuern
 - `POST /admin/mail/lifecycle/queue` → Statusbasierte Mail pro Nennung/Fahrer
 - `POST /admin/mail/broadcast/queue` → Broadcast-Mail mit Filtern
 - `POST /admin/payment/reminders/queue` → Outbox-Einträge für Zahlungserinnerungen
+- `PUT /admin/events/:id/pricing-rules` → Preisregeln setzen
+- `POST /admin/events/:id/invoices/recalculate` → Rechnungen neu berechnen (Snapshot)
+- `GET /admin/invoices` → Rechnungen listen
+- `POST|GET /admin/invoices/:id/payments` → Zahlungen erfassen/listen
 - `POST /admin/documents/waiver` → PDF Haftverzicht generieren
 - `POST /admin/documents/tech-check` → PDF Technische Abnahme generieren
+- `POST /admin/documents/waiver/batch` → Batch-Haftverzicht generieren
+- `POST /admin/documents/tech-check/batch` → Batch-Technische-Abnahme generieren
 - `GET /admin/documents/:id/download` → presigned Download-URL
+- `POST /admin/exports/entries` → CSV-Export erstellen
+- `GET /admin/exports/:id` → Export-Status lesen
+- `GET /admin/exports/:id/download` → presigned Export-Download
 - `PATCH /admin/entries/:id/checkin/id-verify` → ID-Verifikation am Check-in setzen
 
 ## Voraussetzungen

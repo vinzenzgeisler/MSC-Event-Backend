@@ -42,6 +42,14 @@ type TechCheckPayload = {
   templateVariant: 'auto' | 'moto';
 };
 
+type BatchDocumentItem = {
+  entryId: string;
+  className: string;
+  driverName: string;
+  vehicleSummary: string;
+  startNumber: string | null;
+};
+
 const renderPdf = (title: string, bodyLines: string[]): Promise<Buffer> =>
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
@@ -122,3 +130,33 @@ export const renderTechCheckPdf = async (payload: TechCheckPayload): Promise<Buf
 
   return renderPdf('Technische Abnahme', lines);
 };
+
+export const renderBatchDocumentPdf = async (
+  title: string,
+  subtitle: string,
+  items: BatchDocumentItem[]
+): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const chunks: Buffer[] = [];
+
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    doc.fontSize(18).text(title, { underline: true });
+    doc.moveDown(0.4);
+    doc.fontSize(11).text(subtitle);
+    doc.moveDown();
+
+    items.forEach((item, idx) => {
+      doc.fontSize(12).text(`${idx + 1}. ${item.driverName}`);
+      doc.fontSize(10).text(`Entry: ${item.entryId}`);
+      doc.text(`Klasse: ${item.className}`);
+      doc.text(`Fahrzeug: ${item.vehicleSummary}`);
+      doc.text(`Startnummer: ${item.startNumber ?? '-'}`);
+      doc.moveDown();
+    });
+
+    doc.end();
+  });

@@ -4,15 +4,22 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getDb } from '../db/client';
 import { document, documentGenerationJob, entry, event, eventClass, person, vehicle } from '../db/schema';
 import { writeAuditLog } from '../audit/log';
-import { renderTechCheckPdf, renderWaiverPdf } from '../docs/pdf';
+import { renderBatchDocumentPdf, renderTechCheckPdf, renderWaiverPdf } from '../docs/pdf';
 import { uploadPdf, getPresignedDownloadUrl } from '../docs/storage';
+import { assertEventStatusAllowed } from '../domain/eventStatus';
 
 const documentRequestSchema = z.object({
   eventId: z.string().uuid(),
   entryId: z.string().uuid()
 });
 
+const batchDocumentRequestSchema = z.object({
+  eventId: z.string().uuid(),
+  entryIds: z.array(z.string().uuid()).min(1).max(250)
+});
+
 type DocumentRequest = z.infer<typeof documentRequestSchema>;
+type BatchDocumentRequest = z.infer<typeof batchDocumentRequestSchema>;
 type TechCheckVariant = 'auto' | 'moto';
 
 const buildPayload = async (input: DocumentRequest) => {
@@ -87,6 +94,29 @@ const buildPayload = async (input: DocumentRequest) => {
   };
 };
 
+const buildBatchPayload = async (input: BatchDocumentRequest) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      entryId: entry.id,
+      className: eventClass.name,
+      driverFirstName: person.firstName,
+      driverLastName: person.lastName,
+      vehicleType: vehicle.vehicleType,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model,
+      vehicleStartNumber: vehicle.startNumberRaw
+    })
+    .from(entry)
+    .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+    .where(and(eq(entry.eventId, input.eventId)));
+
+  const allowedIds = new Set(input.entryIds);
+  return rows.filter((row) => allowedIds.has(row.entryId));
+};
+
 const storeDocument = async (
   eventId: string,
   entryId: string,
@@ -146,6 +176,7 @@ const storeDocument = async (
 };
 
 export const createWaiverDocument = async (input: DocumentRequest, actorUserId: string | null) => {
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
   const payload = await buildPayload(input);
   if (!payload) {
     return null;
@@ -162,6 +193,7 @@ export const createWaiverDocument = async (input: DocumentRequest, actorUserId: 
 };
 
 export const createTechCheckDocument = async (input: DocumentRequest, actorUserId: string | null) => {
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
   const payload = await buildPayload(input);
   if (!payload) {
     return null;
@@ -190,6 +222,79 @@ export const createTechCheckDocument = async (input: DocumentRequest, actorUserI
   );
 };
 
+const createBatchDocument = async (
+  input: BatchDocumentRequest,
+  type: 'waiver_batch' | 'tech_check_batch',
+  actorUserId: string | null
+) => {
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
+  const rows = await buildBatchPayload(input);
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const pdfBuffer = await renderBatchDocumentPdf(
+    type === 'waiver_batch' ? 'Haftverzicht Batch' : 'Technische Abnahme Batch',
+    `Event ${input.eventId} - ${rows.length} Eintraege`,
+    rows.map((row) => ({
+      entryId: row.entryId,
+      className: row.className,
+      driverName: `${row.driverFirstName} ${row.driverLastName}`,
+      vehicleSummary: `${row.vehicleType} ${row.vehicleMake ?? '-'} ${row.vehicleModel ?? '-'}`.trim(),
+      startNumber: row.vehicleStartNumber ?? null
+    }))
+  );
+
+  const db = await getDb();
+  const hash = createHash('sha256').update(pdfBuffer).digest('hex');
+  const key = `documents/${input.eventId}/batch/${type}/v1/${randomUUID()}.pdf`;
+  await uploadPdf(key, pdfBuffer);
+
+  const [docRow] = await db
+    .insert(document)
+    .values({
+      eventId: input.eventId,
+      entryId: null,
+      driverPersonId: null,
+      type,
+      templateVariant: null,
+      templateVersion: 'v1',
+      sha256: hash,
+      s3Key: key,
+      status: 'generated',
+      createdBy: actorUserId
+    })
+    .returning();
+
+  if (docRow) {
+    await db.insert(documentGenerationJob).values({
+      documentId: docRow.id,
+      status: 'succeeded'
+    });
+  }
+
+  await writeAuditLog(db as never, {
+    eventId: input.eventId,
+    actorUserId,
+    action: 'batch_document_generated',
+    entityType: 'document',
+    entityId: docRow?.id ?? null,
+    payload: {
+      type,
+      count: rows.length,
+      entryIds: input.entryIds
+    }
+  });
+
+  return docRow ?? null;
+};
+
+export const createWaiverBatchDocument = async (input: BatchDocumentRequest, actorUserId: string | null) =>
+  createBatchDocument(input, 'waiver_batch', actorUserId);
+
+export const createTechCheckBatchDocument = async (input: BatchDocumentRequest, actorUserId: string | null) =>
+  createBatchDocument(input, 'tech_check_batch', actorUserId);
+
 export const getDocumentDownload = async (id: string, actorUserId: string | null) => {
   const db = await getDb();
   const rows = await db.select().from(document).where(eq(document.id, id));
@@ -212,3 +317,4 @@ export const getDocumentDownload = async (id: string, actorUserId: string | null
 };
 
 export const validateDocumentRequest = (payload: unknown) => documentRequestSchema.parse(payload);
+export const validateBatchDocumentRequest = (payload: unknown) => batchDocumentRequestSchema.parse(payload);

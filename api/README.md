@@ -8,8 +8,10 @@ Minimaler TypeScript-Lambda-Handler mit Datenbankzugriff (Postgres via Drizzle):
 - `GET /admin/db/schema` → `{ "ok": true, "tables": ["..."] }`
 - `POST /admin/mail/queue` → Outbox-Einträge für Sammelmails
 - `GET /admin/events` / `POST /admin/events` → Event-Liste + Event anlegen
+- `PATCH /admin/events/:id` → Event-Metadaten anpassen (solange offen)
 - `GET /admin/events/current` → aktuelles Event lesen
 - `POST /admin/events/:id/activate|close|archive` → Event-Lifecycle steuern
+- `GET|POST /admin/events/:id/classes` + `PATCH|DELETE /admin/classes/:id` → Klassenverwaltung
 - `POST /admin/mail/lifecycle/queue` → Statusbasierte Mail pro Nennung/Fahrer
 - `POST /admin/mail/broadcast/queue` → Broadcast-Mail mit Filtern
 - `POST /admin/payment/reminders/queue` → Outbox-Einträge für Zahlungserinnerungen
@@ -22,10 +24,21 @@ Minimaler TypeScript-Lambda-Handler mit Datenbankzugriff (Postgres via Drizzle):
 - `POST /admin/documents/waiver/batch` → Batch-Haftverzicht generieren
 - `POST /admin/documents/tech-check/batch` → Batch-Technische-Abnahme generieren
 - `GET /admin/documents/:id/download` → presigned Download-URL
+- `GET /admin/documents/entry/:entryId/download?eventId=...&type=waiver|tech_check` → Dokument on-demand + Download
 - `POST /admin/exports/entries` → CSV-Export erstellen
+- `GET /admin/exports?eventId=...` → Export-Historie je Event
 - `GET /admin/exports/:id` → Export-Status lesen
 - `GET /admin/exports/:id/download` → presigned Export-Download
+- `GET /admin/entries` → Entry-Liste mit Filtern
+- `PATCH /admin/entries/:id/status` → Annahmestatus ändern (+ optional Lifecycle-Mail)
+- `PATCH /admin/entries/:id/tech-status` → Technische-Abnahme-Status setzen
+- `GET /admin/checkin/entries` → Check-in-Liste/Suche
 - `PATCH /admin/entries/:id/checkin/id-verify` → ID-Verifikation am Check-in setzen
+
+Öffentliche Registrierung:
+
+- `POST /public/events/:id/entries` → Nennung anlegen (unverified)
+- `POST /public/entries/:id/verify-email` → E-Mail-Verifikation abschließen
 
 ## Voraussetzungen
 

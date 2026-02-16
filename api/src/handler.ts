@@ -13,14 +13,34 @@ import {
   getCurrentEvent,
   listEvents,
   validateCreateEventInput,
-  validateListEventsInput
+  validateListEventsInput,
+  updateEvent,
+  validateUpdateEventInput
 } from './routes/adminEvents';
+import {
+  createClass,
+  deleteClass,
+  listClassesByEvent,
+  updateClass,
+  validateClassInput,
+  validateClassUpdateInput
+} from './routes/adminClasses';
 import {
   getExportDownload,
   getExportJob,
+  listExportJobs,
   createEntriesExport,
   validateCreateExportInput
 } from './routes/adminExports';
+import {
+  listCheckinEntries,
+  listEntries,
+  patchEntryStatus,
+  patchEntryTechStatus,
+  validateEntryStatusPatchInput,
+  validateEntryTechStatusPatchInput,
+  validateListEntriesQuery
+} from './routes/adminEntries';
 import {
   listInvoicePayments,
   listInvoices,
@@ -48,10 +68,12 @@ import {
   createWaiverBatchDocument,
   createWaiverDocument,
   getDocumentDownload,
+  getOrCreateEntryDocumentDownload,
   validateBatchDocumentRequest,
   validateDocumentRequest
 } from './routes/adminDocs';
 import { setCheckinIdVerified, validateIdVerifyInput } from './routes/adminCheckin';
+import { createPublicEntry, validateCreatePublicEntryInput, validateVerifyPublicEntryInput, verifyPublicEntryEmail } from './routes/publicRegistration';
 
 const isInvalidJson = (error: unknown): boolean =>
   error instanceof Error && error.message === 'Invalid JSON body';
@@ -63,6 +85,66 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/health') {
     return json(200, { ok: true, stage });
+  }
+
+  const publicCreateEntryMatch = path.match(/^\/public\/events\/([^/]+)\/entries$/);
+  if (method === 'POST' && publicCreateEntryMatch) {
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateCreatePublicEntryInput({
+        ...(payload as Record<string, unknown>),
+        eventId: publicCreateEntryMatch[1]
+      });
+      const result = await createPublicEntry(input);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      if (error instanceof Error && (error.message === 'EVENT_NOT_OPEN' || error.message === 'REGISTRATION_NOT_OPEN' || error.message === 'REGISTRATION_CLOSED')) {
+        return errorJson(409, error.message);
+      }
+      if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') {
+        return errorJson(404, 'Class not found');
+      }
+      if (error instanceof Error && error.message === 'CLASS_VEHICLE_TYPE_MISMATCH') {
+        return errorJson(409, 'Class does not match vehicle type');
+      }
+      if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
+        return errorJson(409, 'Start number already exists');
+      }
+      return errorJson(500, 'Public registration failed');
+    }
+  }
+
+  const publicVerifyMatch = path.match(/^\/public\/entries\/([^/]+)\/verify-email$/);
+  if (method === 'POST' && publicVerifyMatch) {
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateVerifyPublicEntryInput(payload);
+      const result = await verifyPublicEntryEmail(publicVerifyMatch[1], input);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'VERIFY_TOKEN_INVALID') {
+        return errorJson(404, 'Verification token invalid');
+      }
+      if (error instanceof Error && error.message === 'VERIFY_TOKEN_EXPIRED') {
+        return errorJson(409, 'Verification token expired');
+      }
+      return errorJson(500, 'Email verification failed');
+    }
   }
 
   if (method === 'GET' && path === '/admin/ping') {
@@ -161,6 +243,125 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Invalid JSON body');
       }
       return errorJson(500, 'Create event failed');
+    }
+  }
+
+  const eventPatchMatch = path.match(/^\/admin\/events\/([^/]+)$/);
+  if (method === 'PATCH' && eventPatchMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateUpdateEventInput(payload);
+      const updated = await updateEvent(eventPatchMatch[1], input, auth.sub);
+      if (!updated) {
+        return errorJson(404, 'Event not found');
+      }
+      return json(200, { ok: true, event: updated });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      return errorJson(500, 'Update event failed');
+    }
+  }
+
+  const eventClassesMatch = path.match(/^\/admin\/events\/([^/]+)\/classes$/);
+  if (method === 'GET' && eventClassesMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'viewer', 'checkin'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const classes = await listClassesByEvent(eventClassesMatch[1]);
+      return json(200, { ok: true, classes });
+    } catch (error) {
+      return errorJson(500, 'List classes failed');
+    }
+  }
+
+  if (method === 'POST' && eventClassesMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateClassInput(payload);
+      const created = await createClass(eventClassesMatch[1], input, auth.sub);
+      return json(200, { ok: true, class: created });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      return errorJson(500, 'Create class failed');
+    }
+  }
+
+  const classMatch = path.match(/^\/admin\/classes\/([^/]+)$/);
+  if (method === 'PATCH' && classMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateClassUpdateInput(payload);
+      const updated = await updateClass(classMatch[1], input, auth.sub);
+      if (!updated) {
+        return errorJson(404, 'Class not found');
+      }
+      return json(200, { ok: true, class: updated });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      return errorJson(500, 'Update class failed');
+    }
+  }
+
+  if (method === 'DELETE' && classMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const deleted = await deleteClass(classMatch[1], auth.sub);
+      if (!deleted) {
+        return errorJson(404, 'Class not found');
+      }
+      return json(200, { ok: true, ...deleted });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'CLASS_IN_USE') {
+        return errorJson(409, 'Class is in use');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      return errorJson(500, 'Delete class failed');
     }
   }
 
@@ -523,6 +724,80 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  const entryDocDownloadMatch = path.match(/^\/admin\/documents\/entry\/([^/]+)\/download$/);
+  if (method === 'GET' && entryDocDownloadMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'checkin', 'viewer'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const eventId = event.queryStringParameters?.eventId;
+      const type = event.queryStringParameters?.type;
+      if (!eventId || (type !== 'waiver' && type !== 'tech_check')) {
+        return errorJson(400, 'eventId and type(waiver|tech_check) are required');
+      }
+      const result = await getOrCreateEntryDocumentDownload(
+        {
+          eventId,
+          entryId: entryDocDownloadMatch[1],
+          type
+        },
+        auth.sub
+      );
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, {
+        ok: true,
+        url: result.url,
+        type: result.doc.type,
+        templateVariant: result.doc.templateVariant ?? null,
+        templateVersion: result.doc.templateVersion
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      return errorJson(500, 'Download failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/entries') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'checkin', 'viewer'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const query = validateListEntriesQuery(event.queryStringParameters ?? {});
+      const redact = hasGroup(auth, 'viewer') && !hasGroup(auth, 'admin');
+      const rows = await listEntries(query, redact);
+      return json(200, { ok: true, entries: rows });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      return errorJson(500, 'List entries failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/checkin/entries') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'checkin', 'viewer'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const query = validateListEntriesQuery(event.queryStringParameters ?? {});
+      const redact = hasGroup(auth, 'viewer') && !hasGroup(auth, 'admin');
+      const rows = await listCheckinEntries(query, redact);
+      return json(200, { ok: true, entries: rows });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      return errorJson(500, 'List check-in entries failed');
+    }
+  }
+
   const checkinMatch = path.match(/^\/admin\/entries\/([^/]+)\/checkin\/id-verify$/);
   if (method === 'PATCH' && checkinMatch) {
     const auth = getAuthContext(event);
@@ -552,6 +827,67 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(409, 'Event is read-only');
       }
       return errorJson(500, 'Check-in update failed');
+    }
+  }
+
+  const entryStatusMatch = path.match(/^\/admin\/entries\/([^/]+)\/status$/);
+  if (method === 'PATCH' && entryStatusMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateEntryStatusPatchInput(payload);
+      const result = await patchEntryStatus(entryStatusMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, entry: result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'LIFECYCLE_EVENT_TYPE_REQUIRED') {
+        return errorJson(400, 'lifecycleEventType required when sendLifecycleMail=true');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      return errorJson(500, 'Entry status update failed');
+    }
+  }
+
+  const entryTechStatusMatch = path.match(/^\/admin\/entries\/([^/]+)\/tech-status$/);
+  if (method === 'PATCH' && entryTechStatusMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'checkin'])) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateEntryTechStatusPatchInput(payload);
+      const result = await patchEntryTechStatus(entryTechStatusMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, entry: result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      return errorJson(500, 'Tech status update failed');
     }
   }
 
@@ -658,7 +994,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
         return errorJson(409, 'Event is read-only');
       }
-      return errorJson(500, 'Record payment failed');
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Record payment failed', details);
     }
   }
 
@@ -694,6 +1031,23 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Invalid JSON body');
       }
       return errorJson(500, 'Create export failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/exports') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'viewer'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    const eventId = event.queryStringParameters?.eventId;
+    if (!eventId) {
+      return errorJson(400, 'eventId is required');
+    }
+    try {
+      const jobs = await listExportJobs(eventId);
+      return json(200, { ok: true, exports: jobs });
+    } catch (error) {
+      return errorJson(500, 'List exports failed');
     }
   }
 

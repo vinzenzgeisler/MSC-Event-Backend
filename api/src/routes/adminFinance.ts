@@ -300,13 +300,14 @@ export const recordInvoicePayment = async (invoiceId: string, input: PaymentInpu
   const sumRows = await db
     .select({
       paidAmountCents: sql<number>`coalesce(sum(${invoicePayment.amountCents}), 0)`,
-      maxPaidAt: sql<Date | null>`max(${invoicePayment.paidAt})`
+      maxPaidAt: sql<Date | string | null>`max(${invoicePayment.paidAt})`
     })
     .from(invoicePayment)
     .where(eq(invoicePayment.invoiceId, invoiceId));
 
   const paidAmountCents = sumRows[0]?.paidAmountCents ?? 0;
-  const maxPaidAt = sumRows[0]?.maxPaidAt ?? null;
+  const maxPaidAtRaw = sumRows[0]?.maxPaidAt ?? null;
+  const maxPaidAt = maxPaidAtRaw ? new Date(maxPaidAtRaw) : null;
   const paymentStatus = paidAmountCents >= current.totalCents ? 'paid' : 'due';
 
   const [updated] = await db

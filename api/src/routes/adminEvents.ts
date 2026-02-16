@@ -10,6 +10,8 @@ const createEventSchema = z.object({
   name: z.string().min(1),
   startsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  registrationOpenAt: z.string().datetime().optional(),
+  registrationCloseAt: z.string().datetime().optional(),
   status: eventStatusSchema.default('draft')
 });
 
@@ -18,8 +20,19 @@ const listEventsSchema = z.object({
   currentOnly: z.boolean().optional()
 });
 
+const updateEventSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    startsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    registrationOpenAt: z.string().datetime().nullable().optional(),
+    registrationCloseAt: z.string().datetime().nullable().optional()
+  })
+  .refine((value) => Object.keys(value).length > 0, { message: 'Provide at least one field to update.' });
+
 type CreateEventInput = z.infer<typeof createEventSchema>;
 type ListEventsInput = z.infer<typeof listEventsSchema>;
+type UpdateEventInput = z.infer<typeof updateEventSchema>;
 
 const ensureTransitionAllowed = (from: string, to: string) => {
   if (from === to) {
@@ -57,6 +70,8 @@ export const listEvents = async (input: ListEventsInput) => {
       endsAt: event.endsAt,
       status: event.status,
       isCurrent: event.isCurrent,
+      registrationOpenAt: event.registrationOpenAt,
+      registrationCloseAt: event.registrationCloseAt,
       openedAt: event.openedAt,
       closedAt: event.closedAt,
       archivedAt: event.archivedAt,
@@ -83,6 +98,8 @@ export const getCurrentEvent = async () => {
       endsAt: event.endsAt,
       status: event.status,
       isCurrent: event.isCurrent,
+      registrationOpenAt: event.registrationOpenAt,
+      registrationCloseAt: event.registrationCloseAt,
       openedAt: event.openedAt,
       closedAt: event.closedAt,
       archivedAt: event.archivedAt
@@ -106,6 +123,8 @@ export const createEvent = async (input: CreateEventInput, actorUserId: string |
       endsAt: input.endsAt,
       status,
       isCurrent: false,
+      registrationOpenAt: input.registrationOpenAt ? new Date(input.registrationOpenAt) : null,
+      registrationCloseAt: input.registrationCloseAt ? new Date(input.registrationCloseAt) : null,
       openedAt: status === 'open' ? now : null,
       closedAt: status === 'closed' ? now : null,
       archivedAt: status === 'archived' ? now : null,
@@ -240,9 +259,59 @@ export const archiveEvent = async (eventId: string, actorUserId: string | null) 
   return updated ?? null;
 };
 
+export const updateEvent = async (eventId: string, input: UpdateEventInput, actorUserId: string | null) => {
+  const db = await getDb();
+  const rows = await db.select().from(event).where(eq(event.id, eventId)).limit(1);
+  const existing = rows[0];
+  if (!existing) {
+    return null;
+  }
+  if (existing.status !== 'draft' && existing.status !== 'open') {
+    throw new Error('EVENT_STATUS_FORBIDDEN');
+  }
+
+  const now = new Date();
+  const [updated] = await db
+    .update(event)
+    .set({
+      name: input.name ?? existing.name,
+      startsAt: input.startsAt ?? existing.startsAt,
+      endsAt: input.endsAt ?? existing.endsAt,
+      registrationOpenAt:
+        input.registrationOpenAt === undefined
+          ? existing.registrationOpenAt
+          : input.registrationOpenAt === null
+            ? null
+            : new Date(input.registrationOpenAt),
+      registrationCloseAt:
+        input.registrationCloseAt === undefined
+          ? existing.registrationCloseAt
+          : input.registrationCloseAt === null
+            ? null
+            : new Date(input.registrationCloseAt),
+      updatedAt: now
+    })
+    .where(eq(event.id, eventId))
+    .returning();
+
+  await writeAuditLog(db as never, {
+    eventId,
+    actorUserId,
+    action: 'event_updated',
+    entityType: 'event',
+    entityId: eventId,
+    payload: {
+      changedFields: Object.keys(input)
+    }
+  });
+
+  return updated ?? null;
+};
+
 export const validateCreateEventInput = (payload: unknown) => createEventSchema.parse(payload);
 export const validateListEventsInput = (query: Record<string, string | undefined>) =>
   listEventsSchema.parse({
     status: query.status,
     currentOnly: query.currentOnly === undefined ? undefined : query.currentOnly === 'true'
   });
+export const validateUpdateEventInput = (payload: unknown) => updateEventSchema.parse(payload);

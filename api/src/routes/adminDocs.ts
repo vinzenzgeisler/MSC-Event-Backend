@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { getDb } from '../db/client';
 import { document, documentGenerationJob, entry, event, eventClass, person, vehicle } from '../db/schema';
@@ -176,7 +176,7 @@ const storeDocument = async (
 };
 
 export const createWaiverDocument = async (input: DocumentRequest, actorUserId: string | null) => {
-  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed', 'archived']);
   const payload = await buildPayload(input);
   if (!payload) {
     return null;
@@ -193,7 +193,7 @@ export const createWaiverDocument = async (input: DocumentRequest, actorUserId: 
 };
 
 export const createTechCheckDocument = async (input: DocumentRequest, actorUserId: string | null) => {
-  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed', 'archived']);
   const payload = await buildPayload(input);
   if (!payload) {
     return null;
@@ -227,7 +227,7 @@ const createBatchDocument = async (
   type: 'waiver_batch' | 'tech_check_batch',
   actorUserId: string | null
 ) => {
-  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed', 'archived']);
   const rows = await buildBatchPayload(input);
   if (rows.length === 0) {
     return null;
@@ -314,6 +314,33 @@ export const getDocumentDownload = async (id: string, actorUserId: string | null
     }
   });
   return { doc, url };
+};
+
+export const getOrCreateEntryDocumentDownload = async (
+  input: DocumentRequest & { type: 'waiver' | 'tech_check' },
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const existingRows = await db
+    .select()
+    .from(document)
+    .where(and(eq(document.eventId, input.eventId), eq(document.entryId, input.entryId), eq(document.type, input.type)))
+    .orderBy(desc(document.createdAt))
+    .limit(1);
+
+  let docId = existingRows[0]?.id;
+  if (!docId) {
+    const generated =
+      input.type === 'waiver'
+        ? await createWaiverDocument({ eventId: input.eventId, entryId: input.entryId }, actorUserId)
+        : await createTechCheckDocument({ eventId: input.eventId, entryId: input.entryId }, actorUserId);
+    if (!generated) {
+      return null;
+    }
+    docId = generated.id;
+  }
+
+  return getDocumentDownload(docId, actorUserId);
 };
 
 export const validateDocumentRequest = (payload: unknown) => documentRequestSchema.parse(payload);

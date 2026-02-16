@@ -8,6 +8,7 @@ import { getPresignedDownloadUrl, uploadFile } from '../docs/storage';
 
 const createExportSchema = z.object({
   eventId: z.string().uuid(),
+  type: z.enum(['startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv']).default('participants_csv'),
   classId: z.string().uuid().optional(),
   acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
   paymentOpenOnly: z.boolean().optional(),
@@ -44,7 +45,7 @@ export const createEntriesExport = async (
     .insert(exportJob)
     .values({
       eventId: input.eventId,
-      type: 'entries_csv',
+      type: input.type,
       filters: input,
       status: 'processing',
       createdBy: actorUserId,
@@ -79,6 +80,7 @@ export const createEntriesExport = async (
         acceptanceStatus: entry.acceptanceStatus,
         paymentStatus: invoice.paymentStatus,
         checkinIdVerified: entry.checkinIdVerified,
+        techStatus: entry.techStatus,
         startNumberNorm: entry.startNumberNorm,
         driverFirstName: person.firstName,
         driverLastName: person.lastName,
@@ -91,31 +93,50 @@ export const createEntriesExport = async (
       .where(and(...conditions))
       .orderBy(asc(eventClass.name), asc(entry.createdAt));
 
-    const mappedRows = rows.map((row) => ({
+    const mappedRowsBase = rows.map((row) => ({
       entryId: row.entryId,
       className: row.className,
       registrationStatus: row.registrationStatus,
       acceptanceStatus: row.acceptanceStatus,
       paymentStatus: row.paymentStatus ?? 'none',
       checkinIdVerified: row.checkinIdVerified ? 'true' : 'false',
+      techStatus: row.techStatus,
       startNumber: row.startNumberNorm ?? '',
       driverName: redactSensitiveFields ? '' : `${row.driverFirstName} ${row.driverLastName}`,
       driverEmail: redactSensitiveFields ? '' : (row.driverEmail ?? '')
     }));
 
-    const headers = [
-      'entryId',
-      'className',
-      'registrationStatus',
-      'acceptanceStatus',
-      'paymentStatus',
-      'checkinIdVerified',
-      'startNumber',
-      'driverName',
-      'driverEmail'
-    ];
-    const csv = toCsv(headers, mappedRows);
-    const key = `exports/${input.eventId}/entries_csv/${randomUUID()}.csv`;
+    const typedRows =
+      input.type === 'startlist_csv'
+        ? mappedRowsBase.map((row) => ({
+            className: row.className,
+            startNumber: row.startNumber,
+            driverName: row.driverName
+          }))
+        : input.type === 'payments_open_csv'
+          ? mappedRowsBase
+              .filter((row) => row.paymentStatus === 'due')
+              .map((row) => ({
+                entryId: row.entryId,
+                className: row.className,
+                driverName: row.driverName,
+                driverEmail: row.driverEmail,
+                paymentStatus: row.paymentStatus
+              }))
+          : input.type === 'checkin_status_csv'
+            ? mappedRowsBase.map((row) => ({
+                entryId: row.entryId,
+                className: row.className,
+                driverName: row.driverName,
+                checkinIdVerified: row.checkinIdVerified,
+                techStatus: row.techStatus,
+                acceptanceStatus: row.acceptanceStatus
+              }))
+            : mappedRowsBase;
+
+    const headers = Object.keys(typedRows[0] ?? { entryId: '', className: '', driverName: '' });
+    const csv = toCsv(headers, typedRows);
+    const key = `exports/${input.eventId}/${input.type}/${randomUUID()}.csv`;
     await uploadFile(key, Buffer.from(csv, 'utf8'), 'text/csv; charset=utf-8');
 
     const [updated] = await db
@@ -135,8 +156,8 @@ export const createEntriesExport = async (
       entityType: 'export_job',
       entityId: job.id,
       payload: {
-        type: 'entries_csv',
-        rowCount: mappedRows.length,
+        type: input.type,
+        rowCount: typedRows.length,
         redacted: redactSensitiveFields
       }
     });
@@ -160,6 +181,15 @@ export const getExportJob = async (id: string) => {
   const db = await getDb();
   const rows = await db.select().from(exportJob).where(eq(exportJob.id, id));
   return rows[0] ?? null;
+};
+
+export const listExportJobs = async (eventId: string) => {
+  const db = await getDb();
+  return db
+    .select()
+    .from(exportJob)
+    .where(eq(exportJob.eventId, eventId))
+    .orderBy(asc(exportJob.createdAt));
 };
 
 export const getExportDownload = async (id: string, actorUserId: string | null) => {

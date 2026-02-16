@@ -22,6 +22,8 @@ export const event = pgTable(
     endsAt: date('ends_at').notNull(),
     status: text('status').notNull(),
     isCurrent: boolean('is_current').notNull().default(false),
+    registrationOpenAt: timestamp('registration_open_at', { withTimezone: true }),
+    registrationCloseAt: timestamp('registration_close_at', { withTimezone: true }),
     openedAt: timestamp('opened_at', { withTimezone: true }),
     closedAt: timestamp('closed_at', { withTimezone: true }),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
@@ -98,6 +100,7 @@ export const vehicle = pgTable(
     brakes: text('brakes'),
     description: text('description'),
     startNumberRaw: text('start_number_raw'),
+    imageS3Key: text('image_s3_key'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
@@ -133,6 +136,9 @@ export const entry = pgTable(
     checkinIdVerified: boolean('checkin_id_verified').notNull().default(false),
     checkinIdVerifiedAt: timestamp('checkin_id_verified_at', { withTimezone: true }),
     checkinIdVerifiedBy: text('checkin_id_verified_by'),
+    techStatus: text('tech_status').notNull().default('pending'),
+    techCheckedAt: timestamp('tech_checked_at', { withTimezone: true }),
+    techCheckedBy: text('tech_checked_by'),
     entryFeeCents: integer('entry_fee_cents').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
@@ -150,6 +156,7 @@ export const entry = pgTable(
       'entry_acceptance_status_check',
       sql`${table.acceptanceStatus} in ('pending', 'shortlist', 'accepted', 'rejected')`
     ),
+    techStatusCheck: check('entry_tech_status_check', sql`${table.techStatus} in ('pending', 'passed', 'failed')`),
     startNumberUnique: uniqueIndex('entry_start_number_unique')
       .on(table.eventId, table.classId, table.startNumberNorm)
       .where(sql`${table.startNumberNorm} is not null`)
@@ -380,10 +387,31 @@ export const exportJob = pgTable(
     completedAt: timestamp('completed_at', { withTimezone: true })
   },
   (table) => ({
-    typeCheck: check('export_job_type_check', sql`${table.type} in ('entries_csv')`),
+    typeCheck: check(
+      'export_job_type_check',
+      sql`${table.type} in ('entries_csv', 'startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv')`
+    ),
     statusCheck: check('export_job_status_check', sql`${table.status} in ('queued', 'processing', 'succeeded', 'failed')`),
     statusIndex: index('export_job_status_idx').on(table.status, table.createdAt),
     eventTypeIndex: index('export_job_event_type_idx').on(table.eventId, table.type)
+  })
+);
+
+export const entryEmailVerification = pgTable(
+  'entry_email_verification',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => entry.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    entryUnique: uniqueIndex('entry_email_verification_entry_unique').on(table.entryId),
+    tokenUnique: uniqueIndex('entry_email_verification_token_unique').on(table.token)
   })
 );
 

@@ -31,6 +31,7 @@ npm install
 - API: `api/README.md`
 - Infra: `infra/README.md`
 - Handover Phase 4: `docs/phase4-handover.md`
+- Handover Phase 5: `docs/phase5-handover.md`
 - Smoke Test (PowerShell): `scripts/phase3-smoke-test.ps1`
 
 ## Ablauf (Kurz)

@@ -4,6 +4,7 @@ import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { classPricingRule, entry, eventPricingRule, invoice, invoicePayment } from '../db/schema';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
+import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const classRuleSchema = z.object({
   classId: z.string().uuid(),
@@ -25,7 +26,11 @@ const recalcSchema = z.object({
 const listInvoiceFiltersSchema = z.object({
   eventId: z.string().uuid(),
   paymentStatus: z.enum(['due', 'paid']).optional(),
-  driverPersonId: z.string().uuid().optional()
+  driverPersonId: z.string().uuid().optional(),
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  sortBy: z.enum(['createdAt', 'updatedAt', 'totalCents', 'paidAt']).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional()
 });
 
 const paymentSchema = z.object({
@@ -251,7 +256,7 @@ export const listInvoices = async (filters: ListInvoiceFilters) => {
     conditions.push(eq(invoice.driverPersonId, filters.driverPersonId));
   }
 
-  return db
+  const rows = await db
     .select({
       id: invoice.id,
       eventId: invoice.eventId,
@@ -266,6 +271,18 @@ export const listInvoices = async (filters: ListInvoiceFilters) => {
     .from(invoice)
     .where(and(...conditions))
     .orderBy(asc(invoice.createdAt));
+  const paginationQuery = parseListQuery(
+    {
+      cursor: filters.cursor,
+      limit: filters.limit?.toString(),
+      sortBy: filters.sortBy,
+      sortDir: filters.sortDir
+    },
+    ['createdAt', 'updatedAt', 'totalCents', 'paidAt'],
+    'createdAt',
+    'asc'
+  );
+  return paginateAndSortRows(rows, paginationQuery);
 };
 
 export const recordInvoicePayment = async (invoiceId: string, input: PaymentInput, actorUserId: string | null) => {
@@ -338,9 +355,12 @@ export const recordInvoicePayment = async (invoiceId: string, input: PaymentInpu
   return updated ?? null;
 };
 
-export const listInvoicePayments = async (invoiceId: string) => {
+export const listInvoicePayments = async (
+  invoiceId: string,
+  query?: { cursor?: string; limit?: number; sortBy?: string; sortDir?: 'asc' | 'desc' }
+) => {
   const db = await getDb();
-  return db
+  const rows = await db
     .select({
       id: invoicePayment.id,
       invoiceId: invoicePayment.invoiceId,
@@ -354,6 +374,18 @@ export const listInvoicePayments = async (invoiceId: string) => {
     .from(invoicePayment)
     .where(eq(invoicePayment.invoiceId, invoiceId))
     .orderBy(asc(invoicePayment.paidAt));
+  const paginationQuery = parseListQuery(
+    {
+      cursor: query?.cursor,
+      limit: query?.limit?.toString(),
+      sortBy: query?.sortBy,
+      sortDir: query?.sortDir
+    },
+    ['paidAt', 'createdAt', 'amountCents', 'method'],
+    'paidAt',
+    'asc'
+  );
+  return paginateAndSortRows(rows, paginationQuery);
 };
 
 export const validatePricingRulesInput = (payload: unknown) => pricingRulesSchema.parse(payload);
@@ -362,6 +394,10 @@ export const validateListInvoicesInput = (query: Record<string, string | undefin
   listInvoiceFiltersSchema.parse({
     eventId: query.eventId,
     paymentStatus: query.paymentStatus,
-    driverPersonId: query.driverPersonId
+    driverPersonId: query.driverPersonId,
+    cursor: query.cursor,
+    limit: query.limit === undefined ? undefined : Number(query.limit),
+    sortBy: query.sortBy,
+    sortDir: query.sortDir
   });
 export const validateRecordPaymentInput = (payload: unknown) => paymentSchema.parse(payload);

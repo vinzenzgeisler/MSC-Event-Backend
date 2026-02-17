@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { entry, entryEmailVerification, event, eventClass, person, vehicle } from '../db/schema';
+import { entry, entryEmailVerification, event, eventClass, person, vehicle, vehicleImageUpload } from '../db/schema';
+import { getPresignedAssetsUploadUrl, doesAssetObjectExist } from '../docs/storage';
+import { normalizeStartNumber } from '../domain/startNumber';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { queueMail } from './adminMail';
 
@@ -24,8 +26,9 @@ const vehicleInputSchema = z.object({
   make: z.string().optional(),
   model: z.string().optional(),
   year: z.number().int().min(1900).max(2100).optional(),
-  startNumberRaw: z.string().min(1).max(6).optional(),
-  imageS3Key: z.string().optional()
+  startNumberRaw: z.string().regex(/^[a-zA-Z0-9]{1,6}$/).optional(),
+  imageS3Key: z.string().optional(),
+  imageUploadId: z.string().uuid().optional()
 });
 
 const createEntrySchema = z.object({
@@ -36,7 +39,7 @@ const createEntrySchema = z.object({
   vehicle: vehicleInputSchema,
   startNumber: z
     .string()
-    .regex(/^[A-Z0-9]{1,6}$/)
+    .regex(/^[a-zA-Z0-9]{1,6}$/)
     .optional(),
   isBackupVehicle: z.boolean().optional()
 });
@@ -45,8 +48,28 @@ const verifySchema = z.object({
   token: z.string().min(16)
 });
 
+const validateStartNumberSchema = z.object({
+  eventId: z.string().uuid(),
+  classId: z.string().uuid(),
+  startNumber: z.string().min(1).max(6)
+});
+
+const uploadInitSchema = z.object({
+  eventId: z.string().uuid(),
+  contentType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+  fileName: z.string().min(1).max(255).optional(),
+  fileSizeBytes: z.number().int().min(1).max(8 * 1024 * 1024)
+});
+
+const uploadFinalizeSchema = z.object({
+  uploadId: z.string().uuid()
+});
+
 type CreateEntryInput = z.infer<typeof createEntrySchema>;
 type VerifyInput = z.infer<typeof verifySchema>;
+type ValidateStartNumberInput = z.infer<typeof validateStartNumberSchema>;
+type UploadInitInput = z.infer<typeof uploadInitSchema>;
+type UploadFinalizeInput = z.infer<typeof uploadFinalizeSchema>;
 
 const assertRegistrationOpen = async (eventId: string) => {
   const db = await getDb();
@@ -79,6 +102,7 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
   await assertRegistrationOpen(input.eventId);
   const db = await getDb();
   const now = new Date();
+  const normalizedStartNumber = normalizeStartNumber(input.startNumber ?? input.vehicle.startNumberRaw ?? null);
   const token = createHash('sha256').update(`${randomUUID()}:${input.driver.email}:${Date.now()}`).digest('hex');
   const tokenExpiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24);
 
@@ -150,6 +174,25 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
       codriverId = codriver.id;
     }
 
+    let imageS3Key: string | null = input.vehicle.imageS3Key ?? null;
+    if (input.vehicle.imageUploadId) {
+      const uploadRows = await tx
+        .select({
+          id: vehicleImageUpload.id,
+          eventId: vehicleImageUpload.eventId,
+          s3Key: vehicleImageUpload.s3Key,
+          status: vehicleImageUpload.status
+        })
+        .from(vehicleImageUpload)
+        .where(eq(vehicleImageUpload.id, input.vehicle.imageUploadId))
+        .limit(1);
+      const upload = uploadRows[0];
+      if (!upload || upload.eventId !== input.eventId || upload.status !== 'finalized') {
+        throw new Error('IMAGE_UPLOAD_INVALID');
+      }
+      imageS3Key = upload.s3Key;
+    }
+
     const [createdVehicle] = await tx
       .insert(vehicle)
       .values({
@@ -158,8 +201,8 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
         make: input.vehicle.make ?? null,
         model: input.vehicle.model ?? null,
         year: input.vehicle.year ?? null,
-        startNumberRaw: input.vehicle.startNumberRaw ?? input.startNumber ?? null,
-        imageS3Key: input.vehicle.imageS3Key ?? null,
+        startNumberRaw: normalizedStartNumber ?? null,
+        imageS3Key,
         createdAt: now,
         updatedAt: now
       })
@@ -174,7 +217,7 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
         codriverPersonId: codriverId,
         vehicleId: createdVehicle.id,
         isBackupVehicle: input.isBackupVehicle ?? false,
-        startNumberNorm: input.startNumber ?? null,
+        startNumberNorm: normalizedStartNumber ?? null,
         registrationStatus: 'submitted_unverified',
         acceptanceStatus: 'pending',
         checkinIdVerified: false,
@@ -240,6 +283,191 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
   }
 };
 
+export const getPublicCurrentEventWithClasses = async () => {
+  const db = await getDb();
+  const eventRows = await db
+    .select({
+      id: event.id,
+      name: event.name,
+      startsAt: event.startsAt,
+      endsAt: event.endsAt,
+      status: event.status,
+      isCurrent: event.isCurrent,
+      registrationOpenAt: event.registrationOpenAt,
+      registrationCloseAt: event.registrationCloseAt
+    })
+    .from(event)
+    .where(eq(event.isCurrent, true))
+    .limit(1);
+
+  const current = eventRows[0];
+  if (!current) {
+    return null;
+  }
+
+  const classRows = await db
+    .select({
+      id: eventClass.id,
+      eventId: eventClass.eventId,
+      name: eventClass.name,
+      vehicleType: eventClass.vehicleType
+    })
+    .from(eventClass)
+    .where(eq(eventClass.eventId, current.id))
+    .orderBy(asc(eventClass.name));
+
+  const now = new Date();
+  let reason: 'event_not_open' | 'before_window' | 'after_window' | null = null;
+  if (current.status !== 'open') {
+    reason = 'event_not_open';
+  } else if (current.registrationOpenAt && now < current.registrationOpenAt) {
+    reason = 'before_window';
+  } else if (current.registrationCloseAt && now > current.registrationCloseAt) {
+    reason = 'after_window';
+  }
+
+  return {
+    event: current,
+    classes: classRows,
+    registration: {
+      isOpen: reason === null,
+      reason
+    }
+  };
+};
+
+export const validatePublicStartNumber = async (input: ValidateStartNumberInput) => {
+  const db = await getDb();
+  const normalizedStartNumber = normalizeStartNumber(input.startNumber);
+  if (!normalizedStartNumber) {
+    return {
+      normalizedStartNumber: null,
+      validFormat: false,
+      available: false,
+      conflictEntryId: null
+    };
+  }
+
+  const classRows = await db
+    .select({
+      id: eventClass.id,
+      eventId: eventClass.eventId
+    })
+    .from(eventClass)
+    .where(eq(eventClass.id, input.classId))
+    .limit(1);
+  const clazz = classRows[0];
+  if (!clazz || clazz.eventId !== input.eventId) {
+    throw new Error('CLASS_NOT_FOUND');
+  }
+
+  const conflictRows = await db
+    .select({
+      id: entry.id
+    })
+    .from(entry)
+    .where(
+      and(
+        eq(entry.eventId, input.eventId),
+        eq(entry.classId, input.classId),
+        eq(entry.startNumberNorm, normalizedStartNumber)
+      )
+    )
+    .limit(1);
+  const conflict = conflictRows[0];
+
+  return {
+    normalizedStartNumber,
+    validFormat: true,
+    available: !conflict,
+    conflictEntryId: conflict?.id ?? null
+  };
+};
+
+export const initVehicleImageUpload = async (input: UploadInitInput) => {
+  await assertRegistrationOpen(input.eventId);
+  const db = await getDb();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 1000 * 60 * 15);
+  const key = `uploads/${input.eventId}/vehicle-images/${randomUUID()}`;
+
+  const [created] = await db
+    .insert(vehicleImageUpload)
+    .values({
+      eventId: input.eventId,
+      s3Key: key,
+      contentType: input.contentType,
+      fileName: input.fileName ?? null,
+      fileSizeBytes: input.fileSizeBytes,
+      status: 'initiated',
+      expiresAt,
+      createdAt: now,
+      updatedAt: now
+    })
+    .returning();
+
+  if (!created) {
+    throw new Error('UPLOAD_INIT_FAILED');
+  }
+
+  const upload = await getPresignedAssetsUploadUrl(key, input.contentType, 900);
+  return {
+    uploadId: created.id,
+    key,
+    uploadUrl: upload.url,
+    requiredHeaders: upload.requiredHeaders,
+    expiresAt: expiresAt.toISOString()
+  };
+};
+
+export const finalizeVehicleImageUpload = async (input: UploadFinalizeInput) => {
+  const db = await getDb();
+  const now = new Date();
+  const rows = await db.select().from(vehicleImageUpload).where(eq(vehicleImageUpload.id, input.uploadId)).limit(1);
+  const upload = rows[0];
+  if (!upload) {
+    throw new Error('UPLOAD_NOT_FOUND');
+  }
+  if (upload.status === 'finalized') {
+    return {
+      uploadId: upload.id,
+      imageS3Key: upload.s3Key,
+      finalizedAt: upload.finalizedAt?.toISOString() ?? null
+    };
+  }
+  if (upload.expiresAt < now) {
+    await db
+      .update(vehicleImageUpload)
+      .set({
+        status: 'expired',
+        updatedAt: now
+      })
+      .where(eq(vehicleImageUpload.id, upload.id));
+    throw new Error('UPLOAD_EXPIRED');
+  }
+
+  const exists = await doesAssetObjectExist(upload.s3Key);
+  if (!exists) {
+    throw new Error('UPLOAD_OBJECT_MISSING');
+  }
+
+  const [updated] = await db
+    .update(vehicleImageUpload)
+    .set({
+      status: 'finalized',
+      finalizedAt: now,
+      updatedAt: now
+    })
+    .where(eq(vehicleImageUpload.id, upload.id))
+    .returning();
+
+  return {
+    uploadId: updated?.id ?? upload.id,
+    imageS3Key: updated?.s3Key ?? upload.s3Key,
+    finalizedAt: (updated?.finalizedAt ?? now).toISOString()
+  };
+};
+
 export const verifyPublicEntryEmail = async (entryId: string, input: VerifyInput) => {
   const db = await getDb();
   const now = new Date();
@@ -300,3 +528,6 @@ export const verifyPublicEntryEmail = async (entryId: string, input: VerifyInput
 
 export const validateCreatePublicEntryInput = (payload: unknown) => createEntrySchema.parse(payload);
 export const validateVerifyPublicEntryInput = (payload: unknown) => verifySchema.parse(payload);
+export const validatePublicStartNumberInput = (payload: unknown) => validateStartNumberSchema.parse(payload);
+export const validateVehicleImageUploadInitInput = (payload: unknown) => uploadInitSchema.parse(payload);
+export const validateVehicleImageUploadFinalizeInput = (payload: unknown) => uploadFinalizeSchema.parse(payload);

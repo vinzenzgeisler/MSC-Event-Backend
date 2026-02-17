@@ -20,7 +20,7 @@ import {
 import {
   createClass,
   deleteClass,
-  listClassesByEvent,
+  listClassesByEventWithQuery,
   updateClass,
   validateClassInput,
   validateClassUpdateInput
@@ -35,6 +35,7 @@ import {
 import {
   listCheckinEntries,
   listEntries,
+  getEntryDetail,
   patchEntryStatus,
   patchEntryTechStatus,
   validateEntryStatusPatchInput,
@@ -57,8 +58,11 @@ import {
   queueLifecycleMail,
   queueMail,
   queuePaymentReminders,
+  listOutbox,
+  retryOutboxMail,
   validateBroadcastInput,
   validateLifecycleInput,
+  validateListOutboxInput,
   validateQueueMailInput,
   validateReminderInput
 } from './routes/adminMail';
@@ -73,7 +77,19 @@ import {
   validateDocumentRequest
 } from './routes/adminDocs';
 import { setCheckinIdVerified, validateIdVerifyInput } from './routes/adminCheckin';
-import { createPublicEntry, validateCreatePublicEntryInput, validateVerifyPublicEntryInput, verifyPublicEntryEmail } from './routes/publicRegistration';
+import {
+  createPublicEntry,
+  finalizeVehicleImageUpload,
+  getPublicCurrentEventWithClasses,
+  initVehicleImageUpload,
+  validateCreatePublicEntryInput,
+  validatePublicStartNumber,
+  validatePublicStartNumberInput,
+  validateVehicleImageUploadFinalizeInput,
+  validateVehicleImageUploadInitInput,
+  validateVerifyPublicEntryInput,
+  verifyPublicEntryEmail
+} from './routes/publicRegistration';
 
 const isInvalidJson = (error: unknown): boolean =>
   error instanceof Error && error.message === 'Invalid JSON body';
@@ -116,10 +132,115 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'CLASS_VEHICLE_TYPE_MISMATCH') {
         return errorJson(409, 'Class does not match vehicle type');
       }
+      if (error instanceof Error && error.message === 'IMAGE_UPLOAD_INVALID') {
+        return errorJson(
+          400,
+          'Validation failed',
+          undefined,
+          'VALIDATION_ERROR',
+          [{ field: 'vehicle.imageUploadId', code: 'invalid_or_not_finalized', message: 'Image upload is invalid or not finalized' }]
+        );
+      }
       if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
-        return errorJson(409, 'Start number already exists');
+        return errorJson(
+          409,
+          'Validation failed',
+          undefined,
+          'VALIDATION_ERROR',
+          [{ field: 'startNumber', code: 'not_unique_in_event_class', message: 'Start number already exists' }]
+        );
       }
       return errorJson(500, 'Public registration failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/public/events/current') {
+    try {
+      const current = await getPublicCurrentEventWithClasses();
+      if (!current) {
+        return errorJson(404, 'Current event not found');
+      }
+      return json(200, { ok: true, ...current });
+    } catch (error) {
+      return errorJson(500, 'Get current public event failed');
+    }
+  }
+
+  const publicStartNumberValidateMatch = path.match(/^\/public\/events\/([^/]+)\/start-number\/validate$/);
+  if (method === 'POST' && publicStartNumberValidateMatch) {
+    try {
+      const payload = parseJsonBody(event);
+      const input = validatePublicStartNumberInput({
+        ...(payload as Record<string, unknown>),
+        eventId: publicStartNumberValidateMatch[1]
+      });
+      const result = await validatePublicStartNumber(input);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') {
+        return errorJson(404, 'Class not found');
+      }
+      return errorJson(500, 'Start number validation failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/public/uploads/vehicle-image/init') {
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateVehicleImageUploadInitInput(payload);
+      const created = await initVehicleImageUpload(input);
+      return json(200, { ok: true, ...created });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      if (
+        error instanceof Error &&
+        (error.message === 'EVENT_NOT_OPEN' ||
+          error.message === 'REGISTRATION_NOT_OPEN' ||
+          error.message === 'REGISTRATION_CLOSED')
+      ) {
+        return errorJson(409, error.message);
+      }
+      return errorJson(500, 'Upload init failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/public/uploads/vehicle-image/finalize') {
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateVehicleImageUploadFinalizeInput(payload);
+      const finalized = await finalizeVehicleImageUpload(input);
+      return json(200, { ok: true, ...finalized });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'UPLOAD_NOT_FOUND') {
+        return errorJson(404, 'Upload not found');
+      }
+      if (error instanceof Error && error.message === 'UPLOAD_EXPIRED') {
+        return errorJson(409, 'Upload expired');
+      }
+      if (error instanceof Error && error.message === 'UPLOAD_OBJECT_MISSING') {
+        return errorJson(409, 'Uploaded object not found');
+      }
+      return errorJson(500, 'Upload finalize failed');
     }
   }
 
@@ -200,10 +321,13 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     try {
       const queryInput = validateListEventsInput(event.queryStringParameters ?? {});
       const rows = await listEvents(queryInput);
-      return json(200, { ok: true, events: rows });
+      return json(200, { ok: true, events: rows.items, meta: rows.meta });
     } catch (error) {
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && (error.message === 'INVALID_SORT_FIELD' || error.message === 'INVALID_CURSOR')) {
+        return errorJson(400, error.message);
       }
       return errorJson(500, 'List events failed');
     }
@@ -281,9 +405,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return errorJson(403, 'Forbidden');
     }
     try {
-      const classes = await listClassesByEvent(eventClassesMatch[1]);
-      return json(200, { ok: true, classes });
+      const classes = await listClassesByEventWithQuery(eventClassesMatch[1], {
+        cursor: event.queryStringParameters?.cursor,
+        limit: event.queryStringParameters?.limit ? Number(event.queryStringParameters.limit) : undefined,
+        sortBy: event.queryStringParameters?.sortBy,
+        sortDir: event.queryStringParameters?.sortDir as 'asc' | 'desc' | undefined
+      });
+      return json(200, { ok: true, classes: classes.items, meta: classes.meta });
     } catch (error) {
+      if (error instanceof Error && (error.message === 'INVALID_SORT_FIELD' || error.message === 'INVALID_CURSOR')) {
+        return errorJson(400, error.message);
+      }
       return errorJson(500, 'List classes failed');
     }
   }
@@ -771,10 +903,13 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const query = validateListEntriesQuery(event.queryStringParameters ?? {});
       const redact = hasGroup(auth, 'viewer') && !hasGroup(auth, 'admin');
       const rows = await listEntries(query, redact);
-      return json(200, { ok: true, entries: rows });
+      return json(200, { ok: true, entries: rows.items, meta: rows.meta });
     } catch (error) {
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && (error.message === 'INVALID_SORT_FIELD' || error.message === 'INVALID_CURSOR')) {
+        return errorJson(400, error.message);
       }
       return errorJson(500, 'List entries failed');
     }
@@ -789,12 +924,33 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const query = validateListEntriesQuery(event.queryStringParameters ?? {});
       const redact = hasGroup(auth, 'viewer') && !hasGroup(auth, 'admin');
       const rows = await listCheckinEntries(query, redact);
-      return json(200, { ok: true, entries: rows });
+      return json(200, { ok: true, entries: rows.items, meta: rows.meta });
     } catch (error) {
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
+      if (error instanceof Error && (error.message === 'INVALID_SORT_FIELD' || error.message === 'INVALID_CURSOR')) {
+        return errorJson(400, error.message);
+      }
       return errorJson(500, 'List check-in entries failed');
+    }
+  }
+
+  const entryDetailMatch = path.match(/^\/admin\/entries\/([^/]+)$/);
+  if (method === 'GET' && entryDetailMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'checkin', 'viewer'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const redact = hasGroup(auth, 'viewer') && !hasGroup(auth, 'admin');
+      const result = await getEntryDetail(entryDetailMatch[1], redact);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      return errorJson(500, 'Get entry detail failed');
     }
   }
 
@@ -961,10 +1117,13 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     try {
       const filters = validateListInvoicesInput(event.queryStringParameters ?? {});
       const invoices = await listInvoices(filters);
-      return json(200, { ok: true, invoices });
+      return json(200, { ok: true, invoices: invoices.items, meta: invoices.meta });
     } catch (error) {
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && (error.message === 'INVALID_SORT_FIELD' || error.message === 'INVALID_CURSOR')) {
+        return errorJson(400, error.message);
       }
       return errorJson(500, 'List invoices failed');
     }
@@ -1005,9 +1164,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return errorJson(403, 'Forbidden');
     }
     try {
-      const payments = await listInvoicePayments(invoicePaymentsMatch[1]);
-      return json(200, { ok: true, payments });
+      const payments = await listInvoicePayments(invoicePaymentsMatch[1], {
+        cursor: event.queryStringParameters?.cursor,
+        limit: event.queryStringParameters?.limit ? Number(event.queryStringParameters.limit) : undefined,
+        sortBy: event.queryStringParameters?.sortBy,
+        sortDir: event.queryStringParameters?.sortDir as 'asc' | 'desc' | undefined
+      });
+      return json(200, { ok: true, payments: payments.items, meta: payments.meta });
     } catch (error) {
+      if (error instanceof Error && (error.message === 'INVALID_SORT_FIELD' || error.message === 'INVALID_CURSOR')) {
+        return errorJson(400, error.message);
+      }
       return errorJson(500, 'List payments failed');
     }
   }
@@ -1044,9 +1211,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return errorJson(400, 'eventId is required');
     }
     try {
-      const jobs = await listExportJobs(eventId);
-      return json(200, { ok: true, exports: jobs });
+      const jobs = await listExportJobs(eventId, {
+        cursor: event.queryStringParameters?.cursor,
+        limit: event.queryStringParameters?.limit ? Number(event.queryStringParameters.limit) : undefined,
+        sortBy: event.queryStringParameters?.sortBy,
+        sortDir: event.queryStringParameters?.sortDir as 'asc' | 'desc' | undefined
+      });
+      return json(200, { ok: true, exports: jobs.items, meta: jobs.meta });
     } catch (error) {
+      if (error instanceof Error && (error.message === 'INVALID_SORT_FIELD' || error.message === 'INVALID_CURSOR')) {
+        return errorJson(400, error.message);
+      }
       return errorJson(500, 'List exports failed');
     }
   }
@@ -1088,5 +1263,45 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
-  return json(404, { message: 'Not Found' });
+  if (method === 'GET' && path === '/admin/mail/outbox') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const query = validateListOutboxInput(event.queryStringParameters ?? {});
+      const outbox = await listOutbox(query);
+      return json(200, { ok: true, outbox: outbox.items, meta: outbox.meta });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && (error.message === 'INVALID_SORT_FIELD' || error.message === 'INVALID_CURSOR')) {
+        return errorJson(400, error.message);
+      }
+      return errorJson(500, 'List outbox failed');
+    }
+  }
+
+  const outboxRetryMatch = path.match(/^\/admin\/mail\/outbox\/([^/]+)\/retry$/);
+  if (method === 'POST' && outboxRetryMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const updated = await retryOutboxMail(outboxRetryMatch[1], auth.sub);
+      if (!updated) {
+        return errorJson(404, 'Outbox mail not found');
+      }
+      return json(200, { ok: true, outbox: updated });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'OUTBOX_RETRY_FORBIDDEN_STATUS') {
+        return errorJson(409, 'Outbox message status cannot be retried');
+      }
+      return errorJson(500, 'Retry outbox failed');
+    }
+  }
+
+  return errorJson(404, 'Not Found');
 };

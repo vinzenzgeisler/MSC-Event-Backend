@@ -30,15 +30,21 @@ Minimaler TypeScript-Lambda-Handler mit Datenbankzugriff (Postgres via Drizzle):
 - `GET /admin/exports/:id` → Export-Status lesen
 - `GET /admin/exports/:id/download` → presigned Export-Download
 - `GET /admin/entries` → Entry-Liste mit Filtern
+- `GET /admin/entries/:id` → Entry-Detail inkl. Audit-/History-Feldern
 - `PATCH /admin/entries/:id/status` → Annahmestatus ändern (+ optional Lifecycle-Mail)
 - `PATCH /admin/entries/:id/tech-status` → Technische-Abnahme-Status setzen
 - `GET /admin/checkin/entries` → Check-in-Liste/Suche
 - `PATCH /admin/entries/:id/checkin/id-verify` → ID-Verifikation am Check-in setzen
+- `GET /admin/mail/outbox` → Outbox-Statusliste (queued/sent/failed)
+- `POST /admin/mail/outbox/:id/retry` → fehlgeschlagene Outbox-Mail erneut einplanen
 
 Öffentliche Registrierung:
 
 - `POST /public/events/:id/entries` → Nennung anlegen (unverified)
 - `POST /public/entries/:id/verify-email` → E-Mail-Verifikation abschließen
+- `GET /public/events/current` → aktuelles Event + Klassen für Anmeldeformular
+- `POST /public/events/:id/start-number/validate` → Startnummer-Prüfung vor Submit
+- `POST /public/uploads/vehicle-image/init|finalize` → Presigned Upload-Flow für Fahrzeugbilder
 
 ## Voraussetzungen
 
@@ -73,6 +79,11 @@ Falls du explizit den Drizzle-Migrator nutzen willst: `npm run db:migrate:drizzl
 ## Hinweis
 
 Die Lambda holt DB-Verbindungsdaten aus Secrets Manager (`DB_SECRET_ARN`) und nutzt die RDS-Postgres Instanz aus Phase 1.
+
+## Auth-Vertrag
+
+Die API erwartet ein externes JWT Bearer Token (Cognito Authorizer).  
+Login/Refresh/Hosted-UI sind nicht Teil dieser API und erfolgen außerhalb.
 
 Unterstützte Modi:
 

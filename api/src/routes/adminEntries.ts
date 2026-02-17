@@ -2,8 +2,9 @@ import { and, asc, eq, ilike, or, sql, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { entry, eventClass, invoice, person } from '../db/schema';
+import { auditLog, entry, eventClass, invoice, person, vehicle } from '../db/schema';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
+import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 import { queueLifecycleMail } from './adminMail';
 
 const listEntriesQuerySchema = z.object({
@@ -14,7 +15,13 @@ const listEntriesQuerySchema = z.object({
   paymentStatus: z.enum(['due', 'paid']).optional(),
   q: z.string().min(1).optional(),
   checkinIdVerified: z.boolean().optional(),
-  techStatus: z.enum(['pending', 'passed', 'failed']).optional()
+  techStatus: z.enum(['pending', 'passed', 'failed']).optional(),
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  sortBy: z
+    .enum(['className', 'driverLastName', 'driverFirstName', 'createdAt', 'updatedAt', 'startNumberNorm'])
+    .optional(),
+  sortDir: z.enum(['asc', 'desc']).optional()
 });
 
 const entryStatusPatchSchema = z.object({
@@ -91,7 +98,9 @@ export const listEntries = async (query: ListEntriesQuery, redactSensitiveFields
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
       driverEmail: person.email,
-      paymentStatus: invoice.paymentStatus
+      paymentStatus: invoice.paymentStatus,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt
     })
     .from(entry)
     .innerJoin(eventClass, eq(entry.classId, eventClass.id))
@@ -100,7 +109,7 @@ export const listEntries = async (query: ListEntriesQuery, redactSensitiveFields
     .where(and(...conditions))
     .orderBy(asc(eventClass.name), asc(person.lastName), asc(person.firstName));
 
-  return rows.map((row) => {
+  const mapped = rows.map((row) => {
     const completed = row.acceptanceStatus === 'accepted' && row.paymentStatus === 'paid';
     return {
       ...row,
@@ -110,10 +119,88 @@ export const listEntries = async (query: ListEntriesQuery, redactSensitiveFields
       driverEmail: redactSensitiveFields ? null : row.driverEmail
     };
   });
+
+  const paginationQuery = parseListQuery(
+    {
+      cursor: query.cursor,
+      limit: query.limit?.toString(),
+      sortBy: query.sortBy,
+      sortDir: query.sortDir
+    },
+    ['className', 'driverLastName', 'driverFirstName', 'createdAt', 'updatedAt', 'startNumberNorm'],
+    'className',
+    'asc'
+  );
+  return paginateAndSortRows(mapped, paginationQuery);
 };
 
 export const listCheckinEntries = async (query: ListEntriesQuery, redactSensitiveFields: boolean) =>
   listEntries(query, redactSensitiveFields);
+
+export const getEntryDetail = async (entryId: string, redactSensitiveFields: boolean) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: entry.id,
+      eventId: entry.eventId,
+      classId: entry.classId,
+      className: eventClass.name,
+      registrationStatus: entry.registrationStatus,
+      acceptanceStatus: entry.acceptanceStatus,
+      checkinIdVerified: entry.checkinIdVerified,
+      checkinIdVerifiedAt: entry.checkinIdVerifiedAt,
+      checkinIdVerifiedBy: entry.checkinIdVerifiedBy,
+      techStatus: entry.techStatus,
+      techCheckedAt: entry.techCheckedAt,
+      techCheckedBy: entry.techCheckedBy,
+      startNumberNorm: entry.startNumberNorm,
+      isBackupVehicle: entry.isBackupVehicle,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+      driverPersonId: entry.driverPersonId,
+      driverFirstName: person.firstName,
+      driverLastName: person.lastName,
+      driverEmail: person.email,
+      vehicleType: vehicle.vehicleType,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model,
+      vehicleYear: vehicle.year,
+      vehicleImageS3Key: vehicle.imageS3Key
+    })
+    .from(entry)
+    .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+    .where(eq(entry.id, entryId))
+    .limit(1);
+
+  const current = rows[0];
+  if (!current) {
+    return null;
+  }
+
+  const historyRows = await db
+    .select({
+      id: auditLog.id,
+      action: auditLog.action,
+      actorUserId: auditLog.actorUserId,
+      createdAt: auditLog.createdAt,
+      payload: auditLog.payload
+    })
+    .from(auditLog)
+    .where(and(eq(auditLog.entityType, 'entry'), eq(auditLog.entityId, entryId as never)))
+    .orderBy(asc(auditLog.createdAt));
+
+  return {
+    entry: {
+      ...current,
+      driverFirstName: redactSensitiveFields ? null : current.driverFirstName,
+      driverLastName: redactSensitiveFields ? null : current.driverLastName,
+      driverEmail: redactSensitiveFields ? null : current.driverEmail
+    },
+    history: historyRows
+  };
+};
 
 export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch, actorUserId: string | null) => {
   const db = await getDb();
@@ -221,7 +308,11 @@ export const validateListEntriesQuery = (query: Record<string, string | undefine
     paymentStatus: query.paymentStatus,
     q: query.q,
     checkinIdVerified: query.checkinIdVerified === undefined ? undefined : query.checkinIdVerified === 'true',
-    techStatus: query.techStatus
+    techStatus: query.techStatus,
+    cursor: query.cursor,
+    limit: query.limit === undefined ? undefined : Number(query.limit),
+    sortBy: query.sortBy,
+    sortDir: query.sortDir
   });
 export const validateEntryStatusPatchInput = (payload: unknown) => entryStatusPatchSchema.parse(payload);
 export const validateEntryTechStatusPatchInput = (payload: unknown) => techStatusPatchSchema.parse(payload);

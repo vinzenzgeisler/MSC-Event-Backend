@@ -1,10 +1,18 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const getDocumentsBucket = (): string => {
   const bucket = process.env.DOCUMENTS_BUCKET;
   if (!bucket) {
     throw new Error('DOCUMENTS_BUCKET is not set');
+  }
+  return bucket;
+};
+
+const getAssetsBucket = (): string => {
+  const bucket = process.env.ASSETS_BUCKET;
+  if (!bucket) {
+    throw new Error('ASSETS_BUCKET is not set');
   }
   return bucket;
 };
@@ -36,4 +44,41 @@ export const getPresignedDownloadUrl = async (key: string, expiresInSeconds = 30
     Key: key
   });
   return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+};
+
+export const getPresignedAssetsUploadUrl = async (
+  key: string,
+  contentType: string,
+  expiresInSeconds = 900
+) => {
+  const client = getS3Client();
+  const bucket = getAssetsBucket();
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    ContentType: contentType
+  });
+  const url = await getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+  return {
+    url,
+    requiredHeaders: {
+      'content-type': contentType
+    }
+  };
+};
+
+export const doesAssetObjectExist = async (key: string): Promise<boolean> => {
+  const client = getS3Client();
+  const bucket = getAssetsBucket();
+  try {
+    await client.send(
+      new HeadObjectCommand({
+        Bucket: bucket,
+        Key: key
+      })
+    );
+    return true;
+  } catch {
+    return false;
+  }
 };

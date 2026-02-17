@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDb } from '../db/client';
 import { event } from '../db/schema';
 import { writeAuditLog } from '../audit/log';
+import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const eventStatusSchema = z.enum(['draft', 'open', 'closed', 'archived']);
 
@@ -17,7 +18,11 @@ const createEventSchema = z.object({
 
 const listEventsSchema = z.object({
   status: eventStatusSchema.optional(),
-  currentOnly: z.boolean().optional()
+  currentOnly: z.boolean().optional(),
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  sortBy: z.enum(['startsAt', 'endsAt', 'name', 'status', 'updatedAt']).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional()
 });
 
 const updateEventSchema = z
@@ -81,11 +86,19 @@ export const listEvents = async (input: ListEventsInput) => {
     .from(event)
     .orderBy(desc(event.startsAt));
 
-  if (conditions.length > 0) {
-    return query.where(and(...conditions));
-  }
-
-  return query;
+  const rows = conditions.length > 0 ? await query.where(and(...conditions)) : await query;
+  const paginationQuery = parseListQuery(
+    {
+      cursor: input.cursor,
+      limit: input.limit?.toString(),
+      sortBy: input.sortBy,
+      sortDir: input.sortDir
+    },
+    ['startsAt', 'endsAt', 'name', 'status', 'updatedAt'],
+    'startsAt',
+    'desc'
+  );
+  return paginateAndSortRows(rows, paginationQuery);
 };
 
 export const getCurrentEvent = async () => {
@@ -312,6 +325,10 @@ export const validateCreateEventInput = (payload: unknown) => createEventSchema.
 export const validateListEventsInput = (query: Record<string, string | undefined>) =>
   listEventsSchema.parse({
     status: query.status,
-    currentOnly: query.currentOnly === undefined ? undefined : query.currentOnly === 'true'
+    currentOnly: query.currentOnly === undefined ? undefined : query.currentOnly === 'true',
+    cursor: query.cursor,
+    limit: query.limit === undefined ? undefined : Number(query.limit),
+    sortBy: query.sortBy,
+    sortDir: query.sortDir
   });
 export const validateUpdateEventInput = (payload: unknown) => updateEventSchema.parse(payload);

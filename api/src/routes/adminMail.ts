@@ -7,6 +7,7 @@ import { isPgUniqueViolation } from '../http/dbErrors';
 import { writeAuditLog } from '../audit/log';
 import { getTemplateVersion } from '../mail/templateStore';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
+import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const queueMailSchema = z
   .object({
@@ -73,10 +74,20 @@ const broadcastSchema = z.object({
   subjectOverride: z.string().min(1).optional()
 });
 
+const listOutboxSchema = z.object({
+  eventId: z.string().uuid(),
+  status: z.enum(['queued', 'sending', 'sent', 'failed']).optional(),
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  sortBy: z.enum(['createdAt', 'sendAfter', 'updatedAt', 'status']).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional()
+});
+
 type QueueMailInput = z.infer<typeof queueMailSchema>;
 type ReminderInput = z.infer<typeof reminderSchema>;
 type LifecycleInput = z.infer<typeof lifecycleSchema>;
 type BroadcastInput = z.infer<typeof broadcastSchema>;
+type ListOutboxInput = z.infer<typeof listOutboxSchema>;
 
 type RecipientTarget = {
   email: string;
@@ -641,7 +652,93 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
   return { queued: outboxRows.length };
 };
 
+export const listOutbox = async (input: ListOutboxInput) => {
+  const db = await getDb();
+  const conditions: SQL<unknown>[] = [eq(emailOutbox.eventId, input.eventId)];
+  if (input.status) {
+    conditions.push(eq(emailOutbox.status, input.status));
+  }
+  const rows = await db
+    .select({
+      id: emailOutbox.id,
+      eventId: emailOutbox.eventId,
+      toEmail: emailOutbox.toEmail,
+      subject: emailOutbox.subject,
+      templateId: emailOutbox.templateId,
+      templateVersion: emailOutbox.templateVersion,
+      status: emailOutbox.status,
+      attemptCount: emailOutbox.attemptCount,
+      maxAttempts: emailOutbox.maxAttempts,
+      errorLast: emailOutbox.errorLast,
+      sendAfter: emailOutbox.sendAfter,
+      createdAt: emailOutbox.createdAt,
+      updatedAt: emailOutbox.updatedAt
+    })
+    .from(emailOutbox)
+    .where(and(...conditions));
+
+  const paginationQuery = parseListQuery(
+    {
+      cursor: input.cursor,
+      limit: input.limit?.toString(),
+      sortBy: input.sortBy,
+      sortDir: input.sortDir
+    },
+    ['createdAt', 'sendAfter', 'updatedAt', 'status'],
+    'createdAt',
+    'asc'
+  );
+
+  return paginateAndSortRows(rows, paginationQuery);
+};
+
+export const retryOutboxMail = async (outboxId: string, actorUserId: string | null) => {
+  const db = await getDb();
+  const now = new Date();
+  const rows = await db.select().from(emailOutbox).where(eq(emailOutbox.id, outboxId)).limit(1);
+  const existing = rows[0];
+  if (!existing) {
+    return null;
+  }
+  if (existing.status !== 'failed' && existing.status !== 'queued') {
+    throw new Error('OUTBOX_RETRY_FORBIDDEN_STATUS');
+  }
+
+  const [updated] = await db
+    .update(emailOutbox)
+    .set({
+      status: 'queued',
+      sendAfter: now,
+      errorLast: null,
+      updatedAt: now
+    })
+    .where(eq(emailOutbox.id, outboxId))
+    .returning();
+
+  await writeAuditLog(db as never, {
+    eventId: existing.eventId,
+    actorUserId,
+    action: 'email_outbox_retry_requested',
+    entityType: 'email_outbox',
+    entityId: existing.id,
+    payload: {
+      previousStatus: existing.status
+    }
+  });
+
+  return updated ?? null;
+};
+
 export const validateQueueMailInput = (payload: unknown) => queueMailSchema.parse(payload);
 export const validateReminderInput = (payload: unknown) => reminderSchema.parse(payload);
 export const validateLifecycleInput = (payload: unknown) => lifecycleSchema.parse(payload);
 export const validateBroadcastInput = (payload: unknown) => broadcastSchema.parse(payload);
+export const validateListOutboxInput = (query: Record<string, string | undefined>) =>
+  listOutboxSchema.parse({
+    eventId: query.eventId,
+    status: query.status,
+    cursor: query.cursor,
+    limit: query.limit === undefined ? undefined : Number(query.limit),
+    sortBy: query.sortBy,
+    sortDir: query.sortDir
+  });

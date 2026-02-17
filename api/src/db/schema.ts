@@ -415,6 +415,29 @@ export const entryEmailVerification = pgTable(
   })
 );
 
+export const vehicleImageUpload = pgTable(
+  'vehicle_image_upload',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    s3Key: text('s3_key').notNull(),
+    contentType: text('content_type').notNull(),
+    fileName: text('file_name'),
+    fileSizeBytes: integer('file_size_bytes').notNull(),
+    status: text('status').notNull().default('initiated'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    statusCheck: check('vehicle_image_upload_status_check', sql`${table.status} in ('initiated', 'finalized', 'expired')`),
+    statusExpiresIndex: index('vehicle_image_upload_status_expires_idx').on(table.status, table.expiresAt)
+  })
+);
+
 export const documentGenerationJob = pgTable(
   'document_generation_job',
   {

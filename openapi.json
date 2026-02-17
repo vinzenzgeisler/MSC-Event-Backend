@@ -1,0 +1,2423 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MSC Event Backend API",
+    "version": "phase6-main",
+    "description": "OpenAPI export based on current Lambda handler routes on main."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "stage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "stage"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getHealth"
+      }
+    },
+    "/public/events/{eventId}/entries": {
+      "post": {
+        "security": [],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "eventId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicCreateEntryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Entry created"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        },
+        "operationId": "postPublicEventsEventIdEntries"
+      }
+    },
+    "/public/entries/{entryId}/verify-email": {
+      "post": {
+        "security": [],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entryId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 16
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification result"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        },
+        "operationId": "postPublicEntriesEntryIdVerifyEmail"
+      }
+    },
+    "/admin/events": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "viewer"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "$ref": "#/components/schemas/EventStatus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "currentOnly",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ListMeta"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "events",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getAdminEvents"
+      },
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEventRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event created"
+          }
+        },
+        "operationId": "postAdminEvents"
+      }
+    },
+    "/admin/events/current": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "checkin",
+          "viewer"
+        ],
+        "responses": {
+          "200": {
+            "description": "Current event"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        },
+        "operationId": "getAdminEventsCurrent"
+      }
+    },
+    "/admin/events/{eventId}": {
+      "patch": {
+        "x-roles": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "eventId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEventRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event updated"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        },
+        "operationId": "patchAdminEventsEventId"
+      }
+    },
+    "/admin/events/{eventId}/activate": {
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Activated"
+          }
+        },
+        "operationId": "postAdminEventsEventIdActivate"
+      }
+    },
+    "/admin/events/{eventId}/close": {
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Closed"
+          }
+        },
+        "operationId": "postAdminEventsEventIdClose"
+      }
+    },
+    "/admin/events/{eventId}/archive": {
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Archived"
+          }
+        },
+        "operationId": "postAdminEventsEventIdArchive"
+      }
+    },
+    "/admin/events/{eventId}/classes": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "viewer",
+          "checkin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Classes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "classes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ListMeta"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "classes",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getAdminEventsEventIdClasses"
+      },
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClassRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Class created"
+          }
+        },
+        "operationId": "postAdminEventsEventIdClasses"
+      }
+    },
+    "/admin/classes/{classId}": {
+      "patch": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClassRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Class updated"
+          }
+        },
+        "operationId": "patchAdminClassesClassId"
+      },
+      "delete": {
+        "x-roles": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Class deleted"
+          }
+        },
+        "operationId": "deleteAdminClassesClassId"
+      }
+    },
+    "/admin/entries": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "checkin",
+          "viewer"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "eventId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "classId",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "acceptanceStatus",
+            "schema": {
+              "$ref": "#/components/schemas/AcceptanceStatus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "registrationStatus",
+            "schema": {
+              "$ref": "#/components/schemas/RegistrationStatus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "paymentStatus",
+            "schema": {
+              "$ref": "#/components/schemas/PaymentStatus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "checkinIdVerified",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "techStatus",
+            "schema": {
+              "$ref": "#/components/schemas/TechStatus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entries list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ListMeta"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "entries",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getAdminEntries"
+      }
+    },
+    "/admin/checkin/entries": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "checkin",
+          "viewer"
+        ],
+        "responses": {
+          "200": {
+            "description": "Checkin entries list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ListMeta"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "entries",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getAdminCheckinEntries"
+      }
+    },
+    "/admin/entries/{entryId}/status": {
+      "patch": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchEntryStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Entry status updated"
+          }
+        },
+        "operationId": "patchAdminEntriesEntryIdStatus"
+      }
+    },
+    "/admin/entries/{entryId}/tech-status": {
+      "patch": {
+        "x-roles": [
+          "admin",
+          "checkin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchTechStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tech status updated"
+          }
+        },
+        "operationId": "patchAdminEntriesEntryIdTechStatus"
+      }
+    },
+    "/admin/entries/{entryId}/checkin/id-verify": {
+      "patch": {
+        "x-roles": [
+          "admin",
+          "checkin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "checkinIdVerified": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "checkinIdVerified"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ID verify updated"
+          }
+        },
+        "operationId": "patchAdminEntriesEntryIdCheckinIdVerify"
+      }
+    },
+    "/admin/events/{eventId}/pricing-rules": {
+      "put": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PricingRulesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Pricing rules updated"
+          }
+        },
+        "operationId": "putAdminEventsEventIdPricingRules"
+      }
+    },
+    "/admin/events/{eventId}/invoices/recalculate": {
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecalculateInvoicesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Invoices recalculated"
+          }
+        },
+        "operationId": "postAdminEventsEventIdInvoicesRecalculate"
+      }
+    },
+    "/admin/invoices": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "viewer"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "eventId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "paymentStatus",
+            "schema": {
+              "$ref": "#/components/schemas/PaymentStatus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "driverPersonId",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoices list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "invoices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ListMeta"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "invoices",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getAdminInvoices"
+      }
+    },
+    "/admin/invoices/{invoiceId}/payments": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "viewer"
+        ],
+        "responses": {
+          "200": {
+            "description": "Payments list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "payments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ListMeta"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payments",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getAdminInvoicesInvoiceIdPayments"
+      },
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordPaymentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Payment recorded"
+          }
+        },
+        "operationId": "postAdminInvoicesInvoiceIdPayments"
+      }
+    },
+    "/admin/mail/queue": {
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueMailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mail queued"
+          }
+        },
+        "operationId": "postAdminMailQueue"
+      }
+    },
+    "/admin/mail/lifecycle/queue": {
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueLifecycleMailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lifecycle mail queued"
+          }
+        },
+        "operationId": "postAdminMailLifecycleQueue"
+      }
+    },
+    "/admin/mail/broadcast/queue": {
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueBroadcastMailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Broadcast queued"
+          }
+        },
+        "operationId": "postAdminMailBroadcastQueue"
+      }
+    },
+    "/admin/payment/reminders/queue": {
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueuePaymentReminderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Payment reminders queued"
+          }
+        },
+        "operationId": "postAdminPaymentRemindersQueue"
+      }
+    },
+    "/admin/documents/waiver": {
+      "post": {
+        "x-roles": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Waiver document generated"
+          }
+        },
+        "operationId": "postAdminDocumentsWaiver"
+      }
+    },
+    "/admin/documents/tech-check": {
+      "post": {
+        "x-roles": [
+          "admin",
+          "checkin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tech-check document generated"
+          }
+        },
+        "operationId": "postAdminDocumentsTechCheck"
+      }
+    },
+    "/admin/documents/waiver/batch": {
+      "post": {
+        "x-roles": [
+          "admin",
+          "checkin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchDocumentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch waiver generated"
+          }
+        },
+        "operationId": "postAdminDocumentsWaiverBatch"
+      }
+    },
+    "/admin/documents/tech-check/batch": {
+      "post": {
+        "x-roles": [
+          "admin",
+          "checkin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchDocumentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch tech-check generated"
+          }
+        },
+        "operationId": "postAdminDocumentsTechCheckBatch"
+      }
+    },
+    "/admin/documents/{documentId}/download": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "checkin",
+          "viewer"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "documentId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Document download URL"
+          }
+        },
+        "operationId": "getAdminDocumentsDocumentIdDownload"
+      }
+    },
+    "/admin/documents/entry/{entryId}/download": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "checkin",
+          "viewer"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entryId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "eventId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "waiver",
+                "tech_check"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "On-demand document download URL"
+          }
+        },
+        "operationId": "getAdminDocumentsEntryEntryIdDownload"
+      }
+    },
+    "/admin/exports/entries": {
+      "post": {
+        "x-roles": [
+          "admin",
+          "viewer"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Export job created"
+          }
+        },
+        "operationId": "postAdminExportsEntries"
+      }
+    },
+    "/admin/exports": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "viewer"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "eventId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exports list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "exports": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ListMeta"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "exports",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getAdminExports"
+      }
+    },
+    "/admin/exports/{exportJobId}": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "viewer"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exportJobId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Export job"
+          }
+        },
+        "operationId": "getAdminExportsExportJobId"
+      }
+    },
+    "/admin/exports/{exportJobId}/download": {
+      "get": {
+        "x-roles": [
+          "admin",
+          "viewer"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exportJobId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Export download URL"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        },
+        "operationId": "getAdminExportsExportJobIdDownload"
+      }
+    },
+    "/public/events/current": {
+      "get": {
+        "operationId": "getPublicCurrentEvent",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Current public event and classes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "event": {
+                      "type": "object"
+                    },
+                    "classes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "registration": {
+                      "type": "object",
+                      "properties": {
+                        "isOpen": {
+                          "type": "boolean"
+                        },
+                        "reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "enum": [
+                            "event_not_open",
+                            "before_window",
+                            "after_window",
+                            null
+                          ]
+                        }
+                      },
+                      "required": [
+                        "isOpen",
+                        "reason"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "event",
+                    "classes",
+                    "registration"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      }
+    },
+    "/public/events/{eventId}/start-number/validate": {
+      "post": {
+        "operationId": "postPublicStartNumberValidate",
+        "security": [],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "eventId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicStartNumberValidateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Start number validation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "normalizedStartNumber": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "validFormat": {
+                      "type": "boolean"
+                    },
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "conflictEntryId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "uuid"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "normalizedStartNumber",
+                    "validFormat",
+                    "available",
+                    "conflictEntryId"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      }
+    },
+    "/public/uploads/vehicle-image/init": {
+      "post": {
+        "operationId": "postPublicVehicleImageUploadInit",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicVehicleImageUploadInitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Presigned upload init",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "uploadId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "key": {
+                      "type": "string"
+                    },
+                    "uploadUrl": {
+                      "type": "string"
+                    },
+                    "requiredHeaders": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "uploadId",
+                    "key",
+                    "uploadUrl",
+                    "requiredHeaders",
+                    "expiresAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        }
+      }
+    },
+    "/public/uploads/vehicle-image/finalize": {
+      "post": {
+        "operationId": "postPublicVehicleImageUploadFinalize",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicVehicleImageUploadFinalizeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Finalize uploaded image",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "uploadId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "imageS3Key": {
+                      "type": "string"
+                    },
+                    "finalizedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "uploadId",
+                    "imageS3Key",
+                    "finalizedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        }
+      }
+    },
+    "/admin/entries/{entryId}": {
+      "get": {
+        "operationId": "getAdminEntryDetail",
+        "responses": {
+          "200": {
+            "description": "Entry detail with history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "entry": {
+                      "type": "object"
+                    },
+                    "history": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "entry",
+                    "history"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      }
+    },
+    "/admin/mail/outbox": {
+      "get": {
+        "operationId": "getAdminMailOutbox",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "eventId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "sending",
+                "sent",
+                "failed"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "sortBy",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "sendAfter",
+                "updatedAt",
+                "status"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "sortDir",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Outbox list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "outbox": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ListMeta"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "outbox",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          }
+        }
+      }
+    },
+    "/admin/mail/outbox/{outboxId}/retry": {
+      "post": {
+        "operationId": "postAdminMailOutboxRetry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "outboxId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Outbox retried"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "responses": {
+      "Error400": {
+        "description": "Bad Request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Error404": {
+        "description": "Not Found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Error409": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "code": {
+            "type": "string"
+          },
+          "fieldErrors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field",
+                "code",
+                "message"
+              ]
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "code",
+          "message"
+        ]
+      },
+      "EventStatus": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "open",
+          "closed",
+          "archived"
+        ]
+      },
+      "VehicleType": {
+        "type": "string",
+        "enum": [
+          "moto",
+          "auto"
+        ]
+      },
+      "RegistrationStatus": {
+        "type": "string",
+        "enum": [
+          "submitted_unverified",
+          "submitted_verified"
+        ]
+      },
+      "AcceptanceStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "shortlist",
+          "accepted",
+          "rejected"
+        ]
+      },
+      "PaymentStatus": {
+        "type": "string",
+        "enum": [
+          "due",
+          "paid"
+        ]
+      },
+      "TechStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "passed",
+          "failed"
+        ]
+      },
+      "CreateEventRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "startsAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "endsAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "registrationOpenAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "registrationCloseAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EventStatus"
+          }
+        },
+        "required": [
+          "name",
+          "startsAt",
+          "endsAt"
+        ]
+      },
+      "UpdateEventRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "startsAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "endsAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "registrationOpenAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "registrationCloseAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "minProperties": 1
+      },
+      "CreateClassRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "vehicleType": {
+            "$ref": "#/components/schemas/VehicleType"
+          }
+        },
+        "required": [
+          "name",
+          "vehicleType"
+        ]
+      },
+      "UpdateClassRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "vehicleType": {
+            "$ref": "#/components/schemas/VehicleType"
+          }
+        },
+        "minProperties": 1
+      },
+      "PersonInput": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "firstName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "lastName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "birthdate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "nationality": {
+            "type": "string"
+          },
+          "street": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "firstName",
+          "lastName"
+        ]
+      },
+      "VehicleInput": {
+        "type": "object",
+        "properties": {
+          "vehicleType": {
+            "$ref": "#/components/schemas/VehicleType"
+          },
+          "make": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "year": {
+            "type": "integer",
+            "minimum": 1900,
+            "maximum": 2100
+          },
+          "startNumberRaw": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6
+          },
+          "imageS3Key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vehicleType"
+        ]
+      },
+      "PublicCreateEntryRequest": {
+        "type": "object",
+        "properties": {
+          "classId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "driver": {
+            "$ref": "#/components/schemas/PersonInput"
+          },
+          "codriver": {
+            "$ref": "#/components/schemas/PersonInput"
+          },
+          "vehicle": {
+            "$ref": "#/components/schemas/VehicleInput"
+          },
+          "startNumber": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{1,6}$"
+          },
+          "isBackupVehicle": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "classId",
+          "driver",
+          "vehicle"
+        ]
+      },
+      "PatchEntryStatusRequest": {
+        "type": "object",
+        "properties": {
+          "acceptanceStatus": {
+            "$ref": "#/components/schemas/AcceptanceStatus"
+          },
+          "sendLifecycleMail": {
+            "type": "boolean"
+          },
+          "lifecycleEventType": {
+            "type": "string",
+            "enum": [
+              "registration_received",
+              "preselection",
+              "accepted_open_payment",
+              "accepted_paid_completed",
+              "rejected",
+              "waitlist"
+            ]
+          }
+        },
+        "required": [
+          "acceptanceStatus"
+        ]
+      },
+      "PatchTechStatusRequest": {
+        "type": "object",
+        "properties": {
+          "techStatus": {
+            "$ref": "#/components/schemas/TechStatus"
+          }
+        },
+        "required": [
+          "techStatus"
+        ]
+      },
+      "PricingRulesRequest": {
+        "type": "object",
+        "properties": {
+          "earlyDeadline": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lateFeeCents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "secondVehicleDiscountCents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "classRules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "classId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "baseFeeCents": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "classId",
+                "baseFeeCents"
+              ]
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "earlyDeadline",
+          "lateFeeCents",
+          "classRules"
+        ]
+      },
+      "RecalculateInvoicesRequest": {
+        "type": "object",
+        "properties": {
+          "driverPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "invoiceId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "RecordPaymentRequest": {
+        "type": "object",
+        "properties": {
+          "amountCents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "paidAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "bank_transfer",
+              "cash",
+              "card",
+              "other"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "amountCents",
+          "paidAt",
+          "method"
+        ]
+      },
+      "QueueMailRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "templateId": {
+            "type": "string"
+          },
+          "templateVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "subject": {
+            "type": "string"
+          },
+          "templateData": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "sendAfter": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "recipientEmails": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            }
+          },
+          "driverPersonIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "entryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "eventId",
+          "templateId"
+        ]
+      },
+      "QueuePaymentReminderRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "templateId": {
+            "type": "string"
+          },
+          "templateVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "subject": {
+            "type": "string"
+          },
+          "templateData": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "sendAfter": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "eventId",
+          "templateId"
+        ]
+      },
+      "QueueLifecycleMailRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "registration_received",
+              "preselection",
+              "accepted_open_payment",
+              "accepted_paid_completed",
+              "rejected",
+              "waitlist"
+            ]
+          },
+          "templateVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sendAfter": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "eventId",
+          "entryId",
+          "eventType"
+        ]
+      },
+      "QueueBroadcastMailRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "templateKey": {
+            "type": "string"
+          },
+          "templateVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sendAfter": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "classId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "acceptanceStatus": {
+            "$ref": "#/components/schemas/AcceptanceStatus"
+          },
+          "registrationStatus": {
+            "$ref": "#/components/schemas/RegistrationStatus"
+          },
+          "paymentStatus": {
+            "$ref": "#/components/schemas/PaymentStatus"
+          },
+          "subjectOverride": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "templateKey"
+        ]
+      },
+      "DocumentRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entryId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "eventId",
+          "entryId"
+        ]
+      },
+      "BatchDocumentRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 250
+          }
+        },
+        "required": [
+          "eventId",
+          "entryIds"
+        ]
+      },
+      "CreateExportRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "startlist_csv",
+              "participants_csv",
+              "payments_open_csv",
+              "checkin_status_csv"
+            ]
+          },
+          "classId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "acceptanceStatus": {
+            "$ref": "#/components/schemas/AcceptanceStatus"
+          },
+          "paymentOpenOnly": {
+            "type": "boolean"
+          },
+          "checkinIdVerified": {
+            "type": "boolean"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv"
+            ]
+          }
+        },
+        "required": [
+          "eventId"
+        ]
+      },
+      "ListMeta": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "pageSize": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "page",
+          "pageSize",
+          "total",
+          "hasMore",
+          "nextCursor"
+        ]
+      },
+      "PublicVehicleImageUploadInitRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ]
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "fileSizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8388608
+          }
+        },
+        "required": [
+          "eventId",
+          "contentType",
+          "fileSizeBytes"
+        ]
+      },
+      "PublicVehicleImageUploadFinalizeRequest": {
+        "type": "object",
+        "properties": {
+          "uploadId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "uploadId"
+        ]
+      },
+      "PublicStartNumberValidateRequest": {
+        "type": "object",
+        "properties": {
+          "classId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "startNumber": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "classId",
+          "startNumber"
+        ]
+      }
+    }
+  }
+}

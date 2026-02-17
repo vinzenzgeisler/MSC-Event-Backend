@@ -4,6 +4,7 @@ import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { entry, eventClass } from '../db/schema';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
+import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const classInputSchema = z.object({
   name: z.string().min(1),
@@ -22,7 +23,7 @@ type ClassUpdateInput = z.infer<typeof classUpdateSchema>;
 
 export const listClassesByEvent = async (eventId: string) => {
   const db = await getDb();
-  return db
+  const rows = await db
     .select({
       id: eventClass.id,
       eventId: eventClass.eventId,
@@ -34,6 +35,38 @@ export const listClassesByEvent = async (eventId: string) => {
     .from(eventClass)
     .where(eq(eventClass.eventId, eventId))
     .orderBy(asc(eventClass.name));
+  const paginationQuery = parseListQuery({}, ['name', 'vehicleType', 'createdAt', 'updatedAt'], 'name', 'asc');
+  return paginateAndSortRows(rows, paginationQuery);
+};
+
+export const listClassesByEventWithQuery = async (
+  eventId: string,
+  query: { cursor?: string; limit?: number; sortBy?: string; sortDir?: 'asc' | 'desc' }
+) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: eventClass.id,
+      eventId: eventClass.eventId,
+      name: eventClass.name,
+      vehicleType: eventClass.vehicleType,
+      createdAt: eventClass.createdAt,
+      updatedAt: eventClass.updatedAt
+    })
+    .from(eventClass)
+    .where(eq(eventClass.eventId, eventId));
+  const paginationQuery = parseListQuery(
+    {
+      cursor: query.cursor,
+      limit: query.limit?.toString(),
+      sortBy: query.sortBy,
+      sortDir: query.sortDir
+    },
+    ['name', 'vehicleType', 'createdAt', 'updatedAt'],
+    'name',
+    'asc'
+  );
+  return paginateAndSortRows(rows, paginationQuery);
 };
 
 export const createClass = async (eventId: string, input: ClassInput, actorUserId: string | null) => {

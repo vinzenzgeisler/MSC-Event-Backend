@@ -194,6 +194,30 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/public/events/current',
+      methods: [apigwv2.HttpMethod.GET],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/events/{id}/start-number/validate',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/uploads/vehicle-image/init',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/uploads/vehicle-image/finalize',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
       path: '/public/entries/{id}/verify-email',
       methods: [apigwv2.HttpMethod.POST],
       integration
@@ -393,6 +417,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/entries/{id}',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/checkin/entries',
       methods: [apigwv2.HttpMethod.GET],
       integration,
@@ -437,6 +468,20 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/admin/exports/{id}/download',
       methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/outbox',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/outbox/{id}/retry',
+      methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
     });

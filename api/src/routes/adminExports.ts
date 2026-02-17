@@ -5,6 +5,7 @@ import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { entry, eventClass, exportJob, invoice, person } from '../db/schema';
 import { getPresignedDownloadUrl, uploadFile } from '../docs/storage';
+import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const createExportSchema = z.object({
   eventId: z.string().uuid(),
@@ -183,13 +184,28 @@ export const getExportJob = async (id: string) => {
   return rows[0] ?? null;
 };
 
-export const listExportJobs = async (eventId: string) => {
+export const listExportJobs = async (
+  eventId: string,
+  query?: { cursor?: string; limit?: number; sortBy?: string; sortDir?: 'asc' | 'desc' }
+) => {
   const db = await getDb();
-  return db
+  const rows = await db
     .select()
     .from(exportJob)
     .where(eq(exportJob.eventId, eventId))
     .orderBy(asc(exportJob.createdAt));
+  const paginationQuery = parseListQuery(
+    {
+      cursor: query?.cursor,
+      limit: query?.limit?.toString(),
+      sortBy: query?.sortBy,
+      sortDir: query?.sortDir
+    },
+    ['createdAt', 'completedAt', 'status', 'type'],
+    'createdAt',
+    'asc'
+  );
+  return paginateAndSortRows(rows, paginationQuery);
 };
 
 export const getExportDownload = async (id: string, actorUserId: string | null) => {

@@ -352,7 +352,14 @@ export const recordInvoicePayment = async (invoiceId: string, input: PaymentInpu
     }
   });
 
-  return updated ?? null;
+  if (!updated) {
+    return null;
+  }
+
+  return {
+    ...updated,
+    amountOpenCents: Math.max(0, updated.totalCents - (updated.paidAmountCents ?? 0))
+  };
 };
 
 export const listInvoicePayments = async (

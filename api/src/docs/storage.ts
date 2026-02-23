@@ -46,6 +46,16 @@ export const getPresignedDownloadUrl = async (key: string, expiresInSeconds = 30
   return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 };
 
+export const getPresignedAssetsDownloadUrl = async (key: string, expiresInSeconds = 300) => {
+  const client = getS3Client();
+  const bucket = getAssetsBucket();
+  const command = new GetObjectCommand({
+    Bucket: bucket,
+    Key: key
+  });
+  return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+};
+
 export const getPresignedAssetsUploadUrl = async (
   key: string,
   contentType: string,

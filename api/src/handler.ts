@@ -38,8 +38,10 @@ import {
   getEntryDetail,
   patchEntryStatus,
   patchEntryTechStatus,
+  patchEntryNotes,
   validateEntryStatusPatchInput,
   validateEntryTechStatusPatchInput,
+  validateEntryNotesPatchInput,
   validateListEntriesQuery
 } from './routes/adminEntries';
 import {
@@ -132,6 +134,30 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'CLASS_VEHICLE_TYPE_MISMATCH') {
         return errorJson(409, 'Class does not match vehicle type');
       }
+      if (error instanceof Error && error.message === 'START_NUMBER_INVALID_FORMAT') {
+        return errorJson(
+          400,
+          'Validation failed',
+          undefined,
+          'VALIDATION_ERROR',
+          [{ field: 'startNumber', code: 'invalid_format', message: 'Start number must match ^[A-Z0-9]{1,6}$' }]
+        );
+      }
+      if (error instanceof Error && error.message === 'BACKUP_LINK_REQUIRED') {
+        return errorJson(
+          400,
+          'Validation failed',
+          undefined,
+          'VALIDATION_ERROR',
+          [{ field: 'backupOfEntryId', code: 'required_when_backup_vehicle', message: 'Backup link is required for backup vehicles' }]
+        );
+      }
+      if (error instanceof Error && error.message === 'BACKUP_ENTRY_NOT_FOUND') {
+        return errorJson(404, 'Referenced backup entry not found', undefined, 'BACKUP_ENTRY_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'BACKUP_ENTRY_INVALID_LINK') {
+        return errorJson(409, 'Backup entry link is invalid', undefined, 'BACKUP_ENTRY_INVALID_LINK');
+      }
       if (error instanceof Error && error.message === 'IMAGE_UPLOAD_INVALID') {
         return errorJson(
           400,
@@ -204,7 +230,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Invalid JSON body');
       }
       if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
-        return errorJson(404, 'Event not found');
+        return errorJson(404, 'Event not found', undefined, 'EVENT_NOT_FOUND');
       }
       if (
         error instanceof Error &&
@@ -212,7 +238,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           error.message === 'REGISTRATION_NOT_OPEN' ||
           error.message === 'REGISTRATION_CLOSED')
       ) {
-        return errorJson(409, error.message);
+        return errorJson(409, error.message, undefined, error.message);
       }
       return errorJson(500, 'Upload init failed');
     }
@@ -232,13 +258,13 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Invalid JSON body');
       }
       if (error instanceof Error && error.message === 'UPLOAD_NOT_FOUND') {
-        return errorJson(404, 'Upload not found');
+        return errorJson(404, 'Upload not found', undefined, 'UPLOAD_NOT_FOUND');
       }
       if (error instanceof Error && error.message === 'UPLOAD_EXPIRED') {
-        return errorJson(409, 'Upload expired');
+        return errorJson(409, 'Upload expired', undefined, 'UPLOAD_EXPIRED');
       }
       if (error instanceof Error && error.message === 'UPLOAD_OBJECT_MISSING') {
-        return errorJson(409, 'Uploaded object not found');
+        return errorJson(409, 'Uploaded object not found', undefined, 'UPLOAD_OBJECT_MISSING');
       }
       return errorJson(500, 'Upload finalize failed');
     }
@@ -1011,6 +1037,15 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'LIFECYCLE_EVENT_TYPE_REQUIRED') {
         return errorJson(400, 'lifecycleEventType required when sendLifecycleMail=true');
       }
+      if (error instanceof Error && error.message === 'INVALID_STATUS_TRANSITION') {
+        return errorJson(
+          409,
+          'Acceptance status transition is not allowed',
+          undefined,
+          'INVALID_STATUS_TRANSITION',
+          [{ field: 'acceptanceStatus', code: 'invalid_transition', message: 'Transition is not allowed' }]
+        );
+      }
       if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
         return errorJson(409, 'Event is read-only');
       }
@@ -1044,6 +1079,35 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(409, 'Event is read-only');
       }
       return errorJson(500, 'Tech status update failed');
+    }
+  }
+
+  const entryNotesMatch = path.match(/^\/admin\/entries\/([^/]+)\/notes$/);
+  if (method === 'PATCH' && entryNotesMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateEntryNotesPatchInput(payload);
+      const result = await patchEntryNotes(entryNotesMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, entry: result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      return errorJson(500, 'Entry notes update failed');
     }
   }
 
@@ -1181,7 +1245,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/exports/entries') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'viewer'])) {
+    if (!hasGroup(auth, 'admin')) {
       return errorJson(403, 'Forbidden');
     }
     try {

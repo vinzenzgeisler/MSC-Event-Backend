@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  AnyPgColumn,
   boolean,
   check,
   date,
@@ -99,6 +100,8 @@ export const vehicle = pgTable(
     gears: integer('gears'),
     brakes: text('brakes'),
     description: text('description'),
+    ownerName: text('owner_name'),
+    vehicleHistory: text('vehicle_history'),
     startNumberRaw: text('start_number_raw'),
     imageS3Key: text('image_s3_key'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -127,6 +130,7 @@ export const entry = pgTable(
       .notNull()
       .references(() => vehicle.id),
     isBackupVehicle: boolean('is_backup_vehicle').notNull().default(false),
+    backupOfEntryId: uuid('backup_of_entry_id').references((): AnyPgColumn => entry.id, { onDelete: 'set null' }),
     startNumberNorm: text('start_number_norm'),
     registrationStatus: text('registration_status').notNull(),
     acceptanceStatus: text('acceptance_status').notNull(),
@@ -139,6 +143,16 @@ export const entry = pgTable(
     techStatus: text('tech_status').notNull().default('pending'),
     techCheckedAt: timestamp('tech_checked_at', { withTimezone: true }),
     techCheckedBy: text('tech_checked_by'),
+    specialNotes: text('special_notes'),
+    internalNote: text('internal_note'),
+    driverNote: text('driver_note'),
+    confirmationMailSentAt: timestamp('confirmation_mail_sent_at', { withTimezone: true }),
+    confirmationMailVerifiedAt: timestamp('confirmation_mail_verified_at', { withTimezone: true }),
+    consentTermsAccepted: boolean('consent_terms_accepted').notNull().default(false),
+    consentPrivacyAccepted: boolean('consent_privacy_accepted').notNull().default(false),
+    consentMediaAccepted: boolean('consent_media_accepted').notNull().default(false),
+    consentVersion: text('consent_version'),
+    consentCapturedAt: timestamp('consent_captured_at', { withTimezone: true }),
     entryFeeCents: integer('entry_fee_cents').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
@@ -157,9 +171,11 @@ export const entry = pgTable(
       sql`${table.acceptanceStatus} in ('pending', 'shortlist', 'accepted', 'rejected')`
     ),
     techStatusCheck: check('entry_tech_status_check', sql`${table.techStatus} in ('pending', 'passed', 'failed')`),
+    backupNotSelfCheck: check('entry_backup_not_self_check', sql`${table.backupOfEntryId} is null or ${table.backupOfEntryId} != ${table.id}`),
     startNumberUnique: uniqueIndex('entry_start_number_unique')
       .on(table.eventId, table.classId, table.startNumberNorm)
-      .where(sql`${table.startNumberNorm} is not null`)
+      .where(sql`${table.startNumberNorm} is not null`),
+    backupOfEntryIndex: index('entry_backup_of_entry_idx').on(table.backupOfEntryId)
   })
 );
 

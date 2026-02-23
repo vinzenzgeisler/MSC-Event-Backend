@@ -2,7 +2,6 @@ import * as cdk from 'aws-cdk-lib';
 import { CfnOutput, Stack, StackProps } from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
-import * as integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
@@ -21,6 +20,20 @@ interface ApiStackProps extends StackProps {
   authStack: AuthStack;
   dataStack: DataStack;
   storageStack: StorageStack;
+}
+
+class SharedPermissionHttpLambdaIntegration extends apigwv2.HttpRouteIntegration {
+  constructor(id: string, private readonly handler: lambda.IFunction) {
+    super(id);
+  }
+
+  bind(): apigwv2.HttpRouteIntegrationConfig {
+    return {
+      type: apigwv2.HttpIntegrationType.AWS_PROXY,
+      uri: this.handler.functionArn,
+      payloadFormatVersion: apigwv2.PayloadFormatVersion.VERSION_2_0
+    };
+  }
 }
 
 export class ApiStack extends Stack {
@@ -175,10 +188,19 @@ export class ApiStack extends Stack {
       targets: [new targets.LambdaFunction(emailWorker)]
     });
 
-    const integration = new integrations.HttpLambdaIntegration('ApiIntegration', apiHandler);
+    const integration = new SharedPermissionHttpLambdaIntegration('ApiIntegration', apiHandler);
 
     this.api = new apigwv2.HttpApi(this, 'HttpApi', {
       apiName: `${props.config.prefix}-http-api`
+    });
+
+    apiHandler.addPermission('HttpApiInvokePermission', {
+      principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+      sourceArn: this.formatArn({
+        service: 'execute-api',
+        resource: this.api.apiId,
+        resourceName: '*/*/*'
+      })
     });
 
     this.api.addRoutes({

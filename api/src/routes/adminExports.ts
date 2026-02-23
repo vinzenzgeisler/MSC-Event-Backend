@@ -9,7 +9,7 @@ import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const createExportSchema = z.object({
   eventId: z.string().uuid(),
-  type: z.enum(['startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv']).default('participants_csv'),
+  type: z.enum(['entries_csv', 'startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv']).default('participants_csv'),
   classId: z.string().uuid().optional(),
   acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
   paymentOpenOnly: z.boolean().optional(),

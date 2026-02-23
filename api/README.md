@@ -3,7 +3,7 @@
 Minimaler TypeScript-Lambda-Handler mit Datenbankzugriff (Postgres via Drizzle):
 
 - `GET /health` → `{ "ok": true, "stage": "dev" }`
-- `GET /admin/ping` → `{ "ok": true, "sub": "...", "groups": ["admin"] }`
+- `GET /admin/ping` → `{ "ok": true, "sub": "...", "groups": ["admin|editor|viewer"] }`
 - `GET /admin/db/ping` → `{ "ok": true, "database": "...", "now": "..." }`
 - `GET /admin/db/schema` → `{ "ok": true, "tables": ["..."] }`
 - `POST /admin/mail/queue` → Outbox-Einträge für Sammelmails
@@ -84,6 +84,8 @@ Die Lambda holt DB-Verbindungsdaten aus Secrets Manager (`DB_SECRET_ARN`) und nu
 
 Die API erwartet ein externes JWT Bearer Token (Cognito Authorizer).  
 Login/Refresh/Hosted-UI sind nicht Teil dieser API und erfolgen außerhalb.
+
+Unterstützte Rollen (aus `cognito:groups`): `admin`, `editor`, `viewer`.
 
 Unterstützte Modi:
 

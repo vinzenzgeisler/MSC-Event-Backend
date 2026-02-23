@@ -23,6 +23,7 @@
     "api:build": "npm --workspace api run build",
     "api:db:generate": "npm --workspace api run db:generate",
     "api:db:migrate": "npm --workspace api run db:migrate",
+    "api:seed:dev-current-event": "npm --workspace api run seed:dev-current-event",
     "api:start": "npm --workspace api run start"
   }
 }

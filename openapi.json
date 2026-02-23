@@ -177,6 +177,7 @@
       "get": {
         "x-roles": [
           "admin",
+          "editor",
           "viewer"
         ],
         "parameters": [
@@ -224,9 +225,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "getAdminEvents"
+        "operationId": "getAdminEvents",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "post": {
         "x-roles": [
@@ -252,16 +264,27 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminEvents"
+        "operationId": "postAdminEvents",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/events/current": {
       "get": {
         "x-roles": [
           "admin",
-          "checkin",
+          "editor",
           "viewer"
         ],
         "responses": {
@@ -275,11 +298,22 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
           "404": {
             "$ref": "#/components/responses/Error404"
           }
         },
-        "operationId": "getAdminEventsCurrent"
+        "operationId": "getAdminEventsCurrent",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/events/{eventId}": {
@@ -319,6 +353,12 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
           "404": {
             "$ref": "#/components/responses/Error404"
           },
@@ -326,7 +366,12 @@
             "$ref": "#/components/responses/Error409"
           }
         },
-        "operationId": "patchAdminEventsEventId"
+        "operationId": "patchAdminEventsEventId",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -355,9 +400,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminEventsEventIdActivate"
+        "operationId": "postAdminEventsEventIdActivate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -386,9 +442,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminEventsEventIdClose"
+        "operationId": "postAdminEventsEventIdClose",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -417,9 +484,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminEventsEventIdArchive"
+        "operationId": "postAdminEventsEventIdArchive",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -437,8 +515,8 @@
       "get": {
         "x-roles": [
           "admin",
-          "viewer",
-          "checkin"
+          "editor",
+          "viewer"
         ],
         "responses": {
           "200": {
@@ -469,9 +547,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "getAdminEventsEventIdClasses"
+        "operationId": "getAdminEventsEventIdClasses",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "post": {
         "x-roles": [
@@ -497,9 +586,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminEventsEventIdClasses"
+        "operationId": "postAdminEventsEventIdClasses",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -538,9 +638,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "patchAdminClassesClassId"
+        "operationId": "patchAdminClassesClassId",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "delete": {
         "x-roles": [
@@ -556,9 +667,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "deleteAdminClassesClassId"
+        "operationId": "deleteAdminClassesClassId",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -576,7 +698,7 @@
       "get": {
         "x-roles": [
           "admin",
-          "checkin",
+          "editor",
           "viewer"
         ],
         "parameters": [
@@ -692,16 +814,27 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "getAdminEntries"
+        "operationId": "getAdminEntries",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/checkin/entries": {
       "get": {
         "x-roles": [
           "admin",
-          "checkin",
+          "editor",
           "viewer"
         ],
         "responses": {
@@ -714,6 +847,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
         "operationId": "getAdminCheckinEntries",
@@ -819,13 +958,19 @@
               ]
             }
           }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ]
       }
     },
     "/admin/entries/{entryId}/status": {
       "patch": {
         "x-roles": [
-          "admin"
+          "admin",
+          "editor"
         ],
         "requestBody": {
           "required": true,
@@ -847,9 +992,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "patchAdminEntriesEntryIdStatus"
+        "operationId": "patchAdminEntriesEntryIdStatus",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -867,7 +1023,7 @@
       "patch": {
         "x-roles": [
           "admin",
-          "checkin"
+          "editor"
         ],
         "requestBody": {
           "required": true,
@@ -889,9 +1045,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "patchAdminEntriesEntryIdTechStatus"
+        "operationId": "patchAdminEntriesEntryIdTechStatus",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -909,7 +1076,7 @@
       "patch": {
         "x-roles": [
           "admin",
-          "checkin"
+          "editor"
         ],
         "requestBody": {
           "required": true,
@@ -939,9 +1106,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "patchAdminEntriesEntryIdCheckinIdVerify"
+        "operationId": "patchAdminEntriesEntryIdCheckinIdVerify",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -980,9 +1158,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "putAdminEventsEventIdPricingRules"
+        "operationId": "putAdminEventsEventIdPricingRules",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -1021,9 +1210,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminEventsEventIdInvoicesRecalculate"
+        "operationId": "postAdminEventsEventIdInvoicesRecalculate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -1041,6 +1241,7 @@
       "get": {
         "x-roles": [
           "admin",
+          "editor",
           "viewer"
         ],
         "parameters": [
@@ -1079,15 +1280,27 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "getAdminInvoices"
+        "operationId": "getAdminInvoices",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/invoices/{invoiceId}/payments": {
       "get": {
         "x-roles": [
           "admin",
+          "editor",
           "viewer"
         ],
         "responses": {
@@ -1100,9 +1313,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "getAdminInvoicesInvoiceIdPayments"
+        "operationId": "getAdminInvoicesInvoiceIdPayments",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "post": {
         "x-roles": [
@@ -1128,9 +1352,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminInvoicesInvoiceIdPayments"
+        "operationId": "postAdminInvoicesInvoiceIdPayments",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -1169,9 +1404,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminMailQueue"
+        "operationId": "postAdminMailQueue",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/mail/lifecycle/queue": {
@@ -1199,9 +1445,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminMailLifecycleQueue"
+        "operationId": "postAdminMailLifecycleQueue",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/mail/broadcast/queue": {
@@ -1229,9 +1486,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminMailBroadcastQueue"
+        "operationId": "postAdminMailBroadcastQueue",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/payment/reminders/queue": {
@@ -1259,9 +1527,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminPaymentRemindersQueue"
+        "operationId": "postAdminPaymentRemindersQueue",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/documents/waiver": {
@@ -1289,16 +1568,26 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminDocumentsWaiver"
+        "operationId": "postAdminDocumentsWaiver",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/documents/tech-check": {
       "post": {
         "x-roles": [
-          "admin",
-          "checkin"
+          "admin"
         ],
         "requestBody": {
           "required": true,
@@ -1320,16 +1609,26 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminDocumentsTechCheck"
+        "operationId": "postAdminDocumentsTechCheck",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/documents/waiver/batch": {
       "post": {
         "x-roles": [
-          "admin",
-          "checkin"
+          "admin"
         ],
         "requestBody": {
           "required": true,
@@ -1351,16 +1650,26 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminDocumentsWaiverBatch"
+        "operationId": "postAdminDocumentsWaiverBatch",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/documents/tech-check/batch": {
       "post": {
         "x-roles": [
-          "admin",
-          "checkin"
+          "admin"
         ],
         "requestBody": {
           "required": true,
@@ -1382,16 +1691,27 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminDocumentsTechCheckBatch"
+        "operationId": "postAdminDocumentsTechCheckBatch",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/documents/{documentId}/download": {
       "get": {
         "x-roles": [
           "admin",
-          "checkin",
+          "editor",
           "viewer"
         ],
         "parameters": [
@@ -1415,9 +1735,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "getAdminDocumentsDocumentIdDownload"
+        "operationId": "getAdminDocumentsDocumentIdDownload",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -1435,7 +1766,7 @@
       "get": {
         "x-roles": [
           "admin",
-          "checkin",
+          "editor",
           "viewer"
         ],
         "parameters": [
@@ -1480,9 +1811,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "getAdminDocumentsEntryEntryIdDownload"
+        "operationId": "getAdminDocumentsEntryEntryIdDownload",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -1521,15 +1863,27 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "postAdminExportsEntries"
+        "operationId": "postAdminExportsEntries",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/exports": {
       "get": {
         "x-roles": [
           "admin",
+          "editor",
           "viewer"
         ],
         "parameters": [
@@ -1593,15 +1947,27 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "getAdminExports"
+        "operationId": "getAdminExports",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/admin/exports/{exportJobId}": {
       "get": {
         "x-roles": [
           "admin",
+          "editor",
           "viewer"
         ],
         "parameters": [
@@ -1625,9 +1991,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
-        "operationId": "getAdminExportsExportJobId"
+        "operationId": "getAdminExportsExportJobId",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -1645,6 +2022,7 @@
       "get": {
         "x-roles": [
           "admin",
+          "editor",
           "viewer"
         ],
         "parameters": [
@@ -1669,11 +2047,22 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
           "409": {
             "$ref": "#/components/responses/Error409"
           }
         },
-        "operationId": "getAdminExportsExportJobIdDownload"
+        "operationId": "getAdminExportsExportJobIdDownload",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "parameters": [
         {
@@ -1910,14 +2299,25 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
           "404": {
             "$ref": "#/components/responses/Error404"
           }
         },
         "x-roles": [
           "admin",
-          "checkin",
+          "editor",
           "viewer"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ]
       },
       "parameters": [
@@ -2006,10 +2406,23 @@
           },
           "400": {
             "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
           }
         },
         "x-roles": [
-          "admin"
+          "admin",
+          "editor",
+          "viewer"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ]
       }
     },
@@ -2050,6 +2463,12 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
           "404": {
             "$ref": "#/components/responses/Error404"
           },
@@ -2059,6 +2478,11 @@
         },
         "x-roles": [
           "admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ]
       },
       "parameters": [
@@ -2077,7 +2501,8 @@
       "patch": {
         "operationId": "patchAdminEntriesEntryIdNotes",
         "x-roles": [
-          "admin"
+          "admin",
+          "editor"
         ],
         "parameters": [
           {
@@ -2114,13 +2539,24 @@
           "400": {
             "$ref": "#/components/responses/Error400"
           },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
           "404": {
             "$ref": "#/components/responses/Error404"
           },
           "409": {
             "$ref": "#/components/responses/Error409"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     }
   },
@@ -2155,6 +2591,26 @@
       },
       "Error409": {
         "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Error401": {
+        "description": "Unauthorized",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Error403": {
+        "description": "Forbidden",
         "content": {
           "application/json": {
             "schema": {

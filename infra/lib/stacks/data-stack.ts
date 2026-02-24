@@ -21,6 +21,7 @@ export class DataStack extends Stack {
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
+    const devCleanupEnabled = process.env.DEV_CLEANUP_ENABLED === 'true';
 
     this.vpc = new ec2.Vpc(this, 'Vpc', {
       vpcName: `${props.config.prefix}-vpc`,
@@ -57,7 +58,7 @@ export class DataStack extends Stack {
       });
     }
 
-    if (props.config.stage === 'dev') {
+    if (props.config.stage === 'dev' && devCleanupEnabled) {
       const cleanupFunction = new lambda.Function(this, 'DevCostCleanupFunction', {
         runtime: lambda.Runtime.PYTHON_3_12,
         handler: 'index.handler',

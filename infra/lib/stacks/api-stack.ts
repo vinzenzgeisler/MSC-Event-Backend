@@ -59,6 +59,10 @@ export class ApiStack extends Stack {
     const dbUser = props.config.dbUsername;
     const dbResourceId = props.dataStack.dbInstance.instanceResourceId;
     const dbConnectArn = `arn:aws:rds-db:${dbRegion}:${Stack.of(this).account}:dbuser:${dbResourceId}/${dbUser}`;
+    const publicVerifyBaseUrl =
+      props.config.stage === 'prod'
+        ? process.env.PUBLIC_VERIFY_BASE_URL_PROD ?? process.env.PUBLIC_VERIFY_BASE_URL ?? ''
+        : process.env.PUBLIC_VERIFY_BASE_URL_DEV ?? process.env.PUBLIC_VERIFY_BASE_URL ?? '';
     const lambdaVpcConfig = props.config.apiInVpc
       ? {
           vpc: props.dataStack.vpc,
@@ -91,10 +95,12 @@ export class ApiStack extends Stack {
         ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
         DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
         COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
+        COGNITO_USER_POOL_ID: props.authStack.userPool.userPoolId,
         SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? '',
         PAYMENT_IBAN: process.env.PAYMENT_IBAN ?? '',
         PAYMENT_BIC: process.env.PAYMENT_BIC ?? '',
-        PAYMENT_RECIPIENT: process.env.PAYMENT_RECIPIENT ?? ''
+        PAYMENT_RECIPIENT: process.env.PAYMENT_RECIPIENT ?? '',
+        PUBLIC_VERIFY_BASE_URL: publicVerifyBaseUrl
       },
       bundling: {
         target: 'node20',
@@ -174,6 +180,22 @@ export class ApiStack extends Stack {
       );
     });
 
+    apiHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'cognito-idp:ListUsers',
+          'cognito-idp:AdminGetUser',
+          'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminEnableUser',
+          'cognito-idp:AdminDisableUser',
+          'cognito-idp:AdminAddUserToGroup',
+          'cognito-idp:AdminRemoveUserFromGroup',
+          'cognito-idp:AdminListGroupsForUser'
+        ],
+        resources: [props.authStack.userPool.userPoolArn]
+      })
+    );
+
     [emailWorker].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
@@ -251,6 +273,20 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/ping',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/auth/me',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/dashboard/summary',
       methods: [apigwv2.HttpMethod.GET],
       integration,
       authorizer: jwtAuthorizer
@@ -405,7 +441,7 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/events/{id}/pricing-rules',
-      methods: [apigwv2.HttpMethod.PUT],
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PUT],
       integration,
       authorizer: jwtAuthorizer
     });
@@ -440,7 +476,7 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/entries/{id}',
-      methods: [apigwv2.HttpMethod.GET],
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.DELETE],
       integration,
       authorizer: jwtAuthorizer
     });
@@ -504,6 +540,34 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/admin/mail/outbox/{id}/retry',
       methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/iam/roles',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/iam/users',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/iam/users/{id}/roles',
+      methods: [apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/iam/users/{id}/status',
+      methods: [apigwv2.HttpMethod.PATCH],
       integration,
       authorizer: jwtAuthorizer
     });

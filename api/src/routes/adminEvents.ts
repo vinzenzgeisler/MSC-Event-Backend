@@ -13,6 +13,8 @@ const createEventSchema = z.object({
   endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   registrationOpenAt: z.string().datetime().optional(),
   registrationCloseAt: z.string().datetime().optional(),
+  contactEmail: z.string().email().optional(),
+  websiteUrl: z.string().url().optional(),
   status: eventStatusSchema.default('draft')
 });
 
@@ -31,7 +33,9 @@ const updateEventSchema = z
     startsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     registrationOpenAt: z.string().datetime().nullable().optional(),
-    registrationCloseAt: z.string().datetime().nullable().optional()
+    registrationCloseAt: z.string().datetime().nullable().optional(),
+    contactEmail: z.string().email().nullable().optional(),
+    websiteUrl: z.string().url().nullable().optional()
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'Provide at least one field to update.' });
 
@@ -77,6 +81,8 @@ export const listEvents = async (input: ListEventsInput) => {
       isCurrent: event.isCurrent,
       registrationOpenAt: event.registrationOpenAt,
       registrationCloseAt: event.registrationCloseAt,
+      contactEmail: event.contactEmail,
+      websiteUrl: event.websiteUrl,
       openedAt: event.openedAt,
       closedAt: event.closedAt,
       archivedAt: event.archivedAt,
@@ -113,6 +119,8 @@ export const getCurrentEvent = async () => {
       isCurrent: event.isCurrent,
       registrationOpenAt: event.registrationOpenAt,
       registrationCloseAt: event.registrationCloseAt,
+      contactEmail: event.contactEmail,
+      websiteUrl: event.websiteUrl,
       openedAt: event.openedAt,
       closedAt: event.closedAt,
       archivedAt: event.archivedAt
@@ -138,6 +146,8 @@ export const createEvent = async (input: CreateEventInput, actorUserId: string |
       isCurrent: false,
       registrationOpenAt: input.registrationOpenAt ? new Date(input.registrationOpenAt) : null,
       registrationCloseAt: input.registrationCloseAt ? new Date(input.registrationCloseAt) : null,
+      contactEmail: input.contactEmail ?? null,
+      websiteUrl: input.websiteUrl ?? null,
       openedAt: status === 'open' ? now : null,
       closedAt: status === 'closed' ? now : null,
       archivedAt: status === 'archived' ? now : null,
@@ -302,6 +312,18 @@ export const updateEvent = async (eventId: string, input: UpdateEventInput, acto
           : input.registrationCloseAt === null
             ? null
             : new Date(input.registrationCloseAt),
+      contactEmail:
+        input.contactEmail === undefined
+          ? existing.contactEmail
+          : input.contactEmail === null
+            ? null
+            : input.contactEmail,
+      websiteUrl:
+        input.websiteUrl === undefined
+          ? existing.websiteUrl
+          : input.websiteUrl === null
+            ? null
+            : input.websiteUrl,
       updatedAt: now
     })
     .where(eq(event.id, eventId))

@@ -238,6 +238,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       driverCity: person.city,
       driverPhone: person.phone,
       driverEmergencyContactName: person.emergencyContactName,
+      driverEmergencyContactFirstName: person.emergencyContactFirstName,
+      driverEmergencyContactLastName: person.emergencyContactLastName,
       driverEmergencyContactPhone: person.emergencyContactPhone,
       driverMotorsportHistory: person.motorsportHistory,
       vehicleType: vehicle.vehicleType,
@@ -284,6 +286,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
             city: person.city,
             phone: person.phone,
             emergencyContactName: person.emergencyContactName,
+            emergencyContactFirstName: person.emergencyContactFirstName,
+            emergencyContactLastName: person.emergencyContactLastName,
             emergencyContactPhone: person.emergencyContactPhone,
             motorsportHistory: person.motorsportHistory
           })
@@ -363,6 +367,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
           city: redactSensitiveFields ? null : current.driverCity,
           phone: redactSensitiveFields ? null : current.driverPhone,
           emergencyContactName: redactSensitiveFields ? null : current.driverEmergencyContactName,
+          emergencyContactFirstName: redactSensitiveFields ? null : current.driverEmergencyContactFirstName,
+          emergencyContactLastName: redactSensitiveFields ? null : current.driverEmergencyContactLastName,
           emergencyContactPhone: redactSensitiveFields ? null : current.driverEmergencyContactPhone,
           motorsportHistory: redactSensitiveFields ? null : current.driverMotorsportHistory
         },
@@ -378,6 +384,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
               city: redactSensitiveFields ? null : codriver.city,
               phone: redactSensitiveFields ? null : codriver.phone,
               emergencyContactName: redactSensitiveFields ? null : codriver.emergencyContactName,
+              emergencyContactFirstName: redactSensitiveFields ? null : codriver.emergencyContactFirstName,
+              emergencyContactLastName: redactSensitiveFields ? null : codriver.emergencyContactLastName,
               emergencyContactPhone: redactSensitiveFields ? null : codriver.emergencyContactPhone,
               motorsportHistory: redactSensitiveFields ? null : codriver.motorsportHistory
             }

@@ -5,8 +5,8 @@ export type DevProfile = 'idle' | 'test';
 const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrationRunner' | 'apiInVpc' | 'dbConnectivityMode' | 'dbUseIamAuth' | 'dbPublicAccess'> = {
   stage: 'dev',
   prefix: 'dreiecksrennen-dev',
-  cognitoCallbackUrls: ['http://localhost:5173/auth/callback'],
-  cognitoLogoutUrls: ['http://localhost:5173/'],
+  cognitoCallbackUrls: ['http://localhost:5173/admin/login'],
+  cognitoLogoutUrls: ['http://localhost:5173/admin/login'],
   cognitoDomainPrefix: 'dreiecksrennen-dev-auth',
   sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
   publicVerifyBaseUrl: 'http://localhost:5173/anmeldung/verify',

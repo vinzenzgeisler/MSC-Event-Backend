@@ -3,7 +3,17 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { entry, entryEmailVerification, event, eventClass, person, vehicle, vehicleImageUpload } from '../db/schema';
+import {
+  classPricingRule,
+  entry,
+  entryEmailVerification,
+  event,
+  eventClass,
+  eventPricingRule,
+  person,
+  vehicle,
+  vehicleImageUpload
+} from '../db/schema';
 import { getPresignedAssetsUploadUrl, doesAssetObjectExist } from '../docs/storage';
 import { normalizeStartNumber } from '../domain/startNumber';
 import { isPgUniqueViolation } from '../http/dbErrors';
@@ -72,10 +82,23 @@ const driverInputSchema = z.object({
   zip: zipSchema,
   city: nonEmptySchema,
   phone: phoneSchema,
-  emergencyContactName: nonEmptySchema,
+  emergencyContactName: nonEmptySchema.optional(),
+  emergencyContactFirstName: nonEmptySchema.optional(),
+  emergencyContactLastName: nonEmptySchema.optional(),
   emergencyContactPhone: phoneSchema,
   motorsportHistory: nonEmptySchema,
   specialNotes: nonEmptySchema.optional()
+}).superRefine((value, ctx) => {
+  const hasLegacyName = !!value.emergencyContactName;
+  const hasSplitName = !!value.emergencyContactFirstName && !!value.emergencyContactLastName;
+  if (hasLegacyName || hasSplitName) {
+    return;
+  }
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ['emergencyContactFirstName'],
+    message: 'Provide emergencyContactName or emergencyContactFirstName + emergencyContactLastName'
+  });
 });
 
 const vehicleInputSchema = z.object({
@@ -182,6 +205,31 @@ type UploadFinalizeInput = z.infer<typeof uploadFinalizeSchema>;
 type DriverInput = z.infer<typeof driverInputSchema>;
 type CodriverInput = z.infer<typeof codriverInputSchema>;
 
+const buildEmergencyContactName = (input: Partial<DriverInput>): string | null => {
+  if (input.emergencyContactName) {
+    return input.emergencyContactName;
+  }
+  const first = input.emergencyContactFirstName?.trim() ?? '';
+  const last = input.emergencyContactLastName?.trim() ?? '';
+  const joined = [first, last].filter((part) => part.length > 0).join(' ').trim();
+  return joined || null;
+};
+
+const splitEmergencyContactName = (name: string | null | undefined): { firstName: string | null; lastName: string | null } => {
+  if (!name) {
+    return { firstName: null, lastName: null };
+  }
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return { firstName: null, lastName: null };
+  }
+  const [first, ...rest] = trimmed.split(/\s+/);
+  return {
+    firstName: first ?? null,
+    lastName: rest.length > 0 ? rest.join(' ') : null
+  };
+};
+
 const assertRegistrationOpen = async (eventId: string) => {
   const db = await getDb();
   const rows = await db
@@ -224,6 +272,10 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
     const created = await db.transaction(async (tx) => {
       const upsertPersonByEmail = async (personInput: DriverInput | CodriverInput) => {
         const extra = personInput as Partial<DriverInput>;
+        const emergencyName = buildEmergencyContactName(extra);
+        const splitEmergencyName = emergencyName
+          ? splitEmergencyContactName(emergencyName)
+          : { firstName: extra.emergencyContactFirstName ?? null, lastName: extra.emergencyContactLastName ?? null };
         const existingRows = await tx
           .select()
           .from(person)
@@ -242,7 +294,9 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
               zip: personInput.zip ?? null,
               city: personInput.city ?? null,
               phone: personInput.phone ?? null,
-              emergencyContactName: extra.emergencyContactName ?? null,
+              emergencyContactName: emergencyName,
+              emergencyContactFirstName: splitEmergencyName.firstName,
+              emergencyContactLastName: splitEmergencyName.lastName,
               emergencyContactPhone: extra.emergencyContactPhone ?? null,
               motorsportHistory: extra.motorsportHistory ?? null,
               updatedAt: now
@@ -264,7 +318,9 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
             zip: personInput.zip ?? null,
             city: personInput.city ?? null,
             phone: personInput.phone ?? null,
-            emergencyContactName: extra.emergencyContactName ?? null,
+            emergencyContactName: emergencyName,
+            emergencyContactFirstName: splitEmergencyName.firstName,
+            emergencyContactLastName: splitEmergencyName.lastName,
             emergencyContactPhone: extra.emergencyContactPhone ?? null,
             motorsportHistory: extra.motorsportHistory ?? null,
             createdAt: now,
@@ -491,6 +547,8 @@ export const getPublicCurrentEventWithClasses = async () => {
       name: event.name,
       startsAt: event.startsAt,
       endsAt: event.endsAt,
+      contactEmail: event.contactEmail,
+      websiteUrl: event.websiteUrl,
       status: event.status,
       isCurrent: event.isCurrent,
       registrationOpenAt: event.registrationOpenAt,
@@ -516,6 +574,31 @@ export const getPublicCurrentEventWithClasses = async () => {
     .where(eq(eventClass.eventId, current.id))
     .orderBy(asc(eventClass.name));
 
+  const pricingRuleRows = await db
+    .select({
+      earlyDeadline: eventPricingRule.earlyDeadline,
+      lateFeeCents: eventPricingRule.lateFeeCents,
+      secondVehicleDiscountCents: eventPricingRule.secondVehicleDiscountCents,
+      currency: eventPricingRule.currency
+    })
+    .from(eventPricingRule)
+    .where(eq(eventPricingRule.eventId, current.id))
+    .limit(1);
+  const pricingRule = pricingRuleRows[0] ?? null;
+
+  const pricingClassRows = pricingRule
+    ? await db
+        .select({
+          classId: eventClass.id,
+          className: eventClass.name,
+          baseFeeCents: classPricingRule.baseFeeCents
+        })
+        .from(eventClass)
+        .leftJoin(classPricingRule, and(eq(classPricingRule.eventId, current.id), eq(classPricingRule.classId, eventClass.id)))
+        .where(eq(eventClass.eventId, current.id))
+        .orderBy(asc(eventClass.name))
+    : [];
+
   const now = new Date();
   let reason: 'event_not_open' | 'before_window' | 'after_window' | null = null;
   if (current.status !== 'open') {
@@ -529,6 +612,19 @@ export const getPublicCurrentEventWithClasses = async () => {
   return {
     event: current,
     classes: classRows,
+    pricingRules: pricingRule
+      ? {
+          earlyDeadline: pricingRule.earlyDeadline,
+          lateFeeCents: pricingRule.lateFeeCents,
+          secondVehicleDiscountCents: pricingRule.secondVehicleDiscountCents,
+          currency: pricingRule.currency,
+          classRules: pricingClassRows.map((row) => ({
+            classId: row.classId,
+            className: row.className,
+            baseFeeCents: row.baseFeeCents ?? 0
+          }))
+        }
+      : null,
     registration: {
       isOpen: reason === null,
       reason

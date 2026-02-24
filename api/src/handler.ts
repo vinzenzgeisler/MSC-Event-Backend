@@ -33,6 +33,7 @@ import {
   validateCreateExportInput
 } from './routes/adminExports';
 import {
+  deleteEntry,
   listCheckinEntries,
   listEntries,
   getEntryDetail,
@@ -45,6 +46,7 @@ import {
   validateListEntriesQuery
 } from './routes/adminEntries';
 import {
+  getPricingRules,
   listInvoicePayments,
   listInvoices,
   putPricingRules,
@@ -56,6 +58,18 @@ import {
   validateRecordPaymentInput
 } from './routes/adminFinance';
 import {
+  createIamUser,
+  listIamRoles,
+  listIamUsers,
+  patchIamUserRoles,
+  patchIamUserStatus,
+  validateCreateIamUserInput,
+  validateListIamUsersInput,
+  validatePatchIamUserRolesInput,
+  validatePatchIamUserStatusInput
+} from './routes/adminIam';
+import {
+  DuplicateRequestError,
   queueBroadcastMail,
   queueLifecycleMail,
   queueMail,
@@ -68,6 +82,7 @@ import {
   validateQueueMailInput,
   validateReminderInput
 } from './routes/adminMail';
+import { getDashboardSummary, validateDashboardSummaryQuery } from './routes/adminDashboard';
 import {
   createTechCheckBatchDocument,
   createTechCheckDocument,
@@ -305,6 +320,41 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       sub: auth.sub,
       groups: auth.groups
     });
+  }
+
+  if (method === 'GET' && path === '/admin/auth/me') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    return json(200, {
+      ok: true,
+      sub: auth.sub,
+      email: auth.email,
+      roles: auth.groups
+    });
+  }
+
+  if (method === 'GET' && path === '/admin/dashboard/summary') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const query = validateDashboardSummaryQuery(event.queryStringParameters ?? {});
+      const result = await getDashboardSummary(query.eventId);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      return errorJson(500, 'Get dashboard summary failed');
+    }
   }
 
   if (method === 'GET' && path === '/admin/db/ping') {
@@ -612,8 +662,19 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
       }
+      if (error instanceof DuplicateRequestError) {
+        return errorJson(
+          409,
+          'Duplicate request',
+          {
+            existingOutboxId: error.existingOutboxId,
+            blockedUntil: error.blockedUntil
+          },
+          'DUPLICATE_REQUEST'
+        );
+      }
       if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
-        return errorJson(409, 'Duplicate request');
+        return errorJson(409, 'Duplicate request', undefined, 'DUPLICATE_REQUEST');
       }
       if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
         return errorJson(404, 'Template not found');
@@ -991,6 +1052,52 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  if (method === 'DELETE' && entryDetailMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const result = await deleteEntry(entryDetailMatch[1], auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'ENTRY_DELETE_FORBIDDEN_CHECKIN') {
+        return errorJson(
+          409,
+          'Entry cannot be deleted after check-in verification',
+          undefined,
+          'CONFLICT',
+          [{ field: 'checkinIdVerified', code: 'delete_forbidden', message: 'Entry is already check-in verified' }]
+        );
+      }
+      if (error instanceof Error && error.message === 'ENTRY_DELETE_FORBIDDEN_TECH') {
+        return errorJson(
+          409,
+          'Entry cannot be deleted after technical inspection',
+          undefined,
+          'CONFLICT',
+          [{ field: 'techStatus', code: 'delete_forbidden', message: 'Entry tech status is no longer pending' }]
+        );
+      }
+      if (error instanceof Error && error.message === 'ENTRY_DELETE_FORBIDDEN_PAYMENT') {
+        return errorJson(
+          409,
+          'Entry cannot be deleted because payment data exists',
+          undefined,
+          'CONFLICT',
+          [{ field: 'paymentStatus', code: 'delete_forbidden', message: 'Invoice is paid or has recorded payments' }]
+        );
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      return errorJson(500, 'Entry delete failed');
+    }
+  }
+
   const checkinMatch = path.match(/^\/admin\/entries\/([^/]+)\/checkin\/id-verify$/);
   if (method === 'PATCH' && checkinMatch) {
     const auth = getAuthContext(event);
@@ -1123,6 +1230,25 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   const eventPricingMatch = path.match(/^\/admin\/events\/([^/]+)\/pricing-rules$/);
+  if (method === 'GET' && eventPricingMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const result = await getPricingRules(eventPricingMatch[1]);
+      return json(200, { ok: true, pricingRules: result });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      if (error instanceof Error && error.message === 'PRICING_RULES_NOT_FOUND') {
+        return errorJson(404, 'Pricing rules not found');
+      }
+      return errorJson(500, 'Get pricing rules failed');
+    }
+  }
+
   if (method === 'PUT' && eventPricingMatch) {
     const auth = getAuthContext(event);
     if (!hasGroup(auth, 'admin')) {
@@ -1375,6 +1501,153 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(409, 'Outbox message status cannot be retried');
       }
       return errorJson(500, 'Retry outbox failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/iam/roles') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    return json(200, { ok: true, ...listIamRoles() });
+  }
+
+  if (method === 'GET' && path === '/admin/iam/users') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const query = validateListIamUsersInput(event.queryStringParameters ?? {});
+      const result = await listIamUsers(query);
+      if (!result) {
+        return errorJson(500, 'List IAM users failed');
+      }
+      return json(200, { ok: true, users: result.users, meta: result.meta });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && error.message === 'IAM_INVALID_PARAMETER') {
+        return errorJson(400, 'Invalid IAM query');
+      }
+      if (error instanceof Error && error.message === 'IAM_USER_POOL_NOT_CONFIGURED') {
+        return errorJson(500, 'IAM is not configured');
+      }
+      return errorJson(500, 'List IAM users failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/iam/users') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateCreateIamUserInput(payload);
+      const created = await createIamUser(input);
+      if (!created) {
+        return errorJson(500, 'Create IAM user failed');
+      }
+      return json(200, { ok: true, user: created.user });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'IAM_USER_EXISTS') {
+        return errorJson(409, 'User already exists');
+      }
+      if (error instanceof Error && error.message === 'IAM_INVALID_PARAMETER') {
+        return errorJson(400, 'Invalid IAM user payload');
+      }
+      if (error instanceof Error && error.message === 'IAM_GROUP_NOT_FOUND') {
+        return errorJson(400, 'Configured IAM role group not found');
+      }
+      if (error instanceof Error && error.message === 'IAM_USER_POOL_NOT_CONFIGURED') {
+        return errorJson(500, 'IAM is not configured');
+      }
+      return errorJson(500, 'Create IAM user failed');
+    }
+  }
+
+  const iamRolesMatch = path.match(/^\/admin\/iam\/users\/([^/]+)\/roles$/);
+  if (method === 'PATCH' && iamRolesMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    let userId: string;
+    try {
+      userId = decodeURIComponent(iamRolesMatch[1]);
+    } catch {
+      return errorJson(400, 'Invalid user id');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validatePatchIamUserRolesInput(payload);
+      const result = await patchIamUserRoles(userId, input);
+      if (!result) {
+        return errorJson(500, 'Patch IAM roles failed');
+      }
+      return json(200, { ok: true, user: result.user });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'IAM_USER_NOT_FOUND') {
+        return errorJson(404, 'IAM user not found');
+      }
+      if (error instanceof Error && error.message === 'IAM_GROUP_NOT_FOUND') {
+        return errorJson(400, 'Configured IAM role group not found');
+      }
+      if (error instanceof Error && error.message === 'IAM_USER_POOL_NOT_CONFIGURED') {
+        return errorJson(500, 'IAM is not configured');
+      }
+      return errorJson(500, 'Patch IAM roles failed');
+    }
+  }
+
+  const iamStatusMatch = path.match(/^\/admin\/iam\/users\/([^/]+)\/status$/);
+  if (method === 'PATCH' && iamStatusMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    let userId: string;
+    try {
+      userId = decodeURIComponent(iamStatusMatch[1]);
+    } catch {
+      return errorJson(400, 'Invalid user id');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validatePatchIamUserStatusInput(payload);
+      const result = await patchIamUserStatus(userId, input);
+      if (!result) {
+        return errorJson(500, 'Patch IAM status failed');
+      }
+      return json(200, { ok: true, user: result.user });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'IAM_USER_NOT_FOUND') {
+        return errorJson(404, 'IAM user not found');
+      }
+      if (error instanceof Error && error.message === 'IAM_USER_POOL_NOT_CONFIGURED') {
+        return errorJson(500, 'IAM is not configured');
+      }
+      return errorJson(500, 'Patch IAM status failed');
     }
   }
 

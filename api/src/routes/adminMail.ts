@@ -1,11 +1,12 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { and, eq, inArray, isNull, or, SQL } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { emailOutbox, entry, event, eventClass, invoice, person } from '../db/schema';
+import { emailOutbox, entry, entryEmailVerification, event, eventClass, invoice, person } from '../db/schema';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { writeAuditLog } from '../audit/log';
 import { getTemplateVersion } from '../mail/templateStore';
+import { buildPublicVerificationUrl } from '../mail/verificationUrl';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
@@ -59,7 +60,8 @@ const lifecycleSchema = z.object({
     'waitlist'
   ]),
   templateVersion: z.number().int().positive().optional(),
-  sendAfter: z.string().datetime().optional()
+  sendAfter: z.string().datetime().optional(),
+  allowDuplicate: z.boolean().optional().default(false)
 });
 
 const broadcastSchema = z.object({
@@ -89,10 +91,27 @@ type LifecycleInput = z.infer<typeof lifecycleSchema>;
 type BroadcastInput = z.infer<typeof broadcastSchema>;
 type ListOutboxInput = z.infer<typeof listOutboxSchema>;
 
+export class DuplicateRequestError extends Error {
+  public readonly existingOutboxId: string | null;
+  public readonly blockedUntil: string | null;
+
+  constructor(existingOutboxId: string | null, blockedUntil: string | null) {
+    super('DUPLICATE_REQUEST');
+    this.existingOutboxId = existingOutboxId;
+    this.blockedUntil = blockedUntil;
+  }
+}
+
 type RecipientTarget = {
   email: string;
   driverPersonId: string | null;
   entryId: string | null;
+};
+
+type RegistrationContext = {
+  entryId: string | null;
+  eventName: string | null;
+  driverName: string | null;
 };
 
 const buildDedupeKey = (
@@ -120,6 +139,122 @@ const buildDedupeKey = (
 const toIsoDate = (value: string | undefined): Date => (value ? new Date(value) : new Date());
 
 const templateKeyFromEventType = (eventType: LifecycleInput['eventType']): string => eventType;
+
+const findOutboxByIdempotencyKey = async (idempotencyKey: string) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: emailOutbox.id,
+      sendAfter: emailOutbox.sendAfter
+    })
+    .from(emailOutbox)
+    .where(eq(emailOutbox.idempotencyKey, idempotencyKey))
+    .limit(1);
+  return rows[0] ?? null;
+};
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
+const upsertEntryVerificationToken = async (entryId: string, seed: string): Promise<string> => {
+  const db = await getDb();
+  const now = new Date();
+  const existingRows = await db
+    .select({
+      token: entryEmailVerification.token,
+      expiresAt: entryEmailVerification.expiresAt
+    })
+    .from(entryEmailVerification)
+    .where(eq(entryEmailVerification.entryId, entryId))
+    .limit(1);
+  const existing = existingRows[0];
+  if (existing && existing.expiresAt > now) {
+    return existing.token;
+  }
+
+  const token = createHash('sha256').update(`${randomUUID()}:${seed}:${Date.now()}`).digest('hex');
+  const expiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24);
+
+  await db
+    .insert(entryEmailVerification)
+    .values({
+      entryId,
+      token,
+      expiresAt,
+      verifiedAt: null,
+      createdAt: now
+    })
+    .onConflictDoUpdate({
+      target: entryEmailVerification.entryId,
+      set: {
+        token,
+        expiresAt,
+        verifiedAt: null,
+        createdAt: now
+      }
+    });
+
+  return token;
+};
+
+const resolveRegistrationContext = async (
+  eventId: string,
+  target: RecipientTarget,
+  templateData: Record<string, unknown> | undefined
+): Promise<RegistrationContext> => {
+  const db = await getDb();
+  const explicitEntryId = isNonEmptyString(templateData?.entryId) ? templateData.entryId : null;
+  const candidateEntryId = explicitEntryId ?? target.entryId;
+
+  if (candidateEntryId) {
+    const rows = await db
+      .select({
+        entryId: entry.id,
+        eventName: event.name,
+        driverFirstName: person.firstName,
+        driverLastName: person.lastName
+      })
+      .from(entry)
+      .innerJoin(event, eq(entry.eventId, event.id))
+      .innerJoin(person, eq(entry.driverPersonId, person.id))
+      .where(and(eq(entry.id, candidateEntryId), eq(entry.eventId, eventId)))
+      .limit(1);
+    const row = rows[0];
+    if (row) {
+      return {
+        entryId: row.entryId,
+        eventName: row.eventName,
+        driverName: `${row.driverFirstName} ${row.driverLastName}`.trim()
+      };
+    }
+  }
+
+  const rows = await db
+    .select({
+      entryId: entry.id,
+      eventName: event.name,
+      driverFirstName: person.firstName,
+      driverLastName: person.lastName
+    })
+    .from(entry)
+    .innerJoin(event, eq(entry.eventId, event.id))
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .where(and(eq(entry.eventId, eventId), eq(person.email, target.email)))
+    .limit(1);
+  const row = rows[0];
+  if (!row) {
+    return {
+      entryId: candidateEntryId,
+      eventName: isNonEmptyString(templateData?.eventName) ? templateData.eventName : null,
+      driverName: isNonEmptyString(templateData?.driverName) ? templateData.driverName : null
+    };
+  }
+  return {
+    entryId: row.entryId,
+    eventName: row.eventName,
+    driverName: `${row.driverFirstName} ${row.driverLastName}`.trim()
+  };
+};
 
 const resolveTemplate = async (
   templateKey: string,
@@ -301,27 +436,48 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
   const template = await resolveTemplate(input.templateId, input.templateVersion, input.subject);
   const sendAfter = toIsoDate(input.sendAfter);
 
-  const outboxRows = targets.map((target) => ({
-    toEmail: target.email,
-    templateData: {
-      ...(input.templateData ?? {}),
-      driverPersonId: target.driverPersonId,
-      entryId: target.entryId
-    },
-    idempotencyKey: buildDedupeKey(
-      'mail',
-      input.eventId,
-      template.templateKey,
-      template.templateVersion,
-      target.email,
-      {
-        sendAfter: sendAfter.toISOString(),
-        templateData: input.templateData ?? null,
+  const outboxRows = await Promise.all(
+    targets.map(async (target) => {
+      let templateData: Record<string, unknown> = {
+        ...(input.templateData ?? {}),
         driverPersonId: target.driverPersonId,
         entryId: target.entryId
+      };
+
+      if (template.templateKey === 'registration_received') {
+        const context = await resolveRegistrationContext(input.eventId, target, input.templateData);
+        if (context.entryId) {
+          const token = await upsertEntryVerificationToken(context.entryId, target.email);
+          templateData = {
+            ...templateData,
+            entryId: context.entryId,
+            eventName: context.eventName,
+            driverName: context.driverName,
+            verificationToken: token,
+            verificationUrl: buildPublicVerificationUrl(context.entryId, token)
+          };
+        }
       }
-    )
-  }));
+
+      return {
+        toEmail: target.email,
+        templateData,
+        idempotencyKey: buildDedupeKey(
+          'mail',
+          input.eventId,
+          template.templateKey,
+          template.templateVersion,
+          target.email,
+          {
+            sendAfter: sendAfter.toISOString(),
+            templateData,
+            driverPersonId: target.driverPersonId,
+            entryId: target.entryId
+          }
+        )
+      };
+    })
+  );
 
   await insertOutboxRows(
     input.eventId,
@@ -480,7 +636,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   const row = rows[0];
   const email = row.email as string;
   const driverName = `${row.firstName} ${row.lastName}`;
-  const templateData = {
+  let templateData: Record<string, unknown> = {
     eventType: input.eventType,
     eventName: row.eventName,
     className: row.className,
@@ -495,30 +651,60 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     paymentRecipient: process.env.PAYMENT_RECIPIENT ?? ''
   };
 
-  await insertOutboxRows(
+  if (template.templateKey === 'registration_received') {
+    const token = await upsertEntryVerificationToken(row.entryId, email);
+    templateData = {
+      ...templateData,
+      verificationToken: token,
+      verificationUrl: buildPublicVerificationUrl(row.entryId, token)
+    };
+  }
+
+  const lifecycleDedupeKey = buildDedupeKey(
+    'lifecycle',
     input.eventId,
     template.templateKey,
     template.templateVersion,
-    template.subjectTemplate,
-    sendAfter,
-    [
-      {
-        toEmail: email,
-        templateData,
-        idempotencyKey: buildDedupeKey(
-          'lifecycle',
-          input.eventId,
-          template.templateKey,
-          template.templateVersion,
-          email,
-          {
-            entryId: row.entryId,
-            eventType: input.eventType
-          }
-        )
-      }
-    ]
+    email,
+    {
+      entryId: row.entryId,
+      eventType: input.eventType
+    }
   );
+
+  if (!input.allowDuplicate) {
+    const existing = await findOutboxByIdempotencyKey(lifecycleDedupeKey);
+    if (existing) {
+      throw new DuplicateRequestError(existing.id, existing.sendAfter.toISOString());
+    }
+  }
+
+  const idempotencyKey = input.allowDuplicate
+    ? `${lifecycleDedupeKey}:allowDuplicate:${Date.now()}:${randomUUID()}`
+    : lifecycleDedupeKey;
+
+  try {
+    await insertOutboxRows(
+      input.eventId,
+      template.templateKey,
+      template.templateVersion,
+      template.subjectTemplate,
+      sendAfter,
+      [
+        {
+          toEmail: email,
+          templateData,
+          idempotencyKey
+        }
+      ]
+    );
+  } catch (error) {
+    if (!input.allowDuplicate && error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
+      const existing = await findOutboxByIdempotencyKey(lifecycleDedupeKey);
+      throw new DuplicateRequestError(existing?.id ?? null, existing?.sendAfter?.toISOString() ?? null);
+    }
+    throw error;
+  }
 
   await writeAuditLog(db as never, {
     eventId: input.eventId,

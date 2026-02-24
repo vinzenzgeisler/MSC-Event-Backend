@@ -12,6 +12,7 @@
     "seed:dev-current-event": "node scripts/seed-dev-current-event.js"
   },
   "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.933.0",
     "@aws-sdk/client-s3": "^3.645.0",
     "@aws-sdk/client-secrets-manager": "^3.645.0",
     "@aws-sdk/client-ses": "^3.645.0",

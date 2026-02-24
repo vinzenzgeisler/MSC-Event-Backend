@@ -6,6 +6,7 @@ const allowedRoleSet = new Set<string>(allowedRoles);
 
 export type AuthContext = {
   sub: string | null;
+  email: string | null;
   groups: AllowedRole[];
 };
 
@@ -50,6 +51,7 @@ export const getAuthContext = (event: APIGatewayProxyEventV2): AuthContext => {
 
   return {
     sub: typeof claims.sub === 'string' ? claims.sub : null,
+    email: typeof claims.email === 'string' ? claims.email : null,
     groups
   };
 };

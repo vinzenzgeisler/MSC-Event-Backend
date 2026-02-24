@@ -2,7 +2,7 @@ import { and, asc, eq, sql, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { classPricingRule, entry, eventPricingRule, invoice, invoicePayment } from '../db/schema';
+import { classPricingRule, entry, event, eventClass, eventPricingRule, invoice, invoicePayment } from '../db/schema';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
@@ -118,6 +118,53 @@ export const putPricingRules = async (eventId: string, input: PricingRulesInput,
       }
     });
   });
+};
+
+export const getPricingRules = async (eventId: string) => {
+  const db = await getDb();
+  const eventRows = await db.select({ id: event.id }).from(event).where(eq(event.id, eventId)).limit(1);
+  if (eventRows.length === 0) {
+    throw new Error('EVENT_NOT_FOUND');
+  }
+
+  const ruleRows = await db
+    .select({
+      earlyDeadline: eventPricingRule.earlyDeadline,
+      lateFeeCents: eventPricingRule.lateFeeCents,
+      secondVehicleDiscountCents: eventPricingRule.secondVehicleDiscountCents,
+      currency: eventPricingRule.currency
+    })
+    .from(eventPricingRule)
+    .where(eq(eventPricingRule.eventId, eventId))
+    .limit(1);
+  const rules = ruleRows[0];
+  if (!rules) {
+    throw new Error('PRICING_RULES_NOT_FOUND');
+  }
+
+  const classRows = await db
+    .select({
+      classId: eventClass.id,
+      className: eventClass.name,
+      baseFeeCents: classPricingRule.baseFeeCents
+    })
+    .from(eventClass)
+    .leftJoin(classPricingRule, and(eq(classPricingRule.eventId, eventId), eq(classPricingRule.classId, eventClass.id)))
+    .where(eq(eventClass.eventId, eventId))
+    .orderBy(asc(eventClass.name));
+
+  return {
+    eventId,
+    earlyDeadline: rules.earlyDeadline,
+    lateFeeCents: rules.lateFeeCents,
+    secondVehicleDiscountCents: rules.secondVehicleDiscountCents,
+    currency: rules.currency,
+    classRules: classRows.map((row) => ({
+      classId: row.classId,
+      className: row.className,
+      baseFeeCents: row.baseFeeCents ?? 0
+    }))
+  };
 };
 
 const buildPricingSnapshot = (

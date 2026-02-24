@@ -7,6 +7,7 @@ import { entry, entryEmailVerification, event, eventClass, person, vehicle, vehi
 import { getPresignedAssetsUploadUrl, doesAssetObjectExist } from '../docs/storage';
 import { normalizeStartNumber } from '../domain/startNumber';
 import { isPgUniqueViolation } from '../http/dbErrors';
+import { buildPublicVerificationUrl } from '../mail/verificationUrl';
 import { queueMail } from './adminMail';
 
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -285,6 +286,18 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
       if (input.vehicle.vehicleType && clazz.vehicleType !== input.vehicle.vehicleType) {
         throw new Error('CLASS_VEHICLE_TYPE_MISMATCH');
       }
+      const eventRows = await tx
+        .select({
+          id: event.id,
+          name: event.name
+        })
+        .from(event)
+        .where(eq(event.id, input.eventId))
+        .limit(1);
+      const currentEvent = eventRows[0];
+      if (!currentEvent) {
+        throw new Error('EVENT_NOT_FOUND');
+      }
 
       const driver = await upsertPersonByEmail(input.driver);
 
@@ -376,6 +389,8 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
           checkinIdVerified: false,
           techStatus: 'pending',
           specialNotes: input.driver.specialNotes ?? input.specialNotes ?? null,
+          confirmationMailSentAt: null,
+          confirmationMailVerifiedAt: null,
           consentTermsAccepted: input.consent.termsAccepted,
           consentPrivacyAccepted: input.consent.privacyAccepted,
           consentMediaAccepted: input.consent.mediaAccepted,
@@ -417,10 +432,13 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
 
       return {
         entryId: createdEntry.id,
-        registrationStatus: createdEntry.registrationStatus
+        registrationStatus: createdEntry.registrationStatus,
+        eventName: currentEvent.name
       };
     });
 
+    const verificationUrl = buildPublicVerificationUrl(created.entryId, token);
+    const { eventName, ...createdEntryPublic } = created;
     let confirmationMailSent = false;
     try {
       const queued = await queueMail(
@@ -429,8 +447,11 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
           templateId: 'registration_received',
           recipientEmails: [input.driver.email],
           templateData: {
+            eventName,
+            driverName: `${input.driver.firstName} ${input.driver.lastName}`.trim(),
             entryId: created.entryId,
-            verificationToken: token
+            verificationToken: token,
+            verificationUrl
           }
         },
         null
@@ -450,7 +471,7 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
     }
 
     return {
-      ...created,
+      ...createdEntryPublic,
       verificationToken: token,
       confirmationMailSent
     };

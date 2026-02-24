@@ -2,7 +2,7 @@ import { and, asc, eq, ilike, or, sql, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { auditLog, document, entry, eventClass, invoice, person, vehicle } from '../db/schema';
+import { auditLog, document, entry, eventClass, invoice, invoicePayment, person, vehicle } from '../db/schema';
 import { getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
@@ -79,10 +79,10 @@ const getVehicleThumbUrl = async (imageS3Key: string | null): Promise<string | n
 
 const assertAcceptanceTransitionAllowed = (from: EntryStatusPatch['acceptanceStatus'], to: EntryStatusPatch['acceptanceStatus']) => {
   const allowed: Record<EntryStatusPatch['acceptanceStatus'], EntryStatusPatch['acceptanceStatus'][]> = {
-    pending: ['pending', 'shortlist', 'accepted', 'rejected'],
-    shortlist: ['pending', 'shortlist', 'accepted', 'rejected'],
-    accepted: ['accepted', 'shortlist', 'rejected'],
-    rejected: ['rejected', 'shortlist', 'accepted']
+    pending: ['shortlist', 'accepted', 'rejected'],
+    shortlist: ['pending', 'accepted', 'rejected'],
+    accepted: ['shortlist', 'rejected'],
+    rejected: ['shortlist', 'accepted']
   };
   if (!allowed[from].includes(to)) {
     throw new Error('INVALID_STATUS_TRANSITION');
@@ -475,7 +475,8 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
       {
         eventId: existing.eventId,
         entryId,
-        eventType: input.lifecycleEventType
+        eventType: input.lifecycleEventType,
+        allowDuplicate: false
       },
       actorUserId
     );
@@ -574,6 +575,94 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
   });
 
   return updated ?? null;
+};
+
+export const deleteEntry = async (entryId: string, actorUserId: string | null) => {
+  const db = await getDb();
+
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        id: entry.id,
+        eventId: entry.eventId,
+        driverPersonId: entry.driverPersonId,
+        classId: entry.classId,
+        startNumberNorm: entry.startNumberNorm,
+        registrationStatus: entry.registrationStatus,
+        acceptanceStatus: entry.acceptanceStatus,
+        checkinIdVerified: entry.checkinIdVerified,
+        techStatus: entry.techStatus,
+        invoiceId: invoice.id,
+        invoicePaymentStatus: invoice.paymentStatus
+      })
+      .from(entry)
+      .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+      .where(eq(entry.id, entryId))
+      .limit(1);
+
+    const existing = rows[0];
+    if (!existing) {
+      return null;
+    }
+
+    await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
+
+    if (existing.checkinIdVerified) {
+      throw new Error('ENTRY_DELETE_FORBIDDEN_CHECKIN');
+    }
+    if (existing.techStatus !== 'pending') {
+      throw new Error('ENTRY_DELETE_FORBIDDEN_TECH');
+    }
+
+    const paymentRows =
+      existing.invoiceId === null
+        ? [{ count: 0 }]
+        : await tx
+            .select({
+              count: sql<number>`count(*)::int`
+            })
+            .from(invoicePayment)
+            .where(eq(invoicePayment.invoiceId, existing.invoiceId))
+            .limit(1);
+    const paymentCount = Number(paymentRows[0]?.count ?? 0);
+
+    if (existing.invoicePaymentStatus === 'paid' || paymentCount > 0) {
+      throw new Error('ENTRY_DELETE_FORBIDDEN_PAYMENT');
+    }
+
+    await tx.delete(entry).where(eq(entry.id, entryId));
+
+    const remainingRows = await tx
+      .select({
+        count: sql<number>`count(*)::int`
+      })
+      .from(entry)
+      .where(and(eq(entry.eventId, existing.eventId), eq(entry.driverPersonId, existing.driverPersonId)))
+      .limit(1);
+    const remainingEntriesForDriver = Number(remainingRows[0]?.count ?? 0);
+
+    if (existing.invoiceId && remainingEntriesForDriver === 0 && paymentCount === 0) {
+      await tx.delete(invoice).where(eq(invoice.id, existing.invoiceId));
+    }
+
+    await writeAuditLog(tx as never, {
+      eventId: existing.eventId,
+      actorUserId,
+      action: 'entry_deleted',
+      entityType: 'entry',
+      entityId: entryId,
+      payload: {
+        classId: existing.classId,
+        driverPersonId: existing.driverPersonId,
+        registrationStatus: existing.registrationStatus,
+        acceptanceStatus: existing.acceptanceStatus,
+        startNumberNorm: existing.startNumberNorm,
+        invoiceRemoved: Boolean(existing.invoiceId && remainingEntriesForDriver === 0 && paymentCount === 0)
+      }
+    });
+
+    return { deletedEntryId: entryId };
+  });
 };
 
 export const validateListEntriesQuery = (query: Record<string, string | undefined>) =>

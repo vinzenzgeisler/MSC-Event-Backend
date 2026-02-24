@@ -115,6 +115,15 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const method = event.requestContext.http.method;
   const path = event.requestContext.http.path;
   const stage = process.env.STAGE ?? 'dev';
+  const adminAuth = path.startsWith('/admin/') ? getAuthContext(event) : null;
+
+  if (adminAuth && !adminAuth.sub) {
+    return errorJson(401, 'Unauthorized');
+  }
+
+  if (adminAuth && hasGroup(adminAuth, 'admin') && !adminAuth.mfaAuthenticated) {
+    return errorJson(403, 'MFA required for admin role', undefined, 'MFA_REQUIRED');
+  }
 
   if (method === 'GET' && path === '/health') {
     return json(200, { ok: true, stage });
@@ -332,7 +341,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       ok: true,
       sub: auth.sub,
       email: auth.email,
-      roles: auth.groups
+      roles: auth.groups,
+      mfaAuthenticated: auth.mfaAuthenticated
     });
   }
 

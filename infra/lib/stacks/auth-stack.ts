@@ -1,4 +1,4 @@
-import { CfnOutput, Stack, StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, Stack, StackProps } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 import { StageConfig } from '../config/types';
@@ -18,6 +18,11 @@ export class AuthStack extends Stack {
     this.userPool = new cognito.UserPool(this, 'UserPool', {
       userPoolName: `${props.config.prefix}-user-pool`,
       selfSignUpEnabled: false,
+      mfa: cognito.Mfa.OPTIONAL,
+      mfaSecondFactor: {
+        otp: true,
+        sms: false
+      },
       signInAliases: {
         email: true
       },
@@ -65,7 +70,11 @@ export class AuthStack extends Stack {
       },
       supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
       generateSecret: false,
-      preventUserExistenceErrors: true
+      preventUserExistenceErrors: true,
+      accessTokenValidity: Duration.minutes(15),
+      idTokenValidity: Duration.minutes(15),
+      refreshTokenValidity: Duration.days(1),
+      enableTokenRevocation: true
     });
 
     const userPoolDomain = this.userPool.addDomain('UserPoolDomain', {

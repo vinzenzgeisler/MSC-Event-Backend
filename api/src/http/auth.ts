@@ -8,6 +8,55 @@ export type AuthContext = {
   sub: string | null;
   email: string | null;
   groups: AllowedRole[];
+  mfaAuthenticated: boolean;
+};
+
+const parseClaimAsStringArray = (value: unknown): string[] => {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter((item) => item.length > 0);
+  }
+  const raw = String(value).trim();
+  if (!raw) {
+    return [];
+  }
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item).trim()).filter((item) => item.length > 0);
+      }
+    } catch {
+      // Fall through to split parsing.
+    }
+  }
+  return raw
+    .split(/[,\s]+/)
+    .map((item) => item.trim().replace(/^\[|\]$/g, '').replace(/^"|"$/g, ''))
+    .filter((item) => item.length > 0);
+};
+
+const isMfaAuthenticated = (claims: Record<string, unknown>): boolean => {
+  const amrValues = [
+    ...parseClaimAsStringArray(claims.amr),
+    ...parseClaimAsStringArray(claims['cognito:amr'])
+  ].map((value) => value.toLowerCase());
+
+  if (amrValues.some((value) => value === 'mfa' || value.includes('mfa') || value === 'totp' || value === 'otp')) {
+    return true;
+  }
+
+  const explicitBoolean = claims.mfa_authenticated;
+  if (typeof explicitBoolean === 'boolean') {
+    return explicitBoolean;
+  }
+  if (typeof explicitBoolean === 'string') {
+    return explicitBoolean.toLowerCase() === 'true';
+  }
+
+  return false;
 };
 
 export const getAuthContext = (event: APIGatewayProxyEventV2): AuthContext => {
@@ -52,7 +101,8 @@ export const getAuthContext = (event: APIGatewayProxyEventV2): AuthContext => {
   return {
     sub: typeof claims.sub === 'string' ? claims.sub : null,
     email: typeof claims.email === 'string' ? claims.email : null,
-    groups
+    groups,
+    mfaAuthenticated: isMfaAuthenticated(claims)
   };
 };
 

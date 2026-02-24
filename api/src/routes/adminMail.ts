@@ -448,13 +448,17 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         const context = await resolveRegistrationContext(input.eventId, target, input.templateData);
         if (context.entryId) {
           const token = await upsertEntryVerificationToken(context.entryId, target.email);
+          const existingVerificationUrl = isNonEmptyString(templateData.verificationUrl)
+            ? templateData.verificationUrl
+            : null;
+          const generatedVerificationUrl = buildPublicVerificationUrl(context.entryId, token);
           templateData = {
             ...templateData,
             entryId: context.entryId,
             eventName: context.eventName,
             driverName: context.driverName,
             verificationToken: token,
-            verificationUrl: buildPublicVerificationUrl(context.entryId, token)
+            verificationUrl: generatedVerificationUrl ?? existingVerificationUrl
           };
         }
       }
@@ -653,10 +657,12 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
 
   if (template.templateKey === 'registration_received') {
     const token = await upsertEntryVerificationToken(row.entryId, email);
+    const existingVerificationUrl = isNonEmptyString(templateData.verificationUrl) ? templateData.verificationUrl : null;
+    const generatedVerificationUrl = buildPublicVerificationUrl(row.entryId, token);
     templateData = {
       ...templateData,
       verificationToken: token,
-      verificationUrl: buildPublicVerificationUrl(row.entryId, token)
+      verificationUrl: generatedVerificationUrl ?? existingVerificationUrl
     };
   }
 

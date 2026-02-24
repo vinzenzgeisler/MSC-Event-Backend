@@ -22,6 +22,33 @@ interface ApiStackProps extends StackProps {
   storageStack: StorageStack;
 }
 
+const firstNonEmpty = (...values: Array<string | undefined>): string | undefined => {
+  for (const value of values) {
+    if (value && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+};
+
+const deriveVerifyBaseUrlFromCallbackUrls = (callbackUrls: string | undefined): string | undefined => {
+  if (!callbackUrls) {
+    return undefined;
+  }
+  const firstUrl = callbackUrls
+    .split(',')
+    .map((item) => item.trim())
+    .find((item) => item.length > 0);
+  if (!firstUrl) {
+    return undefined;
+  }
+  try {
+    return new URL('/anmeldung/verify', firstUrl).toString();
+  } catch {
+    return undefined;
+  }
+};
+
 class SharedPermissionHttpLambdaIntegration extends apigwv2.HttpRouteIntegration {
   constructor(id: string, private readonly handler: lambda.IFunction) {
     super(id);
@@ -59,10 +86,17 @@ export class ApiStack extends Stack {
     const dbUser = props.config.dbUsername;
     const dbResourceId = props.dataStack.dbInstance.instanceResourceId;
     const dbConnectArn = `arn:aws:rds-db:${dbRegion}:${Stack.of(this).account}:dbuser:${dbResourceId}/${dbUser}`;
-    const publicVerifyBaseUrl =
-      props.config.stage === 'prod'
-        ? process.env.PUBLIC_VERIFY_BASE_URL_PROD ?? process.env.PUBLIC_VERIFY_BASE_URL ?? ''
-        : process.env.PUBLIC_VERIFY_BASE_URL_DEV ?? process.env.PUBLIC_VERIFY_BASE_URL ?? '';
+    const stageSuffix = props.config.stage === 'prod' ? 'PROD' : 'DEV';
+    const explicitPublicVerifyBaseUrl = firstNonEmpty(
+      process.env[`PUBLIC_VERIFY_BASE_URL_${stageSuffix}`],
+      process.env.PUBLIC_VERIFY_BASE_URL
+    );
+    const callbackUrls = firstNonEmpty(
+      process.env[`COGNITO_CALLBACK_URLS_${stageSuffix}`],
+      process.env.COGNITO_CALLBACK_URLS
+    );
+    const fallbackPublicVerifyBaseUrl = deriveVerifyBaseUrlFromCallbackUrls(callbackUrls);
+    const publicVerifyBaseUrl = explicitPublicVerifyBaseUrl ?? fallbackPublicVerifyBaseUrl ?? '';
     const lambdaVpcConfig = props.config.apiInVpc
       ? {
           vpc: props.dataStack.vpc,

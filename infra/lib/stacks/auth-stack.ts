@@ -1,29 +1,11 @@
 import { CfnOutput, Stack, StackProps } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
+import { StageConfig } from '../config/types';
 
 interface AuthStackProps extends StackProps {
-  prefix: string;
-  stage: 'dev' | 'prod';
+  config: StageConfig;
 }
-
-const parseCsvEnv = (value: string | undefined): string[] =>
-  (value ?? '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-
-const getStageEnv = (name: string, stage: 'dev' | 'prod'): string | undefined => {
-  const stageValue = process.env[`${name}_${stage.toUpperCase()}`];
-  if (stageValue && stageValue.trim().length > 0) {
-    return stageValue;
-  }
-  const fallback = process.env[name];
-  if (fallback && fallback.trim().length > 0) {
-    return fallback;
-  }
-  return undefined;
-};
 
 export class AuthStack extends Stack {
   public readonly userPool: cognito.UserPool;
@@ -34,7 +16,7 @@ export class AuthStack extends Stack {
     super(scope, id, props);
 
     this.userPool = new cognito.UserPool(this, 'UserPool', {
-      userPoolName: `${props.prefix}-user-pool`,
+      userPoolName: `${props.config.prefix}-user-pool`,
       selfSignUpEnabled: false,
       signInAliases: {
         email: true
@@ -48,28 +30,27 @@ export class AuthStack extends Stack {
       }
     });
 
-    const callbackUrls = parseCsvEnv(getStageEnv('COGNITO_CALLBACK_URLS', props.stage));
-    const logoutUrls = parseCsvEnv(getStageEnv('COGNITO_LOGOUT_URLS', props.stage));
+    const callbackUrls = props.config.cognitoCallbackUrls;
+    const logoutUrls = props.config.cognitoLogoutUrls;
     if (callbackUrls.length === 0) {
-      throw new Error(`Missing Cognito callback URLs for stage ${props.stage}. Set COGNITO_CALLBACK_URLS_${props.stage.toUpperCase()} or COGNITO_CALLBACK_URLS.`);
+      throw new Error(
+        `Missing cognitoCallbackUrls in infra/lib/config/${props.config.stage}.ts.`
+      );
     }
     if (logoutUrls.length === 0) {
-      throw new Error(`Missing Cognito logout URLs for stage ${props.stage}. Set COGNITO_LOGOUT_URLS_${props.stage.toUpperCase()} or COGNITO_LOGOUT_URLS.`);
+      throw new Error(
+        `Missing cognitoLogoutUrls in infra/lib/config/${props.config.stage}.ts.`
+      );
     }
 
-    const defaultDomainPrefix = `${props.prefix}-auth`
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, '')
-      .slice(0, 63);
-    const configuredDomainPrefix = getStageEnv('COGNITO_DOMAIN_PREFIX', props.stage);
-    const domainPrefix = (configuredDomainPrefix ?? defaultDomainPrefix).toLowerCase();
+    const domainPrefix = props.config.cognitoDomainPrefix.toLowerCase();
     if (!/^[a-z0-9-]{1,63}$/.test(domainPrefix)) {
       throw new Error(`Invalid Cognito domain prefix "${domainPrefix}". Use lowercase letters, numbers and hyphens (1-63 chars).`);
     }
 
     this.userPoolClient = new cognito.UserPoolClient(this, 'UserPoolClient', {
       userPool: this.userPool,
-      userPoolClientName: `${props.prefix}-admin-client`,
+      userPoolClientName: `${props.config.prefix}-admin-client`,
       authFlows: {
         userPassword: true,
         userSrp: true
@@ -105,37 +86,37 @@ export class AuthStack extends Stack {
 
     new CfnOutput(this, 'UserPoolId', {
       value: this.userPool.userPoolId,
-      exportName: `${props.prefix}-user-pool-id`
+      exportName: `${props.config.prefix}-user-pool-id`
     });
 
     new CfnOutput(this, 'UserPoolClientId', {
       value: this.userPoolClient.userPoolClientId,
-      exportName: `${props.prefix}-user-pool-client-id`
+      exportName: `${props.config.prefix}-user-pool-client-id`
     });
 
     new CfnOutput(this, 'UserPoolIssuerUrl', {
       value: this.userPoolIssuerUrl,
-      exportName: `${props.prefix}-user-pool-issuer-url`
+      exportName: `${props.config.prefix}-user-pool-issuer-url`
     });
 
     new CfnOutput(this, 'HostedUiBaseUrl', {
       value: hostedUiBaseUrl,
-      exportName: `${props.prefix}-hosted-ui-base-url`
+      exportName: `${props.config.prefix}-hosted-ui-base-url`
     });
 
     new CfnOutput(this, 'HostedUiAuthorizeUrl', {
       value: `${hostedUiBaseUrl}/oauth2/authorize`,
-      exportName: `${props.prefix}-hosted-ui-authorize-url`
+      exportName: `${props.config.prefix}-hosted-ui-authorize-url`
     });
 
     new CfnOutput(this, 'HostedUiTokenUrl', {
       value: `${hostedUiBaseUrl}/oauth2/token`,
-      exportName: `${props.prefix}-hosted-ui-token-url`
+      exportName: `${props.config.prefix}-hosted-ui-token-url`
     });
 
     new CfnOutput(this, 'HostedUiLogoutUrl', {
       value: `${hostedUiBaseUrl}/logout`,
-      exportName: `${props.prefix}-hosted-ui-logout-url`
+      exportName: `${props.config.prefix}-hosted-ui-logout-url`
     });
   }
 }

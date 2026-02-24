@@ -16,6 +16,12 @@ Dieses Repo ist als npm-Workspace organisiert:
 npm install
 ```
 
+## Konfigurationsmodell (wichtig)
+
+- Stage-spezifische Deploy-Konfiguration liegt in `infra/lib/config/dev.ts` und `infra/lib/config/prod.ts`.
+- OAuth-URLs, Verify-URL, SES-Absender und Assets-CORS werden dort gepflegt.
+- `.env.example` enthält nur noch AWS-Credential-Variablen fuer die CLI.
+
 ## Wichtige Befehle
 
 - `npm run api:build`

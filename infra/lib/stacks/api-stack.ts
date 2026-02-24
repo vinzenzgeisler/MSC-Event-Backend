@@ -22,33 +22,6 @@ interface ApiStackProps extends StackProps {
   storageStack: StorageStack;
 }
 
-const firstNonEmpty = (...values: Array<string | undefined>): string | undefined => {
-  for (const value of values) {
-    if (value && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return undefined;
-};
-
-const deriveVerifyBaseUrlFromCallbackUrls = (callbackUrls: string | undefined): string | undefined => {
-  if (!callbackUrls) {
-    return undefined;
-  }
-  const firstUrl = callbackUrls
-    .split(',')
-    .map((item) => item.trim())
-    .find((item) => item.length > 0);
-  if (!firstUrl) {
-    return undefined;
-  }
-  try {
-    return new URL('/anmeldung/verify', firstUrl).toString();
-  } catch {
-    return undefined;
-  }
-};
-
 class SharedPermissionHttpLambdaIntegration extends apigwv2.HttpRouteIntegration {
   constructor(id: string, private readonly handler: lambda.IFunction) {
     super(id);
@@ -86,17 +59,11 @@ export class ApiStack extends Stack {
     const dbUser = props.config.dbUsername;
     const dbResourceId = props.dataStack.dbInstance.instanceResourceId;
     const dbConnectArn = `arn:aws:rds-db:${dbRegion}:${Stack.of(this).account}:dbuser:${dbResourceId}/${dbUser}`;
-    const stageSuffix = props.config.stage === 'prod' ? 'PROD' : 'DEV';
-    const explicitPublicVerifyBaseUrl = firstNonEmpty(
-      process.env[`PUBLIC_VERIFY_BASE_URL_${stageSuffix}`],
-      process.env.PUBLIC_VERIFY_BASE_URL
-    );
-    const callbackUrls = firstNonEmpty(
-      process.env[`COGNITO_CALLBACK_URLS_${stageSuffix}`],
-      process.env.COGNITO_CALLBACK_URLS
-    );
-    const fallbackPublicVerifyBaseUrl = deriveVerifyBaseUrlFromCallbackUrls(callbackUrls);
-    const publicVerifyBaseUrl = explicitPublicVerifyBaseUrl ?? fallbackPublicVerifyBaseUrl ?? '';
+    const sesFromEmail = props.config.sesFromEmail;
+    const publicVerifyBaseUrl = props.config.publicVerifyBaseUrl;
+    if (!publicVerifyBaseUrl && props.config.stage === 'prod') {
+      throw new Error('Missing publicVerifyBaseUrl in infra/lib/config/prod.ts.');
+    }
     const lambdaVpcConfig = props.config.apiInVpc
       ? {
           vpc: props.dataStack.vpc,
@@ -130,7 +97,7 @@ export class ApiStack extends Stack {
         DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
         COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
         COGNITO_USER_POOL_ID: props.authStack.userPool.userPoolId,
-        SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? '',
+        SES_FROM_EMAIL: sesFromEmail,
         PAYMENT_IBAN: process.env.PAYMENT_IBAN ?? '',
         PAYMENT_BIC: process.env.PAYMENT_BIC ?? '',
         PAYMENT_RECIPIENT: process.env.PAYMENT_RECIPIENT ?? '',
@@ -163,7 +130,7 @@ export class ApiStack extends Stack {
         DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
         DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
         DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
-        SES_FROM_EMAIL: process.env.SES_FROM_EMAIL ?? '',
+        SES_FROM_EMAIL: sesFromEmail,
         EMAIL_WORKER_BATCH_SIZE: '20'
       },
       bundling: {

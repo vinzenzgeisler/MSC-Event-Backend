@@ -23,16 +23,21 @@ cd infra
 npx cdk deploy --all -c stage=dev
 ```
 
-## Cognito Hosted UI (OAuth)
+## Cognito Hosted UI (OAuth) und Verify-Link
 
-Der Auth-Stack erwartet Redirect/Logout-URIs und optional Domain-Prefix per ENV:
+Die Werte werden ueber Stage-Konfigurationsdateien gepflegt:
 
-- `COGNITO_CALLBACK_URLS_DEV` / `COGNITO_LOGOUT_URLS_DEV`
-- `COGNITO_CALLBACK_URLS_PROD` / `COGNITO_LOGOUT_URLS_PROD`
-- optional: `COGNITO_DOMAIN_PREFIX_DEV` / `COGNITO_DOMAIN_PREFIX_PROD`
+- `infra/lib/config/dev.ts`
+- `infra/lib/config/prod.ts`
 
-Format fuer URL-Listen: kommasepariert (CSV), z. B.
-`COGNITO_CALLBACK_URLS_DEV=http://localhost:5173/auth/callback,http://localhost:4173/auth/callback`.
+Relevante Felder:
+
+- `cognitoCallbackUrls`
+- `cognitoLogoutUrls`
+- `cognitoDomainPrefix`
+- `publicVerifyBaseUrl`
+- `sesFromEmail`
+- `assetsCorsAllowedOrigins`
 
 Verwendete Cognito-Gruppen (RBAC): `admin`, `editor`, `viewer`.
 
@@ -69,6 +74,7 @@ Wichtige Schalter:
 - `dbConnectivityMode` (`private` | `public_budget`)
 - `dbUseIamAuth`
 - `dbRequireTls`
+- `devCleanupEnabled`
 
 ## Dev (kostenarm Default)
 

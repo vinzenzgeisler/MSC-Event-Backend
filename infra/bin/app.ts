@@ -37,8 +37,7 @@ if (config.dbConnectivityMode === 'private' && config.dbPublicAccess) {
 
 const authStack = new AuthStack(app, `${config.prefix}-auth-stack`, {
   env: config.env,
-  prefix: config.prefix,
-  stage: config.stage
+  config
 });
 
 const dataStack = needsDataStack

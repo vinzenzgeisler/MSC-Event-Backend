@@ -21,7 +21,7 @@ export class DataStack extends Stack {
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
-    const devCleanupEnabled = process.env.DEV_CLEANUP_ENABLED === 'true';
+    const devCleanupEnabled = props.config.devCleanupEnabled;
 
     this.vpc = new ec2.Vpc(this, 'Vpc', {
       vpcName: `${props.config.prefix}-vpc`,

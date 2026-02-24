@@ -7,7 +7,7 @@
     "infra"
   ],
   "scripts": {
-    "build": "npm run -ws --if-present build",
+    "build": "npm run --workspaces --if-present build",
     "infra:build": "npm --workspace infra run build",
     "synth": "npm --workspace infra run synth",
     "synth:academy": "node scripts/academy-cdk.js academy synth",

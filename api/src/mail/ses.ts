@@ -1,11 +1,12 @@
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 
 const getSesClient = () => new SESClient({});
+const DEFAULT_SES_FROM_EMAIL = 'nennung@msc-oberlausitzer-dreilaendereck.eu';
 
 const getSender = (): string => {
-  const sender = process.env.SES_FROM_EMAIL;
+  const sender = process.env.SES_FROM_EMAIL?.trim();
   if (!sender) {
-    throw new Error('SES_FROM_EMAIL is not set');
+    return DEFAULT_SES_FROM_EMAIL;
   }
   return sender;
 };

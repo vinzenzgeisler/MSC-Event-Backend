@@ -3,6 +3,13 @@ import { StageConfig } from './types';
 export const prodConfig: StageConfig = {
   stage: 'prod',
   prefix: 'dreiecksrennen-prod',
+  cognitoCallbackUrls: [],
+  cognitoLogoutUrls: [],
+  cognitoDomainPrefix: 'dreiecksrennen-prod-auth',
+  sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
+  publicVerifyBaseUrl: '',
+  assetsCorsAllowedOrigins: [],
+  devCleanupEnabled: false,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION ?? 'eu-central-1'

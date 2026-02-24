@@ -7,24 +7,6 @@ interface StorageStackProps extends StackProps {
   config: StageConfig;
 }
 
-const parseCsvEnv = (value: string | undefined): string[] =>
-  (value ?? '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-
-const getStageEnv = (name: string, stage: 'dev' | 'prod'): string | undefined => {
-  const stageValue = process.env[`${name}_${stage.toUpperCase()}`];
-  if (stageValue && stageValue.trim().length > 0) {
-    return stageValue;
-  }
-  const fallback = process.env[name];
-  if (fallback && fallback.trim().length > 0) {
-    return fallback;
-  }
-  return undefined;
-};
-
 export class StorageStack extends Stack {
   public readonly assetsBucket: s3.Bucket;
   public readonly documentsBucket: s3.Bucket;
@@ -33,13 +15,7 @@ export class StorageStack extends Stack {
     super(scope, id, props);
 
     const removalPolicy = props.config.removalPolicy === 'destroy' ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN;
-    const configuredAssetsCorsOrigins = parseCsvEnv(getStageEnv('ASSETS_CORS_ALLOWED_ORIGINS', props.config.stage));
-    const assetsCorsOrigins =
-      configuredAssetsCorsOrigins.length > 0
-        ? configuredAssetsCorsOrigins
-        : props.config.stage === 'dev'
-          ? ['http://localhost:5173', 'http://localhost:4173']
-          : [];
+    const assetsCorsOrigins = props.config.assetsCorsAllowedOrigins;
 
     this.assetsBucket = new s3.Bucket(this, 'AssetsBucket', {
       bucketName: `${props.config.prefix}-assets`,

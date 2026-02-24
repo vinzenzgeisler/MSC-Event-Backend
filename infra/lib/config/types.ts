@@ -1,6 +1,13 @@
 export interface StageConfig {
   stage: 'dev' | 'prod';
   prefix: string;
+  cognitoCallbackUrls: string[];
+  cognitoLogoutUrls: string[];
+  cognitoDomainPrefix: string;
+  sesFromEmail: string;
+  publicVerifyBaseUrl: string;
+  assetsCorsAllowedOrigins: string[];
+  devCleanupEnabled: boolean;
   env?: {
     account?: string;
     region?: string;

@@ -68,7 +68,7 @@
             "description": "Unauthorized"
           },
           "403": {
-            "description": "Forbidden (including MFA_REQUIRED for admin)"
+            "description": "Forbidden"
           }
         }
       }

@@ -18,11 +18,7 @@ export class AuthStack extends Stack {
     this.userPool = new cognito.UserPool(this, 'UserPool', {
       userPoolName: `${props.config.prefix}-user-pool`,
       selfSignUpEnabled: false,
-      mfa: cognito.Mfa.OPTIONAL,
-      mfaSecondFactor: {
-        otp: true,
-        sms: false
-      },
+      mfa: cognito.Mfa.OFF,
       signInAliases: {
         email: true
       },

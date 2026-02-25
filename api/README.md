@@ -89,8 +89,8 @@ Unterstützte Rollen (aus `cognito:groups`): `admin`, `editor`, `viewer`.
 
 Admin-Haertung:
 
-- `admin`-Sessions benötigen MFA (`amr` mit MFA-Indikator), sonst liefert `/admin/*` `403` mit Code `MFA_REQUIRED`.
-- `editor` und `viewer` funktionieren weiterhin ohne MFA.
+- Rollenpruefung erfolgt weiterhin ueber `cognito:groups`.
+- Aktuell ist keine serverseitige MFA-Pflicht aktiv.
 
 Unterstützte Modi:
 

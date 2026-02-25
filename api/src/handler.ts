@@ -121,10 +121,6 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     return errorJson(401, 'Unauthorized');
   }
 
-  if (adminAuth && hasGroup(adminAuth, 'admin') && !adminAuth.mfaAuthenticated) {
-    return errorJson(403, 'MFA required for admin role', undefined, 'MFA_REQUIRED');
-  }
-
   if (method === 'GET' && path === '/health') {
     return json(200, { ok: true, stage });
   }

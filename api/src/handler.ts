@@ -42,9 +42,13 @@ import {
   patchEntryStatus,
   patchEntryTechStatus,
   patchEntryNotes,
+  patchEntryPaymentStatus,
+  patchEntryPaymentAmounts,
   validateEntryStatusPatchInput,
   validateEntryTechStatusPatchInput,
   validateEntryNotesPatchInput,
+  validateEntryPaymentStatusPatchInput,
+  validateEntryPaymentAmountsPatchInput,
   validateListEntriesQuery
 } from './routes/adminEntries';
 import {
@@ -715,11 +719,11 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
       }
-      if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
-        return errorJson(409, 'Duplicate request');
-      }
       if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
         return errorJson(404, 'Template not found');
+      }
+      if (error instanceof Error && error.message === 'ENTRY_NOT_FOUND') {
+        return errorJson(404, 'Entry not found');
       }
       if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
         return errorJson(404, 'Event not found');
@@ -1277,6 +1281,79 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(409, 'Event is read-only');
       }
       return errorJson(500, 'Entry notes update failed');
+    }
+  }
+
+  const entryPaymentStatusMatch = path.match(/^\/admin\/entries\/([^/]+)\/payment-status$/);
+  if (method === 'PATCH' && entryPaymentStatusMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateEntryPaymentStatusPatchInput(payload);
+      const result = await patchEntryPaymentStatus(entryPaymentStatusMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'ENTRY_DELETED') {
+        return errorJson(409, 'Entry is deleted', undefined, 'ENTRY_DELETED');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      return errorJson(500, 'Entry payment status update failed');
+    }
+  }
+
+  const entryPaymentAmountsMatch = path.match(/^\/admin\/entries\/([^/]+)\/payment-amounts$/);
+  if (method === 'PATCH' && entryPaymentAmountsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateEntryPaymentAmountsPatchInput(payload);
+      const result = await patchEntryPaymentAmounts(entryPaymentAmountsMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'PAID_AMOUNT_EXCEEDS_TOTAL') {
+        return errorJson(
+          400,
+          'Validation failed',
+          undefined,
+          'VALIDATION_ERROR',
+          [{ field: 'paidAmountCents', code: 'invalid_range', message: 'paidAmountCents must not exceed totalCents' }]
+        );
+      }
+      if (error instanceof Error && error.message === 'ENTRY_DELETED') {
+        return errorJson(409, 'Entry is deleted', undefined, 'ENTRY_DELETED');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      return errorJson(500, 'Entry payment amount update failed');
     }
   }
 

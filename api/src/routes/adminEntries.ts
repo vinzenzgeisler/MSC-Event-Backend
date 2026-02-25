@@ -54,10 +54,36 @@ const entryNotesPatchSchema = z
     message: 'Provide at least one note field'
   });
 
+const entryPaymentStatusPatchSchema = z.object({
+  paymentStatus: z.literal('paid'),
+  paidAt: z.string().datetime().optional(),
+  note: z.string().max(1000).optional()
+});
+
+const entryPaymentAmountsPatchSchema = z
+  .object({
+    totalCents: z.number().int().min(0).optional(),
+    paidAmountCents: z.number().int().min(0).optional(),
+    note: z.string().max(1000).optional()
+  })
+  .refine((payload) => payload.totalCents !== undefined || payload.paidAmountCents !== undefined, {
+    message: 'Provide at least one of totalCents or paidAmountCents'
+  })
+  .refine(
+    (payload) =>
+      payload.totalCents === undefined || payload.paidAmountCents === undefined || payload.paidAmountCents <= payload.totalCents,
+    {
+      message: 'paidAmountCents must not exceed totalCents',
+      path: ['paidAmountCents']
+    }
+  );
+
 type ListEntriesQuery = z.infer<typeof listEntriesQuerySchema>;
 type EntryStatusPatch = z.infer<typeof entryStatusPatchSchema>;
 type TechStatusPatch = z.infer<typeof techStatusPatchSchema>;
 type EntryNotesPatch = z.infer<typeof entryNotesPatchSchema>;
+type EntryPaymentStatusPatch = z.infer<typeof entryPaymentStatusPatchSchema>;
+type EntryPaymentAmountsPatch = z.infer<typeof entryPaymentAmountsPatchSchema>;
 
 const toVehicleLabel = (make: string | null, model: string | null, startNumberNorm: string | null): string => {
   const label = [make, model].filter((part) => !!part && part.trim().length > 0).join(' ');
@@ -497,7 +523,8 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
     }
   });
 
-  if (input.sendLifecycleMail) {
+  const shouldQueueLifecycleMail = input.sendLifecycleMail && input.acceptanceStatus !== 'shortlist';
+  if (shouldQueueLifecycleMail) {
     if (!input.lifecycleEventType) {
       throw new Error('LIFECYCLE_EVENT_TYPE_REQUIRED');
     }
@@ -605,6 +632,260 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
   });
 
   return updated ?? null;
+};
+
+export const patchEntryPaymentStatus = async (
+  entryId: string,
+  input: EntryPaymentStatusPatch,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const entryRows = await db
+    .select({
+      id: entry.id,
+      eventId: entry.eventId,
+      driverPersonId: entry.driverPersonId,
+      entryFeeCents: entry.entryFeeCents,
+      deletedAt: entry.deletedAt
+    })
+    .from(entry)
+    .where(eq(entry.id, entryId))
+    .limit(1);
+  const current = entryRows[0];
+  if (!current) {
+    return null;
+  }
+  if (current.deletedAt) {
+    throw new Error('ENTRY_DELETED');
+  }
+  await assertEventStatusAllowed(current.eventId, ['open', 'closed']);
+
+  const paidAt = input.paidAt ? new Date(input.paidAt) : new Date();
+  const now = new Date();
+  const invoiceRows = await db
+    .select({
+      id: invoice.id,
+      totalCents: invoice.totalCents,
+      paidAmountCents: invoice.paidAmountCents,
+      paymentStatus: invoice.paymentStatus
+    })
+    .from(invoice)
+    .where(and(eq(invoice.eventId, current.eventId), eq(invoice.driverPersonId, current.driverPersonId)))
+    .limit(1);
+
+  let currentInvoice = invoiceRows[0];
+  if (!currentInvoice) {
+    const [createdInvoice] = await db
+      .insert(invoice)
+      .values({
+        eventId: current.eventId,
+        driverPersonId: current.driverPersonId,
+        totalCents: current.entryFeeCents ?? 0,
+        pricingSnapshot: {
+          source: 'entry_payment_status_patch',
+          entryId: current.id
+        },
+        paymentStatus: 'due',
+        paidAmountCents: 0,
+        updatedAt: now
+      })
+      .returning({
+        id: invoice.id,
+        totalCents: invoice.totalCents,
+        paidAmountCents: invoice.paidAmountCents,
+        paymentStatus: invoice.paymentStatus
+      });
+    if (!createdInvoice) {
+      throw new Error('INVOICE_CREATE_FAILED');
+    }
+    currentInvoice = createdInvoice;
+  }
+
+  if (currentInvoice.paymentStatus !== 'paid') {
+    const amountToRecord = Math.max(0, currentInvoice.totalCents - (currentInvoice.paidAmountCents ?? 0));
+    if (amountToRecord > 0) {
+      await db.insert(invoicePayment).values({
+        invoiceId: currentInvoice.id,
+        amountCents: amountToRecord,
+        paidAt,
+        method: 'other',
+        recordedBy: actorUserId,
+        note: input.note,
+        createdAt: now
+      });
+    }
+  }
+
+  const sumRows = await db
+    .select({
+      paidAmountCents: sql<number>`coalesce(sum(${invoicePayment.amountCents}), 0)`,
+      maxPaidAt: sql<Date | string | null>`max(${invoicePayment.paidAt})`
+    })
+    .from(invoicePayment)
+    .where(eq(invoicePayment.invoiceId, currentInvoice.id));
+
+  const paidAmountCents = sumRows[0]?.paidAmountCents ?? 0;
+  const maxPaidAtRaw = sumRows[0]?.maxPaidAt ?? null;
+  const maxPaidAt = maxPaidAtRaw ? new Date(maxPaidAtRaw) : paidAt;
+  const effectiveTotal = currentInvoice.totalCents ?? 0;
+  const amountOpenCents = Math.max(0, effectiveTotal - paidAmountCents);
+  const effectiveStatus: 'paid' | 'due' = amountOpenCents === 0 ? 'paid' : 'due';
+
+  await db
+    .update(invoice)
+    .set({
+      paidAmountCents,
+      paymentStatus: effectiveStatus,
+      paidAt: effectiveStatus === 'paid' ? maxPaidAt : null,
+      recordedBy: actorUserId,
+      updatedAt: now
+    })
+    .where(eq(invoice.id, currentInvoice.id));
+
+  await writeAuditLog(db as never, {
+    eventId: current.eventId,
+    actorUserId,
+    action: 'entry_payment_status_set',
+    entityType: 'entry',
+    entityId: entryId,
+    payload: {
+      paymentStatus: effectiveStatus,
+      paidAmountCents,
+      amountOpenCents,
+      invoiceId: currentInvoice.id
+    }
+  });
+
+  return {
+    entryId,
+    paymentStatus: effectiveStatus,
+    paidAmountCents,
+    amountOpenCents
+  };
+};
+
+export const patchEntryPaymentAmounts = async (
+  entryId: string,
+  input: EntryPaymentAmountsPatch,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const entryRows = await db
+    .select({
+      id: entry.id,
+      eventId: entry.eventId,
+      driverPersonId: entry.driverPersonId,
+      entryFeeCents: entry.entryFeeCents,
+      deletedAt: entry.deletedAt
+    })
+    .from(entry)
+    .where(eq(entry.id, entryId))
+    .limit(1);
+  const current = entryRows[0];
+  if (!current) {
+    return null;
+  }
+  if (current.deletedAt) {
+    throw new Error('ENTRY_DELETED');
+  }
+  await assertEventStatusAllowed(current.eventId, ['open', 'closed']);
+
+  const now = new Date();
+  const invoiceRows = await db
+    .select({
+      id: invoice.id,
+      totalCents: invoice.totalCents,
+      paidAmountCents: invoice.paidAmountCents
+    })
+    .from(invoice)
+    .where(and(eq(invoice.eventId, current.eventId), eq(invoice.driverPersonId, current.driverPersonId)))
+    .limit(1);
+
+  let currentInvoice = invoiceRows[0];
+  if (!currentInvoice) {
+    const [createdInvoice] = await db
+      .insert(invoice)
+      .values({
+        eventId: current.eventId,
+        driverPersonId: current.driverPersonId,
+        totalCents: current.entryFeeCents ?? 0,
+        pricingSnapshot: {
+          source: 'entry_payment_amounts_patch',
+          entryId: current.id
+        },
+        paymentStatus: 'due',
+        paidAmountCents: 0,
+        updatedAt: now
+      })
+      .returning({
+        id: invoice.id,
+        totalCents: invoice.totalCents,
+        paidAmountCents: invoice.paidAmountCents
+      });
+    if (!createdInvoice) {
+      throw new Error('INVOICE_CREATE_FAILED');
+    }
+    currentInvoice = createdInvoice;
+  }
+
+  const nextTotalCents = input.totalCents ?? currentInvoice.totalCents ?? 0;
+  const nextPaidAmountCents = input.paidAmountCents ?? currentInvoice.paidAmountCents ?? 0;
+  if (nextPaidAmountCents > nextTotalCents) {
+    throw new Error('PAID_AMOUNT_EXCEEDS_TOTAL');
+  }
+
+  if (input.paidAmountCents !== undefined) {
+    await db.delete(invoicePayment).where(eq(invoicePayment.invoiceId, currentInvoice.id));
+    if (nextPaidAmountCents > 0) {
+      await db.insert(invoicePayment).values({
+        invoiceId: currentInvoice.id,
+        amountCents: nextPaidAmountCents,
+        paidAt: now,
+        method: 'other',
+        recordedBy: actorUserId,
+        note: input.note ?? 'manual payment amount adjustment',
+        createdAt: now
+      });
+    }
+  }
+
+  const paymentStatus: 'paid' | 'due' = nextPaidAmountCents >= nextTotalCents ? 'paid' : 'due';
+  const amountOpenCents = Math.max(0, nextTotalCents - nextPaidAmountCents);
+
+  await db
+    .update(invoice)
+    .set({
+      totalCents: nextTotalCents,
+      paidAmountCents: nextPaidAmountCents,
+      paymentStatus,
+      paidAt: paymentStatus === 'paid' ? now : null,
+      recordedBy: actorUserId,
+      updatedAt: now
+    })
+    .where(eq(invoice.id, currentInvoice.id));
+
+  await writeAuditLog(db as never, {
+    eventId: current.eventId,
+    actorUserId,
+    action: 'entry_payment_amounts_set',
+    entityType: 'entry',
+    entityId: entryId,
+    payload: {
+      invoiceId: currentInvoice.id,
+      totalCents: nextTotalCents,
+      paidAmountCents: nextPaidAmountCents,
+      amountOpenCents,
+      paymentStatus
+    }
+  });
+
+  return {
+    entryId,
+    paymentStatus,
+    totalCents: nextTotalCents,
+    paidAmountCents: nextPaidAmountCents,
+    amountOpenCents
+  };
 };
 
 export const deleteEntry = async (entryId: string, actorUserId: string | null) => {
@@ -761,3 +1042,5 @@ export const validateListEntriesQuery = (query: Record<string, string | undefine
 export const validateEntryStatusPatchInput = (payload: unknown) => entryStatusPatchSchema.parse(payload);
 export const validateEntryTechStatusPatchInput = (payload: unknown) => techStatusPatchSchema.parse(payload);
 export const validateEntryNotesPatchInput = (payload: unknown) => entryNotesPatchSchema.parse(payload);
+export const validateEntryPaymentStatusPatchInput = (payload: unknown) => entryPaymentStatusPatchSchema.parse(payload);
+export const validateEntryPaymentAmountsPatchInput = (payload: unknown) => entryPaymentAmountsPatchSchema.parse(payload);

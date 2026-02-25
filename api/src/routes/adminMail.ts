@@ -41,7 +41,8 @@ const queueMailSchema = z
 
 const reminderSchema = z.object({
   eventId: z.string().uuid(),
-  templateId: z.string().min(1),
+  entryId: z.string().uuid(),
+  templateId: z.string().min(1).optional().default('payment_reminder'),
   templateVersion: z.number().int().positive().optional(),
   subject: z.string().min(1).optional(),
   templateData: z.record(z.unknown()).optional(),
@@ -515,79 +516,94 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
 
   const rows = await db
     .select({
+      entryId: entry.id,
       eventId: invoice.eventId,
       invoiceId: invoice.id,
       driverPersonId: invoice.driverPersonId,
       totalCents: invoice.totalCents,
+      paidAmountCents: invoice.paidAmountCents,
+      paymentStatus: invoice.paymentStatus,
       email: person.email,
       firstName: person.firstName,
       lastName: person.lastName,
       eventName: event.name
     })
-    .from(invoice)
-    .innerJoin(person, eq(invoice.driverPersonId, person.id))
-    .innerJoin(event, eq(invoice.eventId, event.id))
-    .where(and(eq(invoice.eventId, input.eventId), eq(invoice.paymentStatus, 'due')));
+    .from(entry)
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .innerJoin(event, eq(entry.eventId, event.id))
+    .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+    .where(and(eq(entry.eventId, input.eventId), eq(entry.id, input.entryId)))
+    .limit(1);
 
-  const targets = dedupeTargets(
-    rows
-      .filter((row) => row.email)
-      .map((row) => ({
-        email: row.email as string,
-        driverPersonId: row.driverPersonId,
-        entryId: null
-      }))
-  );
-  if (targets.length === 0) {
-    return { queued: 0 };
+  const current = rows[0];
+  if (!current) {
+    throw new Error('ENTRY_NOT_FOUND');
   }
 
-  const sourceByEmail = new Map(
-    rows.filter((row) => row.email).map((row) => [
-      (row.email as string).toLowerCase(),
-      {
-        invoiceId: row.invoiceId,
-        driverPersonId: row.driverPersonId,
-        totalCents: row.totalCents,
-        driverName: `${row.firstName} ${row.lastName}`,
-        eventName: row.eventName
-      }
-    ])
-  );
+  if (!current.email) {
+    return { queued: 0, skipped: 1, reason: 'no_recipient', outboxIds: [] as string[] };
+  }
 
-  const outboxRows = targets.map((target) => {
-    const source = sourceByEmail.get(target.email.toLowerCase());
-    const templateData = {
-      ...(input.templateData ?? {}),
-      driverName: source?.driverName ?? null,
-      eventName: source?.eventName ?? null,
-      amountOpenCents: source?.totalCents ?? null
-    };
-    return {
-      toEmail: target.email,
-      templateData,
-      idempotencyKey: buildDedupeKey(
-        'reminder',
-        input.eventId,
-        template.templateKey,
-        template.templateVersion,
-        target.email,
-        {
-          invoiceId: source?.invoiceId ?? null,
-          paymentStatus: 'due'
-        }
-      )
-    };
-  });
+  if (current.paymentStatus === 'paid') {
+    return { queued: 0, skipped: 1, reason: 'not_allowed', outboxIds: [] as string[] };
+  }
 
-  await insertOutboxRows(
+  const amountOpenCents =
+    current.totalCents === null
+      ? null
+      : Math.max(0, current.totalCents - (current.paidAmountCents ?? 0));
+
+  const idempotencyKey = buildDedupeKey(
+    'reminder',
     input.eventId,
     template.templateKey,
     template.templateVersion,
-    template.subjectTemplate,
-    sendAfter,
-    outboxRows
+    current.email,
+    {
+      entryId: current.entryId,
+      paymentStatus: current.paymentStatus ?? 'due'
+    }
   );
+
+  const existing = await db.select({ id: emailOutbox.id }).from(emailOutbox).where(eq(emailOutbox.idempotencyKey, idempotencyKey)).limit(1);
+  if (existing[0]) {
+    return { queued: 0, skipped: 1, reason: 'duplicate', outboxIds: [existing[0].id] };
+  }
+
+  const templateData = {
+    ...(input.templateData ?? {}),
+    entryId: current.entryId,
+    driverPersonId: current.driverPersonId,
+    driverName: `${current.firstName} ${current.lastName}`,
+    eventName: current.eventName,
+    amountOpenCents
+  };
+
+  let createdId: string | null = null;
+  try {
+    const inserted = await db
+      .insert(emailOutbox)
+      .values({
+        eventId: input.eventId,
+        toEmail: current.email,
+        subject: template.subjectTemplate,
+        templateId: template.templateKey,
+        templateVersion: template.templateVersion,
+        templateData,
+        status: 'queued',
+        sendAfter,
+        idempotencyKey,
+        maxAttempts: 5
+      })
+      .returning({ id: emailOutbox.id });
+    createdId = inserted[0]?.id ?? null;
+  } catch (error) {
+    if (isPgUniqueViolation(error)) {
+      const duplicated = await db.select({ id: emailOutbox.id }).from(emailOutbox).where(eq(emailOutbox.idempotencyKey, idempotencyKey)).limit(1);
+      return { queued: 0, skipped: 1, reason: 'duplicate', outboxIds: duplicated[0] ? [duplicated[0].id] : [] };
+    }
+    throw error;
+  }
 
   await writeAuditLog(db as never, {
     eventId: input.eventId,
@@ -595,13 +611,21 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     action: 'payment_reminders_queued',
     entityType: 'email_outbox_batch',
     payload: {
-      queued: outboxRows.length,
+      queued: createdId ? 1 : 0,
+      skipped: createdId ? 0 : 1,
+      reason: createdId ? null : 'duplicate',
+      outboxIds: createdId ? [createdId] : [],
       templateId: template.templateKey,
       templateVersion: template.templateVersion
     }
   });
 
-  return { queued: outboxRows.length };
+  return {
+    queued: createdId ? 1 : 0,
+    skipped: createdId ? 0 : 1,
+    reason: createdId ? undefined : 'duplicate',
+    outboxIds: createdId ? [createdId] : []
+  };
 };
 
 export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: string | null) => {

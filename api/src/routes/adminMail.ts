@@ -63,6 +63,7 @@ const lifecycleSchema = z.object({
   ]),
   templateVersion: z.number().int().positive().optional(),
   sendAfter: z.string().datetime().optional(),
+  includeDriverNote: z.boolean().optional().default(false),
   allowDuplicate: z.boolean().optional().default(false)
 });
 
@@ -678,6 +679,8 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   const normalizedDriverNote = (row.driverNote ?? '').trim();
   const driverNoteBlock =
     normalizedDriverNote.length > 0 ? `\n\nHinweis vom Veranstalter:\n${normalizedDriverNote}` : '';
+  const supportsDriverNoteInLifecycleMail = input.eventType === 'accepted_open_payment' || input.eventType === 'rejected';
+  const includeDriverNoteInLifecycleMail = supportsDriverNoteInLifecycleMail && input.includeDriverNote;
   let templateData: Record<string, unknown> = {
     eventType: input.eventType,
     eventName: row.eventName,
@@ -688,8 +691,8 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     acceptanceStatus: row.acceptanceStatus,
     paymentStatus: row.paymentStatus ?? null,
     amountOpenCents: row.totalCents ?? 0,
-    driverNote: normalizedDriverNote.length > 0 ? normalizedDriverNote : null,
-    driverNoteBlock: input.eventType === 'accepted_open_payment' ? driverNoteBlock : '',
+    driverNote: includeDriverNoteInLifecycleMail && normalizedDriverNote.length > 0 ? normalizedDriverNote : null,
+    driverNoteBlock: includeDriverNoteInLifecycleMail ? driverNoteBlock : '',
     paymentIban: process.env.PAYMENT_IBAN ?? '',
     paymentBic: process.env.PAYMENT_BIC ?? '',
     paymentRecipient: process.env.PAYMENT_RECIPIENT ?? ''

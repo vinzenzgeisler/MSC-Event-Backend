@@ -1897,7 +1897,59 @@
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "eventId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "entryId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "registration_received",
+                      "preselection",
+                      "accepted_open_payment",
+                      "accepted_paid_completed",
+                      "rejected",
+                      "waitlist"
+                    ]
+                  },
+                  "templateVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "sendAfter": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "includeDriverNote": {
+                    "type": "boolean",
+                    "description": "If true, include driver note block for accepted_open_payment/rejected mails when a note exists."
+                  },
+                  "allowDuplicate": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "eventId",
+                  "entryId",
+                  "eventType"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
       }
     },
     "/admin/mail/broadcast/queue": {
@@ -3893,7 +3945,49 @@
             "bearerAuth": []
           }
         ],
-        "description": "For acceptanceStatus=shortlist no lifecycle mail is sent, even when sendLifecycleMail=true."
+        "description": "Updates acceptance status. For acceptanceStatus=shortlist no lifecycle mail is sent, even when sendLifecycleMail=true. Optional includeDriverNoteInLifecycleMail controls whether driverNote is included for accepted_open_payment/rejected mails.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "acceptanceStatus": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "shortlist",
+                      "accepted",
+                      "rejected"
+                    ]
+                  },
+                  "sendLifecycleMail": {
+                    "type": "boolean"
+                  },
+                  "includeDriverNoteInLifecycleMail": {
+                    "type": "boolean"
+                  },
+                  "lifecycleEventType": {
+                    "type": "string",
+                    "enum": [
+                      "registration_received",
+                      "preselection",
+                      "accepted_open_payment",
+                      "accepted_paid_completed",
+                      "rejected",
+                      "waitlist"
+                    ]
+                  }
+                },
+                "required": [
+                  "acceptanceStatus"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
       }
     },
     "/admin/entries/{id}/payment-status": {

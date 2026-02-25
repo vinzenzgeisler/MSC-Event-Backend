@@ -29,6 +29,7 @@ const listEntriesQuerySchema = z.object({
 const entryStatusPatchSchema = z.object({
   acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']),
   sendLifecycleMail: z.boolean().optional().default(false),
+  includeDriverNoteInLifecycleMail: z.boolean().optional().default(false),
   lifecycleEventType: z
     .enum([
       'registration_received',
@@ -533,7 +534,8 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
         eventId: existing.eventId,
         entryId,
         eventType: input.lifecycleEventType,
-        allowDuplicate: false
+        allowDuplicate: false,
+        includeDriverNote: input.includeDriverNoteInLifecycleMail
       },
       actorUserId
     );

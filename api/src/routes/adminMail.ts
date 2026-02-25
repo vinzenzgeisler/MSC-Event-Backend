@@ -42,6 +42,7 @@ const queueMailSchema = z
 const reminderSchema = z.object({
   eventId: z.string().uuid(),
   entryId: z.string().uuid(),
+  allowDuplicate: z.boolean().optional().default(false),
   templateId: z.string().min(1).optional().default('payment_reminder'),
   templateVersion: z.number().int().positive().optional(),
   subject: z.string().min(1).optional(),
@@ -138,6 +139,8 @@ const buildDedupeKey = (
 };
 
 const toIsoDate = (value: string | undefined): Date => (value ? new Date(value) : new Date());
+
+const formatEuroFromCents = (value: number): string => (value / 100).toFixed(2).replace('.', ',');
 
 const templateKeyFromEventType = (eventType: LifecycleInput['eventType']): string => eventType;
 
@@ -523,6 +526,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
       totalCents: invoice.totalCents,
       paidAmountCents: invoice.paidAmountCents,
       paymentStatus: invoice.paymentStatus,
+      entryFeeCents: entry.entryFeeCents,
       email: person.email,
       firstName: person.firstName,
       lastName: person.lastName,
@@ -548,10 +552,10 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     return { queued: 0, skipped: 1, reason: 'not_allowed', outboxIds: [] as string[] };
   }
 
-  const amountOpenCents =
-    current.totalCents === null
-      ? null
-      : Math.max(0, current.totalCents - (current.paidAmountCents ?? 0));
+  const effectiveTotalCents = current.totalCents ?? current.entryFeeCents ?? 0;
+  const effectivePaidAmountCents = current.paidAmountCents ?? 0;
+  const amountOpenCents = Math.max(0, effectiveTotalCents - effectivePaidAmountCents);
+  const amountOpenEur = formatEuroFromCents(amountOpenCents);
 
   const idempotencyKey = buildDedupeKey(
     'reminder',
@@ -561,13 +565,16 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     current.email,
     {
       entryId: current.entryId,
-      paymentStatus: current.paymentStatus ?? 'due'
+      paymentStatus: current.paymentStatus ?? 'due',
+      allowDuplicate: input.allowDuplicate ? randomUUID() : false
     }
   );
 
-  const existing = await db.select({ id: emailOutbox.id }).from(emailOutbox).where(eq(emailOutbox.idempotencyKey, idempotencyKey)).limit(1);
-  if (existing[0]) {
-    return { queued: 0, skipped: 1, reason: 'duplicate', outboxIds: [existing[0].id] };
+  if (!input.allowDuplicate) {
+    const existing = await db.select({ id: emailOutbox.id }).from(emailOutbox).where(eq(emailOutbox.idempotencyKey, idempotencyKey)).limit(1);
+    if (existing[0]) {
+      return { queued: 0, skipped: 1, reason: 'duplicate', outboxIds: [existing[0].id] };
+    }
   }
 
   const templateData = {
@@ -576,7 +583,10 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     driverPersonId: current.driverPersonId,
     driverName: `${current.firstName} ${current.lastName}`,
     eventName: current.eventName,
-    amountOpenCents
+    totalCents: effectiveTotalCents,
+    paidAmountCents: effectivePaidAmountCents,
+    amountOpenCents,
+    amountOpenEur
   };
 
   let createdId: string | null = null;
@@ -598,7 +608,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
       .returning({ id: emailOutbox.id });
     createdId = inserted[0]?.id ?? null;
   } catch (error) {
-    if (isPgUniqueViolation(error)) {
+    if (isPgUniqueViolation(error) && !input.allowDuplicate) {
       const duplicated = await db.select({ id: emailOutbox.id }).from(emailOutbox).where(eq(emailOutbox.idempotencyKey, idempotencyKey)).limit(1);
       return { queued: 0, skipped: 1, reason: 'duplicate', outboxIds: duplicated[0] ? [duplicated[0].id] : [] };
     }
@@ -640,6 +650,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       eventId: entry.eventId,
       entryId: entry.id,
       driverPersonId: entry.driverPersonId,
+      driverNote: entry.driverNote,
       registrationStatus: entry.registrationStatus,
       acceptanceStatus: entry.acceptanceStatus,
       totalCents: invoice.totalCents,
@@ -664,6 +675,9 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   const row = rows[0];
   const email = row.email as string;
   const driverName = `${row.firstName} ${row.lastName}`;
+  const normalizedDriverNote = (row.driverNote ?? '').trim();
+  const driverNoteBlock =
+    normalizedDriverNote.length > 0 ? `\n\nHinweis vom Veranstalter:\n${normalizedDriverNote}` : '';
   let templateData: Record<string, unknown> = {
     eventType: input.eventType,
     eventName: row.eventName,
@@ -674,6 +688,8 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     acceptanceStatus: row.acceptanceStatus,
     paymentStatus: row.paymentStatus ?? null,
     amountOpenCents: row.totalCents ?? 0,
+    driverNote: normalizedDriverNote.length > 0 ? normalizedDriverNote : null,
+    driverNoteBlock: input.eventType === 'accepted_open_payment' ? driverNoteBlock : '',
     paymentIban: process.env.PAYMENT_IBAN ?? '',
     paymentBic: process.env.PAYMENT_BIC ?? '',
     paymentRecipient: process.env.PAYMENT_RECIPIENT ?? ''

@@ -1258,7 +1258,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryNotesMatch = path.match(/^\/admin\/entries\/([^/]+)\/notes$/);
   if (method === 'PATCH' && entryNotesMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+    if (!hasGroup(auth, 'admin')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -1269,16 +1269,19 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!result) {
         return errorJson(404, 'Entry not found');
       }
-      return json(200, { ok: true, entry: result });
+      return json(200, {
+        ok: true,
+        entryId: result.id,
+        internalNote: result.internalNote,
+        driverNote: result.driverNote,
+        updatedAt: result.updatedAt
+      });
     } catch (error) {
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
-      }
-      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
-        return errorJson(409, 'Event is read-only');
       }
       return errorJson(500, 'Entry notes update failed');
     }

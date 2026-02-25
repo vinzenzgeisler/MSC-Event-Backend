@@ -591,7 +591,8 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
       id: entry.id,
       eventId: entry.eventId,
       internalNote: entry.internalNote,
-      driverNote: entry.driverNote
+      driverNote: entry.driverNote,
+      updatedAt: entry.updatedAt
     })
     .from(entry)
     .where(eq(entry.id, entryId))
@@ -600,14 +601,25 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
   if (!existing) {
     return null;
   }
-  await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
+
+  const nextInternalNote = input.internalNote === undefined ? existing.internalNote : input.internalNote;
+  const nextDriverNote = input.driverNote === undefined ? existing.driverNote : input.driverNote;
+  if (nextInternalNote === existing.internalNote && nextDriverNote === existing.driverNote) {
+    return {
+      id: existing.id,
+      eventId: existing.eventId,
+      internalNote: existing.internalNote,
+      driverNote: existing.driverNote,
+      updatedAt: existing.updatedAt
+    };
+  }
 
   const now = new Date();
   const [updated] = await db
     .update(entry)
     .set({
-      internalNote: input.internalNote === undefined ? existing.internalNote : input.internalNote,
-      driverNote: input.driverNote === undefined ? existing.driverNote : input.driverNote,
+      internalNote: nextInternalNote,
+      driverNote: nextDriverNote,
       updatedAt: now
     })
     .where(eq(entry.id, entryId))

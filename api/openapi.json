@@ -1984,7 +1984,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Queues a deterministic payment reminder quick action for a single entry. Queued reminders are visible via GET /admin/mail/outbox for the same eventId and processed by the same dispatcher/retry pipeline as other outbox mails.",
+        "description": "Queues a deterministic payment reminder quick action for a single entry. With allowDuplicate=true, duplicate checks are bypassed and each call enqueues a new outbox item. Queued reminders are visible via GET /admin/mail/outbox for the same eventId and processed by the same dispatcher/retry pipeline as other outbox mails.",
         "security": [
           {
             "bearerAuth": []
@@ -2023,6 +2023,10 @@
                   "sendAfter": {
                     "type": "string",
                     "format": "date-time"
+                  },
+                  "allowDuplicate": {
+                    "type": "boolean",
+                    "description": "Force resend mode. If true, duplicate-skip is bypassed and a new outbox record is created on each call."
                   }
                 },
                 "required": [
@@ -5261,6 +5265,168 @@
           },
           "409": {
             "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/entries/{id}/notes": {
+      "patch": {
+        "operationId": "patch_admin_entries_id_notes",
+        "tags": [
+          "admin"
+        ],
+        "description": "Saves entry notes only. Does not trigger acceptance status transitions or lifecycle/outbox mail actions.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "internalNote": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 2000
+                  },
+                  "driverNote": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 2000
+                  }
+                },
+                "additionalProperties": false,
+                "anyOf": [
+                  {
+                    "required": [
+                      "internalNote"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "driverNote"
+                    ]
+                  }
+                ]
+              },
+              "examples": {
+                "saveBoth": {
+                  "value": {
+                    "internalNote": "Check insurance copy",
+                    "driverNote": "Bitte Kennzeichen lesbar anbringen"
+                  }
+                },
+                "clearDriver": {
+                  "value": {
+                    "driverNote": null
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Notes saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "entryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "internalNote": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "driverNote": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "entryId",
+                    "internalNote",
+                    "driverNote",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Entry not found",
             "content": {
               "application/json": {
                 "schema": {

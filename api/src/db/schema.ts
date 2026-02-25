@@ -150,6 +150,9 @@ export const entry = pgTable(
     specialNotes: text('special_notes'),
     internalNote: text('internal_note'),
     driverNote: text('driver_note'),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deletedBy: text('deleted_by'),
+    deleteReason: text('delete_reason'),
     confirmationMailSentAt: timestamp('confirmation_mail_sent_at', { withTimezone: true }),
     confirmationMailVerifiedAt: timestamp('confirmation_mail_verified_at', { withTimezone: true }),
     consentTermsAccepted: boolean('consent_terms_accepted').notNull().default(false),
@@ -178,7 +181,7 @@ export const entry = pgTable(
     backupNotSelfCheck: check('entry_backup_not_self_check', sql`${table.backupOfEntryId} is null or ${table.backupOfEntryId} != ${table.id}`),
     startNumberUnique: uniqueIndex('entry_start_number_unique')
       .on(table.eventId, table.classId, table.startNumberNorm)
-      .where(sql`${table.startNumberNorm} is not null`),
+      .where(sql`${table.startNumberNorm} is not null and ${table.deletedAt} is null`),
     backupOfEntryIndex: index('entry_backup_of_entry_idx').on(table.backupOfEntryId)
   })
 );

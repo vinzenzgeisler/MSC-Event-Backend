@@ -5,6 +5,7 @@ import { getDb } from '../db/client';
 import { auditLog, document, entry, eventClass, invoice, invoicePayment, person, vehicle } from '../db/schema';
 import { getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
+import { isPgUniqueViolation } from '../http/dbErrors';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 import { queueLifecycleMail } from './adminMail';
 
@@ -20,7 +21,7 @@ const listEntriesQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.number().int().min(1).max(100).optional(),
   sortBy: z
-    .enum(['className', 'driverLastName', 'driverFirstName', 'createdAt', 'updatedAt', 'startNumberNorm'])
+    .enum(['className', 'driverLastName', 'driverFirstName', 'createdAt', 'updatedAt', 'startNumberNorm', 'deletedAt'])
     .optional(),
   sortDir: z.enum(['asc', 'desc']).optional()
 });
@@ -90,8 +91,23 @@ const assertAcceptanceTransitionAllowed = (from: EntryStatusPatch['acceptanceSta
 };
 
 export const listEntries = async (query: ListEntriesQuery, redactSensitiveFields: boolean) => {
+  return listEntriesByDeleteState(query, redactSensitiveFields, false);
+};
+
+export const listDeletedEntries = async (query: ListEntriesQuery, redactSensitiveFields: boolean) => {
+  return listEntriesByDeleteState(query, redactSensitiveFields, true);
+};
+
+const listEntriesByDeleteState = async (
+  query: ListEntriesQuery,
+  redactSensitiveFields: boolean,
+  deleted: boolean
+) => {
   const db = await getDb();
-  const conditions: SQL<unknown>[] = [eq(entry.eventId, query.eventId)];
+  const conditions: SQL<unknown>[] = [
+    eq(entry.eventId, query.eventId),
+    deleted ? sql`${entry.deletedAt} is not null` : sql`${entry.deletedAt} is null`
+  ];
   if (query.classId) {
     conditions.push(eq(entry.classId, query.classId));
   }
@@ -139,6 +155,9 @@ export const listEntries = async (query: ListEntriesQuery, redactSensitiveFields
       startNumberNorm: entry.startNumberNorm,
       confirmationMailSentAt: entry.confirmationMailSentAt,
       confirmationMailVerifiedAt: entry.confirmationMailVerifiedAt,
+      deletedAt: entry.deletedAt,
+      deletedBy: entry.deletedBy,
+      deleteReason: entry.deleteReason,
       internalNote: entry.internalNote,
       driverNote: entry.driverNote,
       driverPersonId: entry.driverPersonId,
@@ -171,6 +190,9 @@ export const listEntries = async (query: ListEntriesQuery, redactSensitiveFields
       vehicleThumbUrl,
       confirmationMailSent: row.confirmationMailSentAt !== null,
       confirmationMailVerified: row.confirmationMailVerifiedAt !== null,
+      deletedAt: row.deletedAt,
+      deletedBy: row.deletedBy,
+      deleteReason: row.deleteReason,
       driverFirstName: redactSensitiveFields ? null : row.driverFirstName,
       driverLastName: redactSensitiveFields ? null : row.driverLastName,
       driverEmail: redactSensitiveFields ? null : row.driverEmail
@@ -184,7 +206,7 @@ export const listEntries = async (query: ListEntriesQuery, redactSensitiveFields
       sortBy: query.sortBy,
       sortDir: query.sortDir
     },
-    ['className', 'driverLastName', 'driverFirstName', 'createdAt', 'updatedAt', 'startNumberNorm'],
+    ['className', 'driverLastName', 'driverFirstName', 'createdAt', 'updatedAt', 'startNumberNorm', 'deletedAt'],
     'className',
     'asc'
   );
@@ -262,7 +284,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .innerJoin(person, eq(entry.driverPersonId, person.id))
     .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
-    .where(eq(entry.id, entryId))
+    .where(and(eq(entry.id, entryId), sql`${entry.deletedAt} is null`))
     .limit(1);
 
   const current = rows[0];
@@ -600,6 +622,7 @@ export const deleteEntry = async (entryId: string, actorUserId: string | null) =
         acceptanceStatus: entry.acceptanceStatus,
         checkinIdVerified: entry.checkinIdVerified,
         techStatus: entry.techStatus,
+        deletedAt: entry.deletedAt,
         invoiceId: invoice.id,
         invoicePaymentStatus: invoice.paymentStatus
       })
@@ -611,6 +634,10 @@ export const deleteEntry = async (entryId: string, actorUserId: string | null) =
     const existing = rows[0];
     if (!existing) {
       return null;
+    }
+
+    if (existing.deletedAt) {
+      return { deletedEntryId: entryId };
     }
 
     await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
@@ -638,25 +665,20 @@ export const deleteEntry = async (entryId: string, actorUserId: string | null) =
       throw new Error('ENTRY_DELETE_FORBIDDEN_PAYMENT');
     }
 
-    await tx.delete(entry).where(eq(entry.id, entryId));
-
-    const remainingRows = await tx
-      .select({
-        count: sql<number>`count(*)::int`
+    await tx
+      .update(entry)
+      .set({
+        deletedAt: new Date(),
+        deletedBy: actorUserId,
+        deleteReason: null,
+        updatedAt: new Date()
       })
-      .from(entry)
-      .where(and(eq(entry.eventId, existing.eventId), eq(entry.driverPersonId, existing.driverPersonId)))
-      .limit(1);
-    const remainingEntriesForDriver = Number(remainingRows[0]?.count ?? 0);
-
-    if (existing.invoiceId && remainingEntriesForDriver === 0 && paymentCount === 0) {
-      await tx.delete(invoice).where(eq(invoice.id, existing.invoiceId));
-    }
+      .where(eq(entry.id, entryId));
 
     await writeAuditLog(tx as never, {
       eventId: existing.eventId,
       actorUserId,
-      action: 'entry_deleted',
+      action: 'entry_soft_deleted',
       entityType: 'entry',
       entityId: entryId,
       payload: {
@@ -664,13 +686,61 @@ export const deleteEntry = async (entryId: string, actorUserId: string | null) =
         driverPersonId: existing.driverPersonId,
         registrationStatus: existing.registrationStatus,
         acceptanceStatus: existing.acceptanceStatus,
-        startNumberNorm: existing.startNumberNorm,
-        invoiceRemoved: Boolean(existing.invoiceId && remainingEntriesForDriver === 0 && paymentCount === 0)
+        startNumberNorm: existing.startNumberNorm
       }
     });
 
     return { deletedEntryId: entryId };
   });
+};
+
+export const restoreEntry = async (entryId: string, actorUserId: string | null) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: entry.id,
+      eventId: entry.eventId,
+      deletedAt: entry.deletedAt
+    })
+    .from(entry)
+    .where(eq(entry.id, entryId))
+    .limit(1);
+  const existing = rows[0];
+  if (!existing) {
+    return null;
+  }
+  if (!existing.deletedAt) {
+    return { restoredEntryId: entryId };
+  }
+
+  await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
+
+  try {
+    await db
+      .update(entry)
+      .set({
+        deletedAt: null,
+        deletedBy: null,
+        deleteReason: null,
+        updatedAt: new Date()
+      })
+      .where(eq(entry.id, entryId));
+  } catch (error) {
+    if (isPgUniqueViolation(error)) {
+      throw new Error('RESTORE_CONFLICT');
+    }
+    throw error;
+  }
+
+  await writeAuditLog(db as never, {
+    eventId: existing.eventId,
+    actorUserId,
+    action: 'entry_restored',
+    entityType: 'entry',
+    entityId: entryId
+  });
+
+  return { restoredEntryId: entryId };
 };
 
 export const validateListEntriesQuery = (query: Record<string, string | undefined>) =>

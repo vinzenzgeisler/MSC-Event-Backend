@@ -35,7 +35,9 @@ import {
 import {
   deleteEntry,
   listCheckinEntries,
+  listDeletedEntries,
   listEntries,
+  restoreEntry,
   getEntryDetail,
   patchEntryStatus,
   patchEntryTechStatus,
@@ -1019,6 +1021,26 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  if (method === 'GET' && path === '/admin/entries/deleted') {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const query = validateListEntriesQuery(event.queryStringParameters ?? {});
+      const rows = await listDeletedEntries(query, false);
+      return json(200, { ok: true, entries: rows.items, meta: rows.meta });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && (error.message === 'INVALID_SORT_FIELD' || error.message === 'INVALID_CURSOR')) {
+        return errorJson(400, error.message);
+      }
+      return errorJson(500, 'List deleted entries failed');
+    }
+  }
+
   if (method === 'GET' && path === '/admin/checkin/entries') {
     const auth = getAuthContext(event);
     if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
@@ -1055,6 +1077,29 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, ...result });
     } catch (error) {
       return errorJson(500, 'Get entry detail failed');
+    }
+  }
+
+  const entryRestoreMatch = path.match(/^\/admin\/entries\/([^/]+)\/restore$/);
+  if (method === 'POST' && entryRestoreMatch) {
+    const auth = getAuthContext(event);
+    if (!hasGroup(auth, 'admin')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const result = await restoreEntry(entryRestoreMatch[1], auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'RESTORE_CONFLICT') {
+        return errorJson(409, 'Entry restore conflict', undefined, 'RESTORE_CONFLICT');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only');
+      }
+      return errorJson(500, 'Entry restore failed');
     }
   }
 

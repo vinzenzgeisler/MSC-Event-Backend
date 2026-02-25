@@ -476,8 +476,22 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/entries/deleted',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/entries/{id}',
       methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.DELETE],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/entries/{id}/restore',
+      methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
     });

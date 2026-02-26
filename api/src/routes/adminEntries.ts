@@ -2,7 +2,7 @@ import { and, asc, eq, ilike, or, sql, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { auditLog, document, entry, eventClass, invoice, invoicePayment, person, vehicle } from '../db/schema';
+import { auditLog, document, entry, eventClass, invoice, invoicePayment, person, registrationGroup, vehicle } from '../db/schema';
 import { getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { isPgUniqueViolation } from '../http/dbErrors';
@@ -177,6 +177,8 @@ const listEntriesByDeleteState = async (
       id: entry.id,
       eventId: entry.eventId,
       classId: entry.classId,
+      groupId: entry.registrationGroupId,
+      groupSize: sql<number>`coalesce((select count(*)::int from "entry" e2 where e2."registration_group_id" = ${entry.registrationGroupId} and e2."deleted_at" is null), 1)`,
       vehicleId: entry.vehicleId,
       className: eventClass.name,
       registrationStatus: entry.registrationStatus,
@@ -262,6 +264,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       eventId: entry.eventId,
       classId: entry.classId,
       vehicleId: entry.vehicleId,
+      backupVehicleId: entry.backupVehicleId,
       className: eventClass.name,
       registrationStatus: entry.registrationStatus,
       acceptanceStatus: entry.acceptanceStatus,
@@ -355,6 +358,28 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
           .where(eq(person.id, current.codriverPersonId))
           .limit(1);
   const codriver = codriverRows[0] ?? null;
+  const backupVehicleRows =
+    current.backupVehicleId === null
+      ? []
+      : await db
+          .select({
+            id: vehicle.id,
+            vehicleType: vehicle.vehicleType,
+            make: vehicle.make,
+            model: vehicle.model,
+            year: vehicle.year,
+            displacementCcm: vehicle.displacementCcm,
+            engineType: vehicle.engineType,
+            cylinders: vehicle.cylinders,
+            brakes: vehicle.brakes,
+            ownerName: vehicle.ownerName,
+            vehicleHistory: vehicle.vehicleHistory,
+            imageS3Key: vehicle.imageS3Key
+          })
+          .from(vehicle)
+          .where(eq(vehicle.id, current.backupVehicleId))
+          .limit(1);
+  const backupVehicle = backupVehicleRows[0] ?? null;
 
   const documentRows = await db
     .select({
@@ -403,6 +428,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         driverPersonId: current.driverPersonId,
         codriverPersonId: current.codriverPersonId,
         vehicleId: current.vehicleId,
+        backupVehicleId: current.backupVehicleId,
         backupOfEntryId: current.backupOfEntryId
       },
       className: current.className,
@@ -464,6 +490,21 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         vehicleHistory: current.vehicleHistory,
         imageS3Key: current.vehicleImageS3Key
       },
+      backupVehicle: backupVehicle
+        ? {
+            vehicleType: backupVehicle.vehicleType,
+            make: backupVehicle.make,
+            model: backupVehicle.model,
+            year: backupVehicle.year,
+            displacementCcm: backupVehicle.displacementCcm,
+            engineType: backupVehicle.engineType,
+            cylinders: backupVehicle.cylinders,
+            brakes: backupVehicle.brakes,
+            ownerName: backupVehicle.ownerName,
+            vehicleHistory: backupVehicle.vehicleHistory,
+            imageS3Key: backupVehicle.imageS3Key
+          }
+        : null,
       payment: {
         totalCents,
         paidAmountCents,
@@ -931,6 +972,7 @@ export const deleteEntry = async (
         id: entry.id,
         eventId: entry.eventId,
         driverPersonId: entry.driverPersonId,
+        registrationGroupId: entry.registrationGroupId,
         classId: entry.classId,
         startNumberNorm: entry.startNumberNorm,
         registrationStatus: entry.registrationStatus,
@@ -1000,6 +1042,26 @@ export const deleteEntry = async (
       })
       .where(eq(entry.id, entryId));
 
+    if (existing.registrationGroupId) {
+      const activeGroupEntryCountRows = await tx
+        .select({
+          count: sql<number>`count(*)::int`
+        })
+        .from(entry)
+        .where(and(eq(entry.registrationGroupId, existing.registrationGroupId), sql`${entry.deletedAt} is null`))
+        .limit(1);
+      const activeGroupEntryCount = Number(activeGroupEntryCountRows[0]?.count ?? 0);
+      if (activeGroupEntryCount === 0) {
+        await tx
+          .update(registrationGroup)
+          .set({
+            deletedAt: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(registrationGroup.id, existing.registrationGroupId));
+      }
+    }
+
     await writeAuditLog(tx as never, {
       eventId: existing.eventId,
       actorUserId,
@@ -1032,6 +1094,7 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
     .select({
       id: entry.id,
       eventId: entry.eventId,
+      registrationGroupId: entry.registrationGroupId,
       deletedAt: entry.deletedAt
     })
     .from(entry)
@@ -1048,16 +1111,27 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
   await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
 
   try {
-    await db
-      .update(entry)
-      .set({
-        deletedAt: null,
-        deletedBy: null,
-        deletedByDisplay: null,
-        deleteReason: null,
-        updatedAt: new Date()
-      })
-      .where(eq(entry.id, entryId));
+    await db.transaction(async (tx) => {
+      if (existing.registrationGroupId) {
+        await tx
+          .update(registrationGroup)
+          .set({
+            deletedAt: null,
+            updatedAt: new Date()
+          })
+          .where(eq(registrationGroup.id, existing.registrationGroupId));
+      }
+      await tx
+        .update(entry)
+        .set({
+          deletedAt: null,
+          deletedBy: null,
+          deletedByDisplay: null,
+          deleteReason: null,
+          updatedAt: new Date()
+        })
+        .where(eq(entry.id, entryId));
+    });
   } catch (error) {
     if (isPgUniqueViolation(error)) {
       throw new Error('RESTORE_CONFLICT');

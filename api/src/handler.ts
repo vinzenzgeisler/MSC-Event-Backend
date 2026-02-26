@@ -103,10 +103,12 @@ import {
 import { setCheckinIdVerified, validateIdVerifyInput } from './routes/adminCheckin';
 import {
   createPublicEntry,
+  createPublicEntriesBatch,
   finalizeVehicleImageUpload,
   getPublicCurrentEventWithClasses,
   initVehicleImageUpload,
   validateCreatePublicEntryInput,
+  validateCreatePublicEntriesBatchInput,
   validatePublicStartNumber,
   validatePublicStartNumberInput,
   validateVehicleImageUploadFinalizeInput,
@@ -191,7 +193,11 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           'Validation failed',
           undefined,
           'VALIDATION_ERROR',
-          [{ field: 'vehicle.imageUploadId', code: 'invalid_or_not_finalized', message: 'Image upload is invalid or not finalized' }]
+          [{
+            field: 'vehicle.imageUploadId|backupVehicle.imageUploadId',
+            code: 'invalid_or_not_finalized',
+            message: 'Image upload is invalid or not finalized'
+          }]
         );
       }
       if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
@@ -203,7 +209,101 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           [{ field: 'startNumber', code: 'not_unique_in_event_class', message: 'Start number already exists' }]
         );
       }
+      if (error instanceof Error && error.message === 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY') {
+        return errorJson(409, 'Driver email already used by another active entry in this event', undefined, 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
+      }
+      if (error instanceof Error && error.message === 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD') {
+        return errorJson(409, 'Idempotency key reused with different payload', undefined, 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD');
+      }
       return errorJson(500, 'Public registration failed');
+    }
+  }
+
+  const publicCreateEntryBatchMatch = path.match(/^\/public\/events\/([^/]+)\/entries\/batch$/);
+  if (method === 'POST' && publicCreateEntryBatchMatch) {
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateCreatePublicEntriesBatchInput({
+        ...(payload as Record<string, unknown>),
+        eventId: publicCreateEntryBatchMatch[1]
+      });
+      const result = await createPublicEntriesBatch(input);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      if (
+        error instanceof Error &&
+        (error.message === 'EVENT_NOT_OPEN' || error.message === 'REGISTRATION_NOT_OPEN' || error.message === 'REGISTRATION_CLOSED')
+      ) {
+        return errorJson(409, error.message);
+      }
+      if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') {
+        return errorJson(404, 'Class not found');
+      }
+      if (error instanceof Error && error.message === 'CLASS_VEHICLE_TYPE_MISMATCH') {
+        return errorJson(409, 'Class does not match vehicle type');
+      }
+      if (error instanceof Error && error.message === 'START_NUMBER_INVALID_FORMAT') {
+        return errorJson(
+          400,
+          'Validation failed',
+          undefined,
+          'VALIDATION_ERROR',
+          [{ field: 'entries[].startNumber', code: 'invalid_format', message: 'Start number must match ^[A-Z0-9]{1,6}$' }]
+        );
+      }
+      if (error instanceof Error && error.message === 'BACKUP_LINK_REQUIRED') {
+        return errorJson(
+          400,
+          'Validation failed',
+          undefined,
+          'VALIDATION_ERROR',
+          [{ field: 'entries[].backupOfEntryId', code: 'required_when_backup_vehicle', message: 'Backup link is required for backup vehicles' }]
+        );
+      }
+      if (error instanceof Error && error.message === 'BACKUP_ENTRY_NOT_FOUND') {
+        return errorJson(404, 'Referenced backup entry not found', undefined, 'BACKUP_ENTRY_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'BACKUP_ENTRY_INVALID_LINK') {
+        return errorJson(409, 'Backup entry link is invalid', undefined, 'BACKUP_ENTRY_INVALID_LINK');
+      }
+      if (error instanceof Error && error.message === 'IMAGE_UPLOAD_INVALID') {
+        return errorJson(
+          400,
+          'Validation failed',
+          undefined,
+          'VALIDATION_ERROR',
+          [{
+            field: 'entries[].vehicle.imageUploadId|entries[].backupVehicle.imageUploadId',
+            code: 'invalid_or_not_finalized',
+            message: 'Image upload is invalid or not finalized'
+          }]
+        );
+      }
+      if (error instanceof Error && error.message === 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY') {
+        return errorJson(409, 'Driver email already used by another active entry in this event', undefined, 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
+      }
+      if (error instanceof Error && error.message === 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD') {
+        return errorJson(409, 'Idempotency key reused with different payload', undefined, 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD');
+      }
+      if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
+        return errorJson(
+          409,
+          'Validation failed',
+          undefined,
+          'VALIDATION_ERROR',
+          [{ field: 'entries[].startNumber', code: 'not_unique_in_event_class', message: 'Start number already exists' }]
+        );
+      }
+      return errorJson(500, 'Public registration batch failed');
     }
   }
 
@@ -312,10 +412,16 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Invalid JSON body');
       }
       if (error instanceof Error && error.message === 'VERIFY_TOKEN_INVALID') {
-        return errorJson(404, 'Verification token invalid');
+        return errorJson(404, 'Verification token invalid', undefined, 'VERIFY_TOKEN_INVALID');
+      }
+      if (error instanceof Error && error.message === 'VERIFY_TOKEN_ALREADY_USED') {
+        return errorJson(409, 'Verification token already used', undefined, 'VERIFY_TOKEN_ALREADY_USED');
       }
       if (error instanceof Error && error.message === 'VERIFY_TOKEN_EXPIRED') {
-        return errorJson(409, 'Verification token expired');
+        return errorJson(409, 'Verification token expired', undefined, 'VERIFY_TOKEN_EXPIRED');
+      }
+      if (error instanceof Error && error.message === 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY') {
+        return errorJson(409, 'Driver email already used by another active entry in this event', undefined, 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
       }
       return errorJson(500, 'Email verification failed');
     }

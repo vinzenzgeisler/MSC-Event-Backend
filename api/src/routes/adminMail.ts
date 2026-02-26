@@ -292,20 +292,37 @@ const dedupeTargets = (targets: RecipientTarget[]): RecipientTarget[] => {
 const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]> => {
   const db = await getDb();
   if (input.recipientEmails) {
-    return dedupeTargets(
+    const candidates = dedupeTargets(
       input.recipientEmails.map((email) => ({
         email,
         driverPersonId: null,
         entryId: null
       }))
     );
+    if (candidates.length === 0) {
+      return [];
+    }
+    const blockedRows = await db
+      .select({ email: person.email })
+      .from(person)
+      .where(
+        and(
+          inArray(
+            person.email,
+            candidates.map((candidate) => candidate.email)
+          ),
+          or(eq(person.processingRestricted, true), eq(person.objectionFlag, true))
+        )
+      );
+    const blocked = new Set(blockedRows.map((row) => (row.email ?? '').toLowerCase()).filter((email) => email.length > 0));
+    return candidates.filter((candidate) => !blocked.has(candidate.email.toLowerCase()));
   }
 
   if (input.driverPersonIds) {
     const rows = await db
       .select({ email: person.email, driverPersonId: person.id })
       .from(person)
-      .where(inArray(person.id, input.driverPersonIds));
+      .where(and(inArray(person.id, input.driverPersonIds), eq(person.processingRestricted, false), eq(person.objectionFlag, false)));
     return dedupeTargets(
       rows
         .filter((row) => row.email)
@@ -326,7 +343,7 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
       })
       .from(entry)
       .innerJoin(person, eq(entry.driverPersonId, person.id))
-      .where(inArray(entry.id, input.entryIds));
+      .where(and(inArray(entry.id, input.entryIds), eq(person.processingRestricted, false), eq(person.objectionFlag, false)));
     return dedupeTargets(
       rows
         .filter((row) => row.email)
@@ -339,7 +356,11 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
   }
 
   if (input.filters) {
-    const conditions: SQL<unknown>[] = [eq(entry.eventId, input.eventId)];
+    const conditions: SQL<unknown>[] = [
+      eq(entry.eventId, input.eventId),
+      eq(person.processingRestricted, false),
+      eq(person.objectionFlag, false)
+    ];
     if (input.filters.acceptanceStatus) {
       conditions.push(eq(entry.acceptanceStatus, input.filters.acceptanceStatus));
     }
@@ -548,6 +569,17 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
   if (!current.email) {
     return { queued: 0, skipped: 1, reason: 'no_recipient', outboxIds: [] as string[] };
   }
+  if (!current.driverPersonId) {
+    return { queued: 0, skipped: 1, reason: 'no_recipient', outboxIds: [] as string[] };
+  }
+  const blockedRows = await db
+    .select({ id: person.id })
+    .from(person)
+    .where(and(eq(person.id, current.driverPersonId), or(eq(person.processingRestricted, true), eq(person.objectionFlag, true))))
+    .limit(1);
+  if (blockedRows[0]) {
+    return { queued: 0, skipped: 1, reason: 'processing_restricted', outboxIds: [] as string[] };
+  }
 
   if (current.paymentStatus === 'paid') {
     return { queued: 0, skipped: 1, reason: 'not_allowed', outboxIds: [] as string[] };
@@ -669,7 +701,19 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
     .where(and(eq(entry.eventId, input.eventId), eq(entry.id, input.entryId)));
 
-  if (rows.length === 0 || !rows[0].email) {
+  if (
+    rows.length === 0 ||
+    !rows[0].email ||
+    rows[0].driverPersonId === null
+  ) {
+    return { queued: 0 };
+  }
+  const blockedRows = await db
+    .select({ id: person.id })
+    .from(person)
+    .where(and(eq(person.id, rows[0].driverPersonId), or(eq(person.processingRestricted, true), eq(person.objectionFlag, true))))
+    .limit(1);
+  if (blockedRows[0]) {
     return { queued: 0 };
   }
 
@@ -777,7 +821,11 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
   const template = await resolveTemplate(input.templateKey, input.templateVersion, input.subjectOverride);
   const sendAfter = toIsoDate(input.sendAfter);
 
-  const conditions: SQL<unknown>[] = [eq(entry.eventId, input.eventId)];
+  const conditions: SQL<unknown>[] = [
+    eq(entry.eventId, input.eventId),
+    eq(person.processingRestricted, false),
+    eq(person.objectionFlag, false)
+  ];
   if (input.classId) {
     conditions.push(eq(entry.classId, input.classId));
   }

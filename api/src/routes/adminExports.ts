@@ -59,7 +59,11 @@ export const createEntriesExport = async (
   }
 
   try {
-    const conditions: SQL<unknown>[] = [eq(entry.eventId, input.eventId)];
+    const conditions: SQL<unknown>[] = [
+      eq(entry.eventId, input.eventId),
+      eq(person.processingRestricted, false),
+      eq(person.objectionFlag, false)
+    ];
     if (input.classId) {
       conditions.push(eq(entry.classId, input.classId));
     }

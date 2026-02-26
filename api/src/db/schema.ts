@@ -77,6 +77,8 @@ export const person = pgTable(
     emergencyContactLastName: text('emergency_contact_last_name'),
     emergencyContactPhone: text('emergency_contact_phone'),
     motorsportHistory: text('motorsport_history'),
+    processingRestricted: boolean('processing_restricted').notNull().default(false),
+    objectionFlag: boolean('objection_flag').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
@@ -129,13 +131,16 @@ export const entry = pgTable(
     driverPersonId: uuid('driver_person_id')
       .notNull()
       .references(() => person.id),
+    registrationGroupId: uuid('registration_group_id'),
     codriverPersonId: uuid('codriver_person_id').references(() => person.id),
     vehicleId: uuid('vehicle_id')
       .notNull()
       .references(() => vehicle.id),
+    backupVehicleId: uuid('backup_vehicle_id').references(() => vehicle.id, { onDelete: 'set null' }),
     isBackupVehicle: boolean('is_backup_vehicle').notNull().default(false),
     backupOfEntryId: uuid('backup_of_entry_id').references((): AnyPgColumn => entry.id, { onDelete: 'set null' }),
     startNumberNorm: text('start_number_norm'),
+    driverEmailNorm: text('driver_email_norm'),
     registrationStatus: text('registration_status').notNull(),
     acceptanceStatus: text('acceptance_status').notNull(),
     idVerified: boolean('id_verified').notNull().default(false),
@@ -180,10 +185,135 @@ export const entry = pgTable(
     ),
     techStatusCheck: check('entry_tech_status_check', sql`${table.techStatus} in ('pending', 'passed', 'failed')`),
     backupNotSelfCheck: check('entry_backup_not_self_check', sql`${table.backupOfEntryId} is null or ${table.backupOfEntryId} != ${table.id}`),
+    backupVehicleNotPrimaryCheck: check(
+      'entry_backup_vehicle_not_primary_check',
+      sql`${table.backupVehicleId} is null or ${table.backupVehicleId} != ${table.vehicleId}`
+    ),
     startNumberUnique: uniqueIndex('entry_start_number_unique')
       .on(table.eventId, table.classId, table.startNumberNorm)
       .where(sql`${table.startNumberNorm} is not null and ${table.deletedAt} is null`),
-    backupOfEntryIndex: index('entry_backup_of_entry_idx').on(table.backupOfEntryId)
+    backupOfEntryIndex: index('entry_backup_of_entry_idx').on(table.backupOfEntryId),
+    backupVehicleIndex: index('entry_backup_vehicle_idx').on(table.backupVehicleId),
+    registrationGroupIndex: index('entry_registration_group_idx').on(table.registrationGroupId)
+  })
+);
+
+export const registrationGroup = pgTable(
+  'registration_group',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    driverPersonId: uuid('driver_person_id')
+      .notNull()
+      .references(() => person.id),
+    driverEmailNorm: text('driver_email_norm').notNull(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    activeDriverEmailUnique: uniqueIndex('registration_group_event_driver_email_active_unique')
+      .on(table.eventId, table.driverEmailNorm)
+      .where(sql`${table.deletedAt} is null`),
+    eventIndex: index('registration_group_event_idx').on(table.eventId)
+  })
+);
+
+export const registrationGroupEmailVerification = pgTable(
+  'registration_group_email_verification',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    registrationGroupId: uuid('registration_group_id')
+      .notNull()
+      .references(() => registrationGroup.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    groupUnique: uniqueIndex('registration_group_email_verification_group_unique').on(table.registrationGroupId),
+    tokenUnique: uniqueIndex('registration_group_email_verification_token_unique').on(table.token)
+  })
+);
+
+export const publicEntrySubmission = pgTable(
+  'public_entry_submission',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    clientSubmissionKey: text('client_submission_key').notNull(),
+    payloadHash: text('payload_hash').notNull(),
+    responsePayload: jsonb('response_payload').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    eventKeyUnique: uniqueIndex('public_entry_submission_event_key_unique').on(table.eventId, table.clientSubmissionKey),
+    eventIndex: index('public_entry_submission_event_idx').on(table.eventId)
+  })
+);
+
+export const consentEvidence = pgTable(
+  'consent_evidence',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => entry.id, { onDelete: 'cascade' }),
+    consentVersion: text('consent_version').notNull(),
+    consentTextHash: text('consent_text_hash').notNull(),
+    locale: text('locale').notNull(),
+    consentSource: text('consent_source').notNull(),
+    termsAccepted: boolean('terms_accepted').notNull().default(true),
+    privacyAccepted: boolean('privacy_accepted').notNull().default(true),
+    mediaAccepted: boolean('media_accepted').notNull().default(false),
+    guardianFullName: text('guardian_full_name'),
+    guardianEmail: text('guardian_email'),
+    guardianPhone: text('guardian_phone'),
+    guardianConsentAccepted: boolean('guardian_consent_accepted').notNull().default(false),
+    capturedAt: timestamp('captured_at', { withTimezone: true }).notNull(),
+    isLegacy: boolean('is_legacy').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    entryIndex: index('consent_evidence_entry_idx').on(table.entryId, table.createdAt),
+    sourceCheck: check('consent_evidence_source_check', sql`${table.consentSource} in ('public_form', 'admin_ui')`)
+  })
+);
+
+export const dataSubjectRequest = pgTable(
+  'data_subject_request',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    requestType: text('request_type').notNull(),
+    subjectEmailNorm: text('subject_email_norm'),
+    subjectPersonId: uuid('subject_person_id').references(() => person.id, { onDelete: 'set null' }),
+    status: text('status').notNull().default('open'),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    dueAt: timestamp('due_at', { withTimezone: true }),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    identityLevel: text('identity_level').notNull().default('medium'),
+    handledBy: text('handled_by'),
+    legalBasisDecision: text('legal_basis_decision'),
+    actionsTaken: text('actions_taken'),
+    responseChannel: text('response_channel'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    requestTypeCheck: check(
+      'data_subject_request_type_check',
+      sql`${table.requestType} in ('access', 'rectification', 'erasure', 'restriction', 'objection', 'portability')`
+    ),
+    statusCheck: check('data_subject_request_status_check', sql`${table.status} in ('open', 'in_progress', 'closed', 'rejected')`),
+    identityCheck: check('data_subject_request_identity_check', sql`${table.identityLevel} in ('low', 'medium', 'high')`),
+    subjectEmailIndex: index('data_subject_request_subject_email_idx').on(table.subjectEmailNorm, table.createdAt),
+    statusIndex: index('data_subject_request_status_idx').on(table.status, table.receivedAt)
   })
 );
 

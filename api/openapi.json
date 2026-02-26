@@ -80,9 +80,26 @@
         "tags": [
           "public"
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicCreateEntryRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCreateEntryResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Bad Request",
@@ -105,7 +122,87 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "Conflict (code: EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY, BACKUP_ENTRY_INVALID_LINK, REGISTRATION_NOT_OPEN, REGISTRATION_CLOSED, EVENT_NOT_OPEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/public/events/{id}/entries/batch": {
+      "post": {
+        "operationId": "post_public_events_id_entries_batch",
+        "tags": [
+          "public"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicCreateEntriesBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCreateEntriesBatchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (code: EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY, IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -158,7 +255,7 @@
             }
           },
           "404": {
-            "description": "Not Found",
+            "description": "Not Found (code: VERIFY_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -168,7 +265,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "Conflict (code: VERIFY_TOKEN_ALREADY_USED, VERIFY_TOKEN_EXPIRED, EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY)",
             "content": {
               "application/json": {
                 "schema": {
@@ -211,7 +308,7 @@
             }
           },
           "404": {
-            "description": "Not Found",
+            "description": "Not Found (code: VERIFY_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -221,7 +318,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "Conflict (code: VERIFY_TOKEN_ALREADY_USED, VERIFY_TOKEN_EXPIRED, EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY)",
             "content": {
               "application/json": {
                 "schema": {
@@ -586,7 +683,138 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "Dashboard summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "entriesTotal": {
+                          "type": "integer"
+                        },
+                        "paymentsDueTotal": {
+                          "type": "integer"
+                        },
+                        "checkinPendingTotal": {
+                          "type": "integer"
+                        },
+                        "mailFailedTotal": {
+                          "type": "integer"
+                        },
+                        "mailQueuedTotal": {
+                          "type": "integer"
+                        },
+                        "exportsQueuedTotal": {
+                          "type": "integer"
+                        },
+                        "exportsProcessingTotal": {
+                          "type": "integer"
+                        },
+                        "driverAgeStats": {
+                          "type": "object",
+                          "properties": {
+                            "medianDriverAge": {
+                              "type": "number",
+                              "nullable": true
+                            },
+                            "youngestDriverAge": {
+                              "type": "number",
+                              "nullable": true
+                            },
+                            "oldestDriverAge": {
+                              "type": "number",
+                              "nullable": true
+                            },
+                            "oldestDriverLabel": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "medianDriverAge",
+                            "youngestDriverAge",
+                            "oldestDriverAge",
+                            "oldestDriverLabel"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "entriesTotal",
+                        "paymentsDueTotal",
+                        "checkinPendingTotal",
+                        "mailFailedTotal",
+                        "mailQueuedTotal",
+                        "exportsQueuedTotal",
+                        "exportsProcessingTotal",
+                        "driverAgeStats"
+                      ]
+                    },
+                    "classDistribution": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "classId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "className": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "classId",
+                          "className",
+                          "count"
+                        ]
+                      }
+                    },
+                    "recentEntries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "entryId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "driverName": {
+                            "type": "string"
+                          },
+                          "className": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "entryId",
+                          "driverName",
+                          "className",
+                          "createdAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "summary",
+                    "classDistribution",
+                    "recentEntries"
+                  ]
+                }
+              }
+            }
           },
           "400": {
             "description": "Bad Request",
@@ -652,6 +880,17 @@
         "security": [
           {
             "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ]
       }
@@ -3565,7 +3804,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminEntryDetailResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Bad Request",
@@ -5650,6 +5896,560 @@
           "nextCursor"
         ]
       },
+      "PublicVehicleInput": {
+        "type": "object",
+        "properties": {
+          "vehicleType": {
+            "type": "string",
+            "enum": [
+              "moto",
+              "auto"
+            ]
+          },
+          "make": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "year": {
+            "type": "integer"
+          },
+          "displacementCcm": {
+            "type": "integer"
+          },
+          "engineType": {
+            "type": "string"
+          },
+          "cylinders": {
+            "type": "integer"
+          },
+          "brakes": {
+            "type": "string"
+          },
+          "vehicleHistory": {
+            "type": "string"
+          },
+          "ownerName": {
+            "type": "string"
+          },
+          "startNumberRaw": {
+            "type": "string"
+          },
+          "imageS3Key": {
+            "type": "string"
+          },
+          "imageUploadId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "make",
+          "model",
+          "displacementCcm",
+          "engineType",
+          "cylinders",
+          "brakes",
+          "vehicleHistory"
+        ]
+      },
+      "PublicCodriverInput": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "birthdate": {
+            "type": "string",
+            "format": "date"
+          },
+          "nationality": {
+            "type": "string"
+          },
+          "street": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string",
+            "pattern": "^\\d{5}$"
+          },
+          "city": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "firstName",
+          "lastName",
+          "birthdate",
+          "nationality",
+          "street",
+          "zip",
+          "city",
+          "phone"
+        ]
+      },
+      "PublicDriverInput": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "birthdate": {
+            "type": "string",
+            "format": "date"
+          },
+          "nationality": {
+            "type": "string"
+          },
+          "street": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string",
+            "pattern": "^\\d{5}$"
+          },
+          "city": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "emergencyContactName": {
+            "type": "string"
+          },
+          "emergencyContactFirstName": {
+            "type": "string"
+          },
+          "emergencyContactLastName": {
+            "type": "string"
+          },
+          "emergencyContactPhone": {
+            "type": "string"
+          },
+          "motorsportHistory": {
+            "type": "string"
+          },
+          "specialNotes": {
+            "type": "string"
+          },
+          "guardianFullName": {
+            "type": "string",
+            "description": "Erforderlich, wenn Fahrer unter 18 ist."
+          },
+          "guardianEmail": {
+            "type": "string",
+            "format": "email",
+            "description": "Erforderlich, wenn Fahrer unter 18 ist."
+          },
+          "guardianPhone": {
+            "type": "string",
+            "description": "Erforderlich, wenn Fahrer unter 18 ist."
+          },
+          "guardianConsentAccepted": {
+            "type": "boolean",
+            "description": "Muss true sein, wenn Fahrer unter 18 ist."
+          }
+        },
+        "required": [
+          "email",
+          "firstName",
+          "lastName",
+          "birthdate",
+          "street",
+          "zip",
+          "city",
+          "phone",
+          "emergencyContactPhone",
+          "motorsportHistory"
+        ]
+      },
+      "PublicCreateEntryRequest": {
+        "type": "object",
+        "properties": {
+          "classId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "driver": {
+            "$ref": "#/components/schemas/PublicDriverInput"
+          },
+          "codriverEnabled": {
+            "type": "boolean"
+          },
+          "codriver": {
+            "$ref": "#/components/schemas/PublicCodriverInput"
+          },
+          "vehicle": {
+            "$ref": "#/components/schemas/PublicVehicleInput"
+          },
+          "backupVehicle": {
+            "$ref": "#/components/schemas/PublicVehicleInput"
+          },
+          "specialNotes": {
+            "type": "string"
+          },
+          "backupOfEntryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "startNumber": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9]{1,6}$"
+          },
+          "isBackupVehicle": {
+            "type": "boolean"
+          },
+          "consent": {
+            "type": "object",
+            "properties": {
+              "termsAccepted": {
+                "type": "boolean",
+                "const": true
+              },
+              "privacyAccepted": {
+                "type": "boolean",
+                "const": true
+              },
+              "mediaAccepted": {
+                "type": "boolean",
+                "default": false
+              },
+              "consentVersion": {
+                "type": "string"
+              },
+              "consentTextHash": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              },
+              "locale": {
+                "type": "string",
+                "example": "de-DE"
+              },
+              "consentSource": {
+                "type": "string",
+                "enum": [
+                  "public_form",
+                  "admin_ui"
+                ]
+              },
+              "consentCapturedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "termsAccepted",
+              "privacyAccepted",
+              "consentVersion",
+              "consentTextHash",
+              "locale",
+              "consentSource",
+              "consentCapturedAt"
+            ]
+          }
+        },
+        "required": [
+          "classId",
+          "driver",
+          "vehicle",
+          "startNumber",
+          "consent"
+        ]
+      },
+      "PublicCreateEntryResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "entryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "registrationStatus": {
+            "type": "string"
+          },
+          "verificationToken": {
+            "type": "string"
+          },
+          "confirmationMailSent": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "entryId",
+          "registrationStatus",
+          "verificationToken",
+          "confirmationMailSent"
+        ]
+      },
+      "PublicCreateEntriesBatchRequest": {
+        "type": "object",
+        "properties": {
+          "clientSubmissionKey": {
+            "type": "string"
+          },
+          "driver": {
+            "$ref": "#/components/schemas/PublicDriverInput"
+          },
+          "consent": {
+            "type": "object",
+            "properties": {
+              "termsAccepted": {
+                "type": "boolean",
+                "const": true
+              },
+              "privacyAccepted": {
+                "type": "boolean",
+                "const": true
+              },
+              "mediaAccepted": {
+                "type": "boolean",
+                "default": false
+              },
+              "consentVersion": {
+                "type": "string"
+              },
+              "consentTextHash": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              },
+              "locale": {
+                "type": "string",
+                "example": "de-DE"
+              },
+              "consentSource": {
+                "type": "string",
+                "enum": [
+                  "public_form",
+                  "admin_ui"
+                ]
+              },
+              "consentCapturedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "termsAccepted",
+              "privacyAccepted",
+              "consentVersion",
+              "consentTextHash",
+              "locale",
+              "consentSource",
+              "consentCapturedAt"
+            ]
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "classId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "codriverEnabled": {
+                  "type": "boolean"
+                },
+                "codriver": {
+                  "$ref": "#/components/schemas/PublicCodriverInput"
+                },
+                "vehicle": {
+                  "$ref": "#/components/schemas/PublicVehicleInput"
+                },
+                "backupVehicle": {
+                  "$ref": "#/components/schemas/PublicVehicleInput"
+                },
+                "specialNotes": {
+                  "type": "string"
+                },
+                "backupOfEntryId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "startNumber": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9]{1,6}$"
+                },
+                "isBackupVehicle": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "classId",
+                "vehicle",
+                "startNumber"
+              ]
+            }
+          }
+        },
+        "required": [
+          "clientSubmissionKey",
+          "driver",
+          "consent",
+          "entries"
+        ]
+      },
+      "PublicCreateEntriesBatchResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "groupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "entryCount": {
+            "type": "integer"
+          },
+          "registrationStatus": {
+            "type": "string"
+          },
+          "verificationToken": {
+            "type": "string"
+          },
+          "confirmationMailSent": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "groupId",
+          "entryIds",
+          "entryCount",
+          "registrationStatus",
+          "verificationToken",
+          "confirmationMailSent"
+        ]
+      },
+      "AdminEntryDetailResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "entry": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "object",
+                "properties": {
+                  "entryId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "eventId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "classId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "driverPersonId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "codriverPersonId": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "vehicleId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "backupVehicleId": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              "person": {
+                "type": "object",
+                "properties": {
+                  "codriver": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/PublicCodriverInput"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              "vehicle": {
+                "$ref": "#/components/schemas/PublicVehicleInput"
+              },
+              "backupVehicle": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/PublicVehicleInput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "entry",
+          "history"
+        ]
+      },
       "AdminEntry": {
         "type": "object",
         "properties": {
@@ -5664,6 +6464,20 @@
           "classId": {
             "type": "string",
             "format": "uuid"
+          },
+          "groupId": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "groupSize": {
+            "type": "integer"
           },
           "registrationStatus": {
             "type": "string"

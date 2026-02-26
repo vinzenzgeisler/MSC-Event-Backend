@@ -31,7 +31,7 @@ export const prodConfig: StageConfig = {
   },
   dbAllocatedStorage: 20,
   dbMaxAllocatedStorage: 100,
-  dbBackupRetentionDays: 7,
+  dbBackupRetentionDays: 30,
   dbPublicAccess: true,
   removalPolicy: 'retain'
 };

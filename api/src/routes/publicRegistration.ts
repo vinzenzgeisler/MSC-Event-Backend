@@ -6,11 +6,14 @@ import { getDb } from '../db/client';
 import {
   classPricingRule,
   entry,
-  entryEmailVerification,
   event,
   eventClass,
   eventPricingRule,
   person,
+  consentEvidence,
+  publicEntrySubmission,
+  registrationGroup,
+  registrationGroupEmailVerification,
   vehicle,
   vehicleImageUpload
 } from '../db/schema';
@@ -25,6 +28,7 @@ const nonEmptySchema = z.string().trim().min(1);
 const zipSchema = z.string().regex(/^\d{5}$/);
 
 const normalizePhone = (value: string): string => value.replace(/\D+/g, '');
+const normalizeEmail = (value: string): string => value.trim().toLowerCase();
 const phoneSchema = z
   .string()
   .trim()
@@ -60,23 +64,71 @@ const parseCylinders = (value: unknown): number | undefined => {
   return Number(match[1]);
 };
 
+const parseIsoDate = (value: string): Date | null => {
+  const [yearRaw, monthRaw, dayRaw] = value.split('-');
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return null;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+};
+
+const calculateAgeFromIsoDate = (value: string, now: Date): number | null => {
+  const parsed = parseIsoDate(value);
+  if (!parsed) {
+    return null;
+  }
+  const birthYear = parsed.getUTCFullYear();
+  const birthMonth = parsed.getUTCMonth();
+  const birthDay = parsed.getUTCDate();
+  const nowYear = now.getUTCFullYear();
+  const nowMonth = now.getUTCMonth();
+  const nowDay = now.getUTCDate();
+  let age = nowYear - birthYear;
+  const birthdayPassed = nowMonth > birthMonth || (nowMonth === birthMonth && nowDay >= birthDay);
+  if (!birthdayPassed) {
+    age -= 1;
+  }
+  return age;
+};
+
+const birthdateSchema = isoDateSchema.refine((value) => {
+  const age = calculateAgeFromIsoDate(value, new Date());
+  return age !== null && age >= 6 && age <= 100;
+}, 'Birthdate must represent an age between 6 and 100 years');
+
+const isMinorBirthdate = (value: string): boolean => {
+  const age = calculateAgeFromIsoDate(value, new Date());
+  return age !== null && age < 18;
+};
+
 const codriverInputSchema = z.object({
-  email: z.string().email().optional(),
-  firstName: nonEmptySchema.optional(),
-  lastName: nonEmptySchema.optional(),
-  birthdate: isoDateSchema.optional(),
-  nationality: z.string().trim().optional(),
-  street: z.string().trim().optional(),
-  zip: zipSchema.optional(),
-  city: z.string().trim().optional(),
-  phone: phoneSchema.optional()
+  email: z.string().email(),
+  firstName: nonEmptySchema,
+  lastName: nonEmptySchema,
+  birthdate: birthdateSchema,
+  nationality: nonEmptySchema,
+  street: nonEmptySchema,
+  zip: zipSchema,
+  city: nonEmptySchema,
+  phone: phoneSchema
 });
 
 const driverInputSchema = z.object({
   email: z.string().email(),
   firstName: nonEmptySchema,
   lastName: nonEmptySchema,
-  birthdate: isoDateSchema,
+  birthdate: birthdateSchema,
   nationality: z.string().trim().optional(),
   street: nonEmptySchema,
   zip: zipSchema,
@@ -87,18 +139,54 @@ const driverInputSchema = z.object({
   emergencyContactLastName: nonEmptySchema.optional(),
   emergencyContactPhone: phoneSchema,
   motorsportHistory: nonEmptySchema,
-  specialNotes: nonEmptySchema.optional()
+  specialNotes: nonEmptySchema.optional(),
+  guardianFullName: nonEmptySchema.optional(),
+  guardianEmail: z.string().email().optional(),
+  guardianPhone: phoneSchema.optional(),
+  guardianConsentAccepted: z.literal(true).optional()
 }).superRefine((value, ctx) => {
   const hasLegacyName = !!value.emergencyContactName;
   const hasSplitName = !!value.emergencyContactFirstName && !!value.emergencyContactLastName;
   if (hasLegacyName || hasSplitName) {
-    return;
+    // continue with minor guardian checks
+  } else {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['emergencyContactFirstName'],
+      message: 'Provide emergencyContactName or emergencyContactFirstName + emergencyContactLastName'
+    });
   }
-  ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    path: ['emergencyContactFirstName'],
-    message: 'Provide emergencyContactName or emergencyContactFirstName + emergencyContactLastName'
-  });
+
+  if (isMinorBirthdate(value.birthdate)) {
+    if (!value.guardianFullName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['guardianFullName'],
+        message: 'guardianFullName is required for participants under 18'
+      });
+    }
+    if (!value.guardianEmail) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['guardianEmail'],
+        message: 'guardianEmail is required for participants under 18'
+      });
+    }
+    if (!value.guardianPhone) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['guardianPhone'],
+        message: 'guardianPhone is required for participants under 18'
+      });
+    }
+    if (value.guardianConsentAccepted !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['guardianConsentAccepted'],
+        message: 'guardianConsentAccepted must be true for participants under 18'
+      });
+    }
+  }
 });
 
 const vehicleInputSchema = z.object({
@@ -120,61 +208,90 @@ const vehicleInputSchema = z.object({
   imageUploadId: z.string().uuid().optional()
 });
 
-const createEntrySchema = z
-  .object({
-    eventId: z.string().uuid(),
-    classId: z.string().uuid(),
-    driver: driverInputSchema,
-    codriverEnabled: z.boolean().optional(),
-    codriver: codriverInputSchema.optional(),
-    vehicle: vehicleInputSchema,
-    specialNotes: nonEmptySchema.optional(),
-    backupOfEntryId: z.string().uuid().optional(),
-    startNumber: z.string().regex(/^[a-zA-Z0-9]{1,6}$/),
-    isBackupVehicle: z.boolean().optional(),
-    consent: z.object({
-      termsAccepted: z.literal(true),
-      privacyAccepted: z.literal(true),
-      mediaAccepted: z.literal(true),
-      consentVersion: nonEmptySchema,
-      consentCapturedAt: z.string().datetime()
-    })
-  })
+const consentInputSchema = z.object({
+  termsAccepted: z.literal(true),
+  privacyAccepted: z.literal(true),
+  mediaAccepted: z.boolean().optional().default(false),
+  consentVersion: nonEmptySchema,
+  consentTextHash: z.string().trim().regex(/^[a-fA-F0-9]{64}$/),
+  locale: z.string().trim().min(2).max(16),
+  consentSource: z.enum(['public_form', 'admin_ui']).optional().default('public_form'),
+  consentCapturedAt: z.string().datetime()
+});
+
+const createEntryItemBaseSchema = z.object({
+  classId: z.string().uuid(),
+  codriverEnabled: z.boolean().optional(),
+  codriver: codriverInputSchema.optional(),
+  vehicle: vehicleInputSchema,
+  backupVehicle: vehicleInputSchema.optional(),
+  specialNotes: nonEmptySchema.optional(),
+  backupOfEntryId: z.string().uuid().optional(),
+  startNumber: z.string().regex(/^[a-zA-Z0-9]{1,6}$/),
+  isBackupVehicle: z.boolean().optional()
+});
+
+const createEntryItemSchema = createEntryItemBaseSchema
   .superRefine((value, ctx) => {
-    const codriverIsRequired = value.codriverEnabled === true || value.codriver !== undefined;
-    if (!codriverIsRequired) {
-      return;
-    }
-    if (!value.codriver) {
+    if (value.codriverEnabled === true && !value.codriver) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['codriver'],
         message: 'codriver is required when codriverEnabled=true'
       });
-      return;
     }
-    if (!value.codriver.firstName) {
+  });
+
+const createEntrySchema = z
+  .object({
+    eventId: z.string().uuid(),
+    driver: driverInputSchema,
+    consent: consentInputSchema,
+    classId: createEntryItemBaseSchema.shape.classId,
+    codriverEnabled: createEntryItemBaseSchema.shape.codriverEnabled,
+    codriver: createEntryItemBaseSchema.shape.codriver,
+    vehicle: createEntryItemBaseSchema.shape.vehicle,
+    backupVehicle: createEntryItemBaseSchema.shape.backupVehicle,
+    specialNotes: createEntryItemBaseSchema.shape.specialNotes,
+    backupOfEntryId: createEntryItemBaseSchema.shape.backupOfEntryId,
+    startNumber: createEntryItemBaseSchema.shape.startNumber,
+    isBackupVehicle: createEntryItemBaseSchema.shape.isBackupVehicle
+  })
+  .superRefine((value, ctx) => {
+    if (value.codriverEnabled === true && !value.codriver) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['codriver', 'firstName'],
-        message: 'firstName is required'
-      });
-    }
-    if (!value.codriver.lastName) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['codriver', 'lastName'],
-        message: 'lastName is required'
-      });
-    }
-    if (!value.codriver.email) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['codriver', 'email'],
-        message: 'email is required'
+        path: ['codriver'],
+        message: 'codriver is required when codriverEnabled=true'
       });
     }
   });
+
+const createBatchSchema = z.object({
+  eventId: z.string().uuid(),
+  clientSubmissionKey: nonEmptySchema.max(128),
+  driver: driverInputSchema,
+  consent: consentInputSchema,
+  entries: z.array(createEntryItemSchema).min(1).max(10)
+});
+
+const createBatchWithoutIdempotencySchema = z.object({
+  eventId: z.string().uuid(),
+  driver: driverInputSchema,
+  consent: consentInputSchema,
+  entries: z.array(createEntryItemSchema).min(1).max(10)
+});
+
+const createBatchInternalSchema = z.union([createBatchSchema, createBatchWithoutIdempotencySchema]);
+
+const batchResponseSchema = z.object({
+  groupId: z.string().uuid(),
+  entryIds: z.array(z.string().uuid()),
+  entryCount: z.number().int().min(1),
+  registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']),
+  verificationToken: z.string(),
+  confirmationMailSent: z.boolean()
+});
 
 const verifySchema = z.object({
   token: z.string().min(16)
@@ -204,6 +321,12 @@ type UploadInitInput = z.infer<typeof uploadInitSchema>;
 type UploadFinalizeInput = z.infer<typeof uploadFinalizeSchema>;
 type DriverInput = z.infer<typeof driverInputSchema>;
 type CodriverInput = z.infer<typeof codriverInputSchema>;
+type VehicleInput = z.infer<typeof vehicleInputSchema>;
+type CreateEntryItemInput = z.infer<typeof createEntryItemSchema>;
+type CreateBatchInput = z.infer<typeof createBatchSchema>;
+type CreateBatchWithoutIdempotencyInput = z.infer<typeof createBatchWithoutIdempotencySchema>;
+type CreateBatchInternalInput = z.infer<typeof createBatchInternalSchema>;
+type BatchResponse = z.infer<typeof batchResponseSchema>;
 
 const buildEmergencyContactName = (input: Partial<DriverInput>): string | null => {
   if (input.emergencyContactName) {
@@ -257,19 +380,76 @@ const assertRegistrationOpen = async (eventId: string) => {
   }
 };
 
-export const createPublicEntry = async (input: CreateEntryInput) => {
+const canonicalizePayload = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizePayload(item));
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+    return Object.fromEntries(entries.map(([key, current]) => [key, canonicalizePayload(current)]));
+  }
+  return value;
+};
+
+const createPayloadHash = (value: unknown): string =>
+  createHash('sha256').update(JSON.stringify(canonicalizePayload(value))).digest('hex');
+
+export const createPublicEntriesBatch = async (input: CreateBatchInput) => {
+  return createPublicEntriesBatchInternal(input);
+};
+
+const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput): Promise<BatchResponse> => {
   await assertRegistrationOpen(input.eventId);
   const db = await getDb();
   const now = new Date();
-  const normalizedStartNumber = normalizeStartNumber(input.startNumber);
-  if (!normalizedStartNumber) {
-    throw new Error('START_NUMBER_INVALID_FORMAT');
-  }
   const token = createHash('sha256').update(`${randomUUID()}:${input.driver.email}:${Date.now()}`).digest('hex');
   const tokenExpiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24);
+  const normalizedDriverEmail = normalizeEmail(input.driver.email);
+  const payloadHash = createPayloadHash(input);
 
   try {
     const created = await db.transaction(async (tx) => {
+      const existingSubmission =
+        'clientSubmissionKey' in input
+          ? await tx
+              .select({
+                payloadHash: publicEntrySubmission.payloadHash,
+                responsePayload: publicEntrySubmission.responsePayload
+              })
+              .from(publicEntrySubmission)
+              .where(and(eq(publicEntrySubmission.eventId, input.eventId), eq(publicEntrySubmission.clientSubmissionKey, input.clientSubmissionKey)))
+              .limit(1)
+          : [];
+      if (existingSubmission[0]) {
+        if (existingSubmission[0].payloadHash !== payloadHash) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD');
+        }
+        const parsedReplay = batchResponseSchema.safeParse(existingSubmission[0].responsePayload);
+        if (!parsedReplay.success) {
+          throw new Error('IDEMPOTENT_RESPONSE_INVALID');
+        }
+        return {
+          replay: true as const,
+          response: parsedReplay.data,
+          eventName: null as string | null
+        };
+      }
+
+      const activeGroupRows = await tx
+        .select({ id: registrationGroup.id })
+        .from(registrationGroup)
+        .where(
+          and(
+            eq(registrationGroup.eventId, input.eventId),
+            eq(registrationGroup.driverEmailNorm, normalizedDriverEmail),
+            sql`${registrationGroup.deletedAt} is null`
+          )
+        )
+        .limit(1);
+      if (activeGroupRows[0]) {
+        throw new Error('EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
+      }
+
       const upsertPersonByEmail = async (personInput: DriverInput | CodriverInput) => {
         const extra = personInput as Partial<DriverInput>;
         const emergencyName = buildEmergencyContactName(extra);
@@ -330,18 +510,6 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
         return inserted;
       };
 
-      const classRows = await tx
-        .select({ id: eventClass.id, eventId: eventClass.eventId, vehicleType: eventClass.vehicleType })
-        .from(eventClass)
-        .where(eq(eventClass.id, input.classId))
-        .limit(1);
-      const clazz = classRows[0];
-      if (!clazz || clazz.eventId !== input.eventId) {
-        throw new Error('CLASS_NOT_FOUND');
-      }
-      if (input.vehicle.vehicleType && clazz.vehicleType !== input.vehicle.vehicleType) {
-        throw new Error('CLASS_VEHICLE_TYPE_MISMATCH');
-      }
       const eventRows = await tx
         .select({
           id: event.id,
@@ -357,116 +525,209 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
 
       const driver = await upsertPersonByEmail(input.driver);
 
-      let codriverId: string | null = null;
-      if (input.codriver) {
-        const codriver = await upsertPersonByEmail(input.codriver);
-        codriverId = codriver.id;
-      }
-
-      let imageS3Key: string | null = input.vehicle.imageS3Key ?? null;
-      if (input.vehicle.imageUploadId) {
-        const uploadRows = await tx
-          .select({
-            id: vehicleImageUpload.id,
-            eventId: vehicleImageUpload.eventId,
-            s3Key: vehicleImageUpload.s3Key,
-            status: vehicleImageUpload.status
-          })
-          .from(vehicleImageUpload)
-          .where(eq(vehicleImageUpload.id, input.vehicle.imageUploadId))
-          .limit(1);
-        const upload = uploadRows[0];
-        if (!upload || upload.eventId !== input.eventId || upload.status !== 'finalized') {
-          throw new Error('IMAGE_UPLOAD_INVALID');
-        }
-        imageS3Key = upload.s3Key;
-      }
-
-      const [createdVehicle] = await tx
-        .insert(vehicle)
-        .values({
-          ownerPersonId: driver.id,
-          vehicleType: clazz.vehicleType,
-          make: input.vehicle.make,
-          model: input.vehicle.model,
-          year: input.vehicle.year ?? null,
-          displacementCcm: input.vehicle.displacementCcm,
-          engineType: input.vehicle.engineType,
-          cylinders: input.vehicle.cylinders,
-          brakes: input.vehicle.brakes,
-          ownerName: input.vehicle.ownerName ?? null,
-          vehicleHistory: input.vehicle.vehicleHistory,
-          startNumberRaw: normalizedStartNumber,
-          imageS3Key,
-          createdAt: now,
-          updatedAt: now
-        })
-        .returning();
-
-      if (input.isBackupVehicle === true && !input.backupOfEntryId) {
-        throw new Error('BACKUP_LINK_REQUIRED');
-      }
-
-      let backupOfEntryId: string | null = null;
-      if (input.backupOfEntryId) {
-        const backupRows = await tx
-          .select({
-            id: entry.id,
-            eventId: entry.eventId,
-            classId: entry.classId,
-            driverPersonId: entry.driverPersonId
-          })
-          .from(entry)
-          .where(eq(entry.id, input.backupOfEntryId))
-          .limit(1);
-        const backup = backupRows[0];
-        if (!backup) {
-          throw new Error('BACKUP_ENTRY_NOT_FOUND');
-        }
-        if (backup.eventId !== input.eventId || backup.classId !== input.classId || backup.driverPersonId !== driver.id) {
-          throw new Error('BACKUP_ENTRY_INVALID_LINK');
-        }
-        backupOfEntryId = backup.id;
-      }
-
-      const [createdEntry] = await tx
-        .insert(entry)
+      const [createdGroup] = await tx
+        .insert(registrationGroup)
         .values({
           eventId: input.eventId,
-          classId: input.classId,
           driverPersonId: driver.id,
-          codriverPersonId: codriverId,
-          vehicleId: createdVehicle.id,
-          isBackupVehicle: backupOfEntryId !== null || input.isBackupVehicle === true,
-          backupOfEntryId,
-          startNumberNorm: normalizedStartNumber,
-          registrationStatus: 'submitted_unverified',
-          acceptanceStatus: 'pending',
-          checkinIdVerified: false,
-          techStatus: 'pending',
-          specialNotes: input.driver.specialNotes ?? input.specialNotes ?? null,
-          confirmationMailSentAt: null,
-          confirmationMailVerifiedAt: null,
-          consentTermsAccepted: input.consent.termsAccepted,
-          consentPrivacyAccepted: input.consent.privacyAccepted,
-          consentMediaAccepted: input.consent.mediaAccepted,
-          consentVersion: input.consent.consentVersion,
-          consentCapturedAt: new Date(input.consent.consentCapturedAt),
+          driverEmailNorm: normalizedDriverEmail,
           createdAt: now,
           updatedAt: now
         })
-        .returning();
+        .returning({
+          id: registrationGroup.id
+        });
+      if (!createdGroup) {
+        throw new Error('GROUP_CREATE_FAILED');
+      }
+
+      const entryIds: string[] = [];
+      for (const item of input.entries) {
+        const normalizedStartNumber = normalizeStartNumber(item.startNumber);
+        if (!normalizedStartNumber) {
+          throw new Error('START_NUMBER_INVALID_FORMAT');
+        }
+
+        const classRows = await tx
+          .select({ id: eventClass.id, eventId: eventClass.eventId, vehicleType: eventClass.vehicleType })
+          .from(eventClass)
+          .where(eq(eventClass.id, item.classId))
+          .limit(1);
+        const clazz = classRows[0];
+        if (!clazz || clazz.eventId !== input.eventId) {
+          throw new Error('CLASS_NOT_FOUND');
+        }
+        if (item.vehicle.vehicleType && clazz.vehicleType !== item.vehicle.vehicleType) {
+          throw new Error('CLASS_VEHICLE_TYPE_MISMATCH');
+        }
+
+        let codriverId: string | null = null;
+        if (item.codriver) {
+          const codriver = await upsertPersonByEmail(item.codriver);
+          codriverId = codriver.id;
+        }
+
+        const resolveVehicleImageS3Key = async (vehicleInput: VehicleInput): Promise<string | null> => {
+          let imageS3Key: string | null = vehicleInput.imageS3Key ?? null;
+          if (!vehicleInput.imageUploadId) {
+            return imageS3Key;
+          }
+          const uploadRows = await tx
+            .select({
+              id: vehicleImageUpload.id,
+              eventId: vehicleImageUpload.eventId,
+              s3Key: vehicleImageUpload.s3Key,
+              status: vehicleImageUpload.status
+            })
+            .from(vehicleImageUpload)
+            .where(eq(vehicleImageUpload.id, vehicleInput.imageUploadId))
+            .limit(1);
+          const upload = uploadRows[0];
+          if (!upload || upload.eventId !== input.eventId || upload.status !== 'finalized') {
+            throw new Error('IMAGE_UPLOAD_INVALID');
+          }
+          imageS3Key = upload.s3Key;
+          return imageS3Key;
+        };
+
+        const createVehicleRecord = async (vehicleInput: VehicleInput, resolvedStartNumberRaw: string | null) => {
+          const imageS3Key = await resolveVehicleImageS3Key(vehicleInput);
+          const [createdVehicle] = await tx
+            .insert(vehicle)
+            .values({
+              ownerPersonId: driver.id,
+              vehicleType: clazz.vehicleType,
+              make: vehicleInput.make,
+              model: vehicleInput.model,
+              year: vehicleInput.year ?? null,
+              displacementCcm: vehicleInput.displacementCcm,
+              engineType: vehicleInput.engineType,
+              cylinders: vehicleInput.cylinders,
+              brakes: vehicleInput.brakes,
+              ownerName: vehicleInput.ownerName ?? null,
+              vehicleHistory: vehicleInput.vehicleHistory,
+              startNumberRaw: resolvedStartNumberRaw,
+              imageS3Key,
+              createdAt: now,
+              updatedAt: now
+            })
+            .returning();
+          return createdVehicle;
+        };
+
+        const normalizedBackupVehicleStartNumber = item.backupVehicle?.startNumberRaw
+          ? normalizeStartNumber(item.backupVehicle.startNumberRaw)
+          : null;
+        const createdVehicle = await createVehicleRecord(item.vehicle, normalizedStartNumber);
+        const createdBackupVehicle = item.backupVehicle
+          ? await createVehicleRecord(item.backupVehicle, normalizedBackupVehicleStartNumber)
+          : null;
+
+        if (item.isBackupVehicle === true && !item.backupOfEntryId) {
+          throw new Error('BACKUP_LINK_REQUIRED');
+        }
+
+        let backupOfEntryId: string | null = null;
+        if (item.backupOfEntryId) {
+          const backupRows = await tx
+            .select({
+              id: entry.id,
+              eventId: entry.eventId,
+              classId: entry.classId,
+              driverPersonId: entry.driverPersonId
+            })
+            .from(entry)
+            .where(eq(entry.id, item.backupOfEntryId))
+            .limit(1);
+          const backup = backupRows[0];
+          if (!backup) {
+            throw new Error('BACKUP_ENTRY_NOT_FOUND');
+          }
+          if (backup.eventId !== input.eventId || backup.classId !== item.classId || backup.driverPersonId !== driver.id) {
+            throw new Error('BACKUP_ENTRY_INVALID_LINK');
+          }
+          backupOfEntryId = backup.id;
+        }
+
+        const [createdEntry] = await tx
+          .insert(entry)
+          .values({
+            eventId: input.eventId,
+            classId: item.classId,
+            driverPersonId: driver.id,
+            registrationGroupId: createdGroup.id,
+            codriverPersonId: codriverId,
+            vehicleId: createdVehicle.id,
+            backupVehicleId: createdBackupVehicle?.id ?? null,
+            isBackupVehicle: backupOfEntryId !== null || item.isBackupVehicle === true,
+            backupOfEntryId,
+            startNumberNorm: normalizedStartNumber,
+            driverEmailNorm: normalizedDriverEmail,
+            registrationStatus: 'submitted_unverified',
+            acceptanceStatus: 'pending',
+            checkinIdVerified: false,
+            techStatus: 'pending',
+            specialNotes: input.driver.specialNotes ?? item.specialNotes ?? null,
+            confirmationMailSentAt: null,
+            confirmationMailVerifiedAt: null,
+            consentTermsAccepted: input.consent.termsAccepted,
+            consentPrivacyAccepted: input.consent.privacyAccepted,
+            consentMediaAccepted: input.consent.mediaAccepted,
+            consentVersion: input.consent.consentVersion,
+            consentCapturedAt: new Date(input.consent.consentCapturedAt),
+            createdAt: now,
+            updatedAt: now
+          })
+          .returning({
+            id: entry.id
+          });
+        if (!createdEntry) {
+          throw new Error('ENTRY_CREATE_FAILED');
+        }
+
+        await tx.insert(consentEvidence).values({
+          entryId: createdEntry.id,
+          consentVersion: input.consent.consentVersion,
+          consentTextHash: input.consent.consentTextHash.toLowerCase(),
+          locale: input.consent.locale,
+          consentSource: input.consent.consentSource,
+          termsAccepted: input.consent.termsAccepted,
+          privacyAccepted: input.consent.privacyAccepted,
+          mediaAccepted: input.consent.mediaAccepted,
+          guardianFullName: input.driver.guardianFullName ?? null,
+          guardianEmail: input.driver.guardianEmail ? normalizeEmail(input.driver.guardianEmail) : null,
+          guardianPhone: input.driver.guardianPhone ?? null,
+          guardianConsentAccepted: input.driver.guardianConsentAccepted === true,
+          capturedAt: new Date(input.consent.consentCapturedAt),
+          isLegacy: false,
+          createdAt: now
+        });
+
+        entryIds.push(createdEntry.id);
+
+        await writeAuditLog(tx as never, {
+          eventId: input.eventId,
+          actorUserId: null,
+          action: 'public_entry_created',
+          entityType: 'entry',
+          entityId: createdEntry.id,
+          payload: {
+            registrationStatus: 'submitted_unverified',
+            registrationGroupId: createdGroup.id
+          }
+        });
+      }
 
       await tx
-        .insert(entryEmailVerification)
+        .insert(registrationGroupEmailVerification)
         .values({
-          entryId: createdEntry.id,
+          registrationGroupId: createdGroup.id,
           token,
           expiresAt: tokenExpiresAt,
           createdAt: now
         })
         .onConflictDoUpdate({
-          target: entryEmailVerification.entryId,
+          target: registrationGroupEmailVerification.registrationGroupId,
           set: {
             token,
             expiresAt: tokenExpiresAt,
@@ -475,27 +736,40 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
           }
         });
 
-      await writeAuditLog(tx as never, {
-        eventId: input.eventId,
-        actorUserId: null,
-        action: 'public_entry_created',
-        entityType: 'entry',
-        entityId: createdEntry.id,
-        payload: {
-          registrationStatus: 'submitted_unverified'
-        }
-      });
+      const response: BatchResponse = {
+        groupId: createdGroup.id,
+        entryIds,
+        entryCount: entryIds.length,
+        registrationStatus: 'submitted_unverified',
+        verificationToken: token,
+        confirmationMailSent: false
+      };
+
+      if ('clientSubmissionKey' in input) {
+        await tx.insert(publicEntrySubmission).values({
+          eventId: input.eventId,
+          clientSubmissionKey: input.clientSubmissionKey,
+          payloadHash,
+          responsePayload: response,
+          createdAt: now,
+          updatedAt: now
+        });
+      }
 
       return {
-        entryId: createdEntry.id,
-        registrationStatus: createdEntry.registrationStatus,
+        replay: false as const,
+        response,
         eventName: currentEvent.name
       };
     });
 
-    const verificationUrl = buildPublicVerificationUrl(created.entryId, token);
-    const { eventName, ...createdEntryPublic } = created;
+    if (created.replay) {
+      return created.response;
+    }
+
     let confirmationMailSent = false;
+    const primaryEntryId = created.response.entryIds[0];
+    const verificationUrl = buildPublicVerificationUrl(primaryEntryId, created.response.verificationToken);
     try {
       const queued = await queueMail(
         {
@@ -503,10 +777,12 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
           templateId: 'registration_received',
           recipientEmails: [input.driver.email],
           templateData: {
-            eventName,
+            eventName: created.eventName,
             driverName: `${input.driver.firstName} ${input.driver.lastName}`.trim(),
-            entryId: created.entryId,
-            verificationToken: token,
+            entryId: primaryEntryId,
+            groupId: created.response.groupId,
+            entryCount: created.response.entryCount,
+            verificationToken: created.response.verificationToken,
             verificationUrl
           }
         },
@@ -514,29 +790,80 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
       );
       if (queued.queued > 0) {
         confirmationMailSent = true;
-        await db
-          .update(entry)
-          .set({
-            confirmationMailSentAt: now,
-            updatedAt: now
-          })
-          .where(eq(entry.id, created.entryId));
+        await db.transaction(async (tx) => {
+          await tx
+            .update(entry)
+            .set({
+              confirmationMailSentAt: now,
+              updatedAt: now
+            })
+            .where(eq(entry.registrationGroupId, created.response.groupId));
+          if ('clientSubmissionKey' in input) {
+            await tx
+              .update(publicEntrySubmission)
+              .set({
+                responsePayload: {
+                  ...created.response,
+                  confirmationMailSent: true
+                },
+                updatedAt: now
+              })
+              .where(and(eq(publicEntrySubmission.eventId, input.eventId), eq(publicEntrySubmission.clientSubmissionKey, input.clientSubmissionKey)));
+          }
+        });
       }
     } catch {
       confirmationMailSent = false;
     }
 
     return {
-      ...createdEntryPublic,
-      verificationToken: token,
+      ...created.response,
       confirmationMailSent
     };
   } catch (error) {
+    if (
+      isPgUniqueViolation(error) &&
+      typeof error === 'object' &&
+      error !== null &&
+      'constraint' in error &&
+      (error as { constraint?: string }).constraint === 'registration_group_event_driver_email_active_unique'
+    ) {
+      throw new Error('EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
+    }
     if (isPgUniqueViolation(error)) {
       throw new Error('UNIQUE_VIOLATION');
     }
     throw error;
   }
+};
+
+export const createPublicEntry = async (input: CreateEntryInput) => {
+  const batchResult = await createPublicEntriesBatchInternal({
+    eventId: input.eventId,
+    driver: input.driver,
+    consent: input.consent,
+    entries: [
+      {
+        classId: input.classId,
+        codriverEnabled: input.codriverEnabled,
+        codriver: input.codriver,
+        vehicle: input.vehicle,
+        backupVehicle: input.backupVehicle,
+        specialNotes: input.specialNotes,
+        backupOfEntryId: input.backupOfEntryId,
+        startNumber: input.startNumber,
+        isBackupVehicle: input.isBackupVehicle
+      }
+    ]
+  });
+  return {
+    groupId: batchResult.groupId,
+    entryId: batchResult.entryIds[0],
+    entryCount: batchResult.entryCount,
+    registrationStatus: batchResult.registrationStatus,
+    verificationToken: batchResult.verificationToken,
+    confirmationMailSent: batchResult.confirmationMailSent
+  };
 };
 
 export const getPublicCurrentEventWithClasses = async () => {
@@ -770,62 +1097,114 @@ export const verifyPublicEntryEmail = async (entryId: string, input: VerifyInput
   const db = await getDb();
   const now = new Date();
 
-  const rows = await db
+  const entryRows = await db
     .select({
-      id: entryEmailVerification.id,
+      entryId: entry.id,
+      groupId: entry.registrationGroupId,
       eventId: entry.eventId,
-      expiresAt: entryEmailVerification.expiresAt,
-      verifiedAt: entryEmailVerification.verifiedAt,
-      token: entryEmailVerification.token
+      groupDriverEmailNorm: registrationGroup.driverEmailNorm
     })
-    .from(entryEmailVerification)
-    .innerJoin(entry, eq(entryEmailVerification.entryId, entry.id))
-    .where(and(eq(entryEmailVerification.entryId, entryId), eq(entryEmailVerification.token, input.token)))
+    .from(entry)
+    .leftJoin(registrationGroup, eq(entry.registrationGroupId, registrationGroup.id))
+    .where(eq(entry.id, entryId))
     .limit(1);
-  const verification = rows[0];
-  if (!verification) {
+  const currentEntry = entryRows[0];
+  if (!currentEntry || !currentEntry.groupId) {
+    throw new Error('VERIFY_TOKEN_INVALID');
+  }
+  const groupId = currentEntry.groupId;
+
+  const verificationRows = await db
+    .select({
+      id: registrationGroupEmailVerification.id,
+      token: registrationGroupEmailVerification.token,
+      expiresAt: registrationGroupEmailVerification.expiresAt,
+      verifiedAt: registrationGroupEmailVerification.verifiedAt
+    })
+    .from(registrationGroupEmailVerification)
+    .where(eq(registrationGroupEmailVerification.registrationGroupId, groupId))
+    .limit(1);
+  const verification = verificationRows[0];
+  if (!verification || verification.token !== input.token) {
     throw new Error('VERIFY_TOKEN_INVALID');
   }
   if (verification.verifiedAt) {
-    return { alreadyVerified: true };
+    throw new Error('VERIFY_TOKEN_ALREADY_USED');
   }
   if (verification.expiresAt < now) {
     throw new Error('VERIFY_TOKEN_EXPIRED');
   }
+  const conflictGroups = await db
+    .select({
+      id: registrationGroup.id
+    })
+    .from(registrationGroup)
+    .where(
+      and(
+        eq(registrationGroup.eventId, currentEntry.eventId),
+        eq(registrationGroup.driverEmailNorm, currentEntry.groupDriverEmailNorm ?? ''),
+        sql`${registrationGroup.deletedAt} is null`,
+        sql`${registrationGroup.id} != ${groupId}`
+      )
+    )
+    .limit(1);
+  if (conflictGroups[0]) {
+    throw new Error('EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
+  }
 
   await db.transaction(async (tx) => {
-    await tx
-      .update(entryEmailVerification)
+    const updatedVerificationRows = await tx
+      .update(registrationGroupEmailVerification)
       .set({
         verifiedAt: now
       })
-      .where(eq(entryEmailVerification.id, verification.id));
+      .where(
+        and(
+          eq(registrationGroupEmailVerification.id, verification.id),
+          sql`${registrationGroupEmailVerification.verifiedAt} is null`
+        )
+      )
+      .returning({
+        id: registrationGroupEmailVerification.id
+      });
+    if (!updatedVerificationRows[0]) {
+      throw new Error('VERIFY_TOKEN_ALREADY_USED');
+    }
 
-    await tx
+    const updatedEntries = await tx
       .update(entry)
       .set({
         registrationStatus: 'submitted_verified',
         confirmationMailVerifiedAt: now,
         updatedAt: now
       })
-      .where(eq(entry.id, entryId));
+      .where(
+        and(eq(entry.registrationGroupId, groupId), sql`${entry.deletedAt} is null`)
+      )
+      .returning({
+        id: entry.id
+      });
 
-    await writeAuditLog(tx as never, {
-      eventId: verification.eventId,
-      actorUserId: null,
-      action: 'public_entry_verified',
-      entityType: 'entry',
-      entityId: entryId,
-      payload: {
-        registrationStatus: 'submitted_verified'
-      }
-    });
+    for (const updated of updatedEntries) {
+      await writeAuditLog(tx as never, {
+        eventId: currentEntry.eventId,
+        actorUserId: null,
+        action: 'public_entry_verified',
+        entityType: 'entry',
+        entityId: updated.id,
+        payload: {
+          registrationStatus: 'submitted_verified',
+          registrationGroupId: groupId
+        }
+      });
+    }
   });
 
-  return { verified: true };
+  return { verified: true, groupId };
 };
 
 export const validateCreatePublicEntryInput = (payload: unknown) => createEntrySchema.parse(payload);
+export const validateCreatePublicEntriesBatchInput = (payload: unknown) => createBatchSchema.parse(payload);
 export const validateVerifyPublicEntryInput = (payload: unknown) => verifySchema.parse(payload);
 export const validatePublicStartNumberInput = (payload: unknown) => validateStartNumberSchema.parse(payload);
 export const validateVehicleImageUploadInitInput = (payload: unknown) => uploadInitSchema.parse(payload);

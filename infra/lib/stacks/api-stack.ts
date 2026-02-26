@@ -7,6 +7,7 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
 import * as path from 'path';
@@ -108,6 +109,7 @@ export class ApiStack extends Stack {
         sourceMap: true,
         minify: false
       },
+      logRetention: logs.RetentionDays.ONE_MONTH,
       ...lambdaVpcConfig
     });
 
@@ -138,6 +140,43 @@ export class ApiStack extends Stack {
         sourceMap: true,
         minify: false
       },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+      ...lambdaVpcConfig
+    });
+
+    const privacyRetentionWorker = new NodejsFunction(this, 'PrivacyRetentionWorker', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(__dirname, '../../../api/src/jobs/privacyRetentionWorker.ts'),
+      handler: 'handler',
+      functionName: `${props.config.prefix}-privacy-retention-worker`,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(60),
+      environment: {
+        STAGE: props.config.stage,
+        DB_SECRET_ARN: dbSecretArn,
+        DB_HOST: dbHost,
+        DB_PORT: dbPort,
+        DB_NAME: props.config.dbName,
+        DB_USER: dbUser,
+        DB_REGION: dbRegion,
+        DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+        DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+        DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+        DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+        RETENTION_VERIFICATION_DAYS: '30',
+        RETENTION_IDEMPOTENCY_DAYS: '30',
+        RETENTION_UPLOAD_DAYS: '30',
+        RETENTION_EXPORT_DAYS: '90',
+        RETENTION_OUTBOX_DAYS: '365',
+        RETENTION_AUDIT_DAYS: '730',
+        RETENTION_NOTES_DAYS: '365'
+      },
+      bundling: {
+        target: 'node20',
+        sourceMap: true,
+        minify: false
+      },
+      logRetention: logs.RetentionDays.THREE_MONTHS,
       ...lambdaVpcConfig
     });
 
@@ -148,7 +187,7 @@ export class ApiStack extends Stack {
       })
     );
 
-    [apiHandler, emailWorker].forEach((fn) => {
+    [apiHandler, emailWorker, privacyRetentionWorker].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['rds-db:connect'],
@@ -197,7 +236,7 @@ export class ApiStack extends Stack {
       })
     );
 
-    [emailWorker].forEach((fn) => {
+    [emailWorker, privacyRetentionWorker].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['secretsmanager:GetSecretValue'],
@@ -209,6 +248,11 @@ export class ApiStack extends Stack {
     new events.Rule(this, 'EmailWorkerSchedule', {
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
       targets: [new targets.LambdaFunction(emailWorker)]
+    });
+
+    new events.Rule(this, 'PrivacyRetentionSchedule', {
+      schedule: events.Schedule.rate(cdk.Duration.hours(24)),
+      targets: [new targets.LambdaFunction(privacyRetentionWorker)]
     });
 
     const integration = new SharedPermissionHttpLambdaIntegration('ApiIntegration', apiHandler);
@@ -234,6 +278,12 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/public/events/{id}/entries',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/events/{id}/entries/batch',
       methods: [apigwv2.HttpMethod.POST],
       integration
     });

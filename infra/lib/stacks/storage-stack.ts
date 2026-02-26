@@ -1,4 +1,4 @@
-import { CfnOutput, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import { StageConfig } from '../config/types';
@@ -25,6 +25,14 @@ export class StorageStack extends Stack {
       enforceSSL: true,
       removalPolicy,
       autoDeleteObjects: props.config.removalPolicy === 'destroy',
+      lifecycleRules: [
+        {
+          id: 'expire-upload-objects',
+          enabled: true,
+          prefix: 'uploads/',
+          expiration: props.config.stage === 'prod' ? Duration.days(30) : Duration.days(7)
+        }
+      ],
       ...(assetsCorsOrigins.length > 0
         ? {
             cors: [
@@ -47,7 +55,15 @@ export class StorageStack extends Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
       removalPolicy,
-      autoDeleteObjects: props.config.removalPolicy === 'destroy'
+      autoDeleteObjects: props.config.removalPolicy === 'destroy',
+      lifecycleRules: [
+        {
+          id: 'expire-export-artifacts',
+          enabled: true,
+          prefix: 'exports/',
+          expiration: Duration.days(90)
+        }
+      ]
     });
 
     new CfnOutput(this, 'AssetsBucketName', {

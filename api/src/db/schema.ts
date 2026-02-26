@@ -152,6 +152,7 @@ export const entry = pgTable(
     driverNote: text('driver_note'),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     deletedBy: text('deleted_by'),
+    deletedByDisplay: text('deleted_by_display'),
     deleteReason: text('delete_reason'),
     confirmationMailSentAt: timestamp('confirmation_mail_sent_at', { withTimezone: true }),
     confirmationMailVerifiedAt: timestamp('confirmation_mail_verified_at', { withTimezone: true }),

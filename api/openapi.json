@@ -3651,7 +3651,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Soft delete successful",
+            "description": "Soft delete result",
             "content": {
               "application/json": {
                 "schema": {
@@ -3663,11 +3663,26 @@
                     "deletedEntryId": {
                       "type": "string",
                       "format": "uuid"
+                    },
+                    "deletedReason": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "deletedByUserId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "deletedByDisplay": {
+                      "type": "string",
+                      "nullable": true
                     }
                   },
                   "required": [
                     "ok",
-                    "deletedEntryId"
+                    "deletedEntryId",
+                    "deletedReason",
+                    "deletedByUserId",
+                    "deletedByDisplay"
                   ]
                 }
               }
@@ -3748,7 +3763,36 @@
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "description": "Soft-deletes an entry. Supports optional deleteReason in request body. Idempotent for already-deleted entries.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "deleteReason": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 2000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "examples": {
+                "withReason": {
+                  "value": {
+                    "deleteReason": "Doppelte Nennung"
+                  }
+                },
+                "withoutReason": {
+                  "value": {}
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/admin/entries/{id}/restore": {

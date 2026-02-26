@@ -79,12 +79,20 @@ const entryPaymentAmountsPatchSchema = z
     }
   );
 
+const entryDeleteSchema = z
+  .object({
+    deleteReason: z.string().max(2000).nullable().optional()
+  })
+  .nullable()
+  .optional();
+
 type ListEntriesQuery = z.infer<typeof listEntriesQuerySchema>;
 type EntryStatusPatch = z.infer<typeof entryStatusPatchSchema>;
 type TechStatusPatch = z.infer<typeof techStatusPatchSchema>;
 type EntryNotesPatch = z.infer<typeof entryNotesPatchSchema>;
 type EntryPaymentStatusPatch = z.infer<typeof entryPaymentStatusPatchSchema>;
 type EntryPaymentAmountsPatch = z.infer<typeof entryPaymentAmountsPatchSchema>;
+type EntryDeleteInput = z.infer<typeof entryDeleteSchema>;
 
 const toVehicleLabel = (make: string | null, model: string | null, startNumberNorm: string | null): string => {
   const label = [make, model].filter((part) => !!part && part.trim().length > 0).join(' ');
@@ -184,6 +192,7 @@ const listEntriesByDeleteState = async (
       confirmationMailVerifiedAt: entry.confirmationMailVerifiedAt,
       deletedAt: entry.deletedAt,
       deletedBy: entry.deletedBy,
+      deletedByDisplay: entry.deletedByDisplay,
       deleteReason: entry.deleteReason,
       internalNote: entry.internalNote,
       driverNote: entry.driverNote,
@@ -219,6 +228,8 @@ const listEntriesByDeleteState = async (
       confirmationMailVerified: row.confirmationMailVerifiedAt !== null,
       deletedAt: row.deletedAt,
       deletedBy: row.deletedBy,
+      deletedByUserId: row.deletedBy,
+      deletedByDisplay: row.deletedByDisplay ?? (row.deletedBy && row.deletedBy.includes('@') ? row.deletedBy : null),
       deleteReason: row.deleteReason,
       driverFirstName: redactSensitiveFields ? null : row.driverFirstName,
       driverLastName: redactSensitiveFields ? null : row.driverLastName,
@@ -902,8 +913,17 @@ export const patchEntryPaymentAmounts = async (
   };
 };
 
-export const deleteEntry = async (entryId: string, actorUserId: string | null) => {
+export const deleteEntry = async (
+  entryId: string,
+  input: EntryDeleteInput,
+  actorUserId: string | null,
+  actorDisplay: string | null
+) => {
   const db = await getDb();
+  const normalizedDeleteReasonRaw = input?.deleteReason;
+  const normalizedDeleteReason =
+    typeof normalizedDeleteReasonRaw === 'string' ? (normalizedDeleteReasonRaw.trim().length > 0 ? normalizedDeleteReasonRaw.trim() : null) : null;
+  const resolvedActorDisplay = actorDisplay && actorDisplay.trim().length > 0 ? actorDisplay.trim() : actorUserId;
 
   return db.transaction(async (tx) => {
     const rows = await tx
@@ -918,6 +938,9 @@ export const deleteEntry = async (entryId: string, actorUserId: string | null) =
         checkinIdVerified: entry.checkinIdVerified,
         techStatus: entry.techStatus,
         deletedAt: entry.deletedAt,
+        deletedBy: entry.deletedBy,
+        deletedByDisplay: entry.deletedByDisplay,
+        deleteReason: entry.deleteReason,
         invoiceId: invoice.id,
         invoicePaymentStatus: invoice.paymentStatus
       })
@@ -932,7 +955,13 @@ export const deleteEntry = async (entryId: string, actorUserId: string | null) =
     }
 
     if (existing.deletedAt) {
-      return { deletedEntryId: entryId };
+      return {
+        deletedEntryId: entryId,
+        deletedReason: existing.deleteReason ?? null,
+        deletedByUserId: existing.deletedBy ?? null,
+        deletedByDisplay:
+          existing.deletedByDisplay ?? (existing.deletedBy && existing.deletedBy.includes('@') ? existing.deletedBy : null)
+      };
     }
 
     await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
@@ -965,7 +994,8 @@ export const deleteEntry = async (entryId: string, actorUserId: string | null) =
       .set({
         deletedAt: new Date(),
         deletedBy: actorUserId,
-        deleteReason: null,
+        deletedByDisplay: resolvedActorDisplay,
+        deleteReason: normalizedDeleteReason,
         updatedAt: new Date()
       })
       .where(eq(entry.id, entryId));
@@ -981,11 +1011,18 @@ export const deleteEntry = async (entryId: string, actorUserId: string | null) =
         driverPersonId: existing.driverPersonId,
         registrationStatus: existing.registrationStatus,
         acceptanceStatus: existing.acceptanceStatus,
-        startNumberNorm: existing.startNumberNorm
+        startNumberNorm: existing.startNumberNorm,
+        deleteReason: normalizedDeleteReason,
+        deletedByDisplay: resolvedActorDisplay
       }
     });
 
-    return { deletedEntryId: entryId };
+    return {
+      deletedEntryId: entryId,
+      deletedReason: normalizedDeleteReason,
+      deletedByUserId: actorUserId,
+      deletedByDisplay: resolvedActorDisplay
+    };
   });
 };
 
@@ -1016,6 +1053,7 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
       .set({
         deletedAt: null,
         deletedBy: null,
+        deletedByDisplay: null,
         deleteReason: null,
         updatedAt: new Date()
       })
@@ -1058,3 +1096,4 @@ export const validateEntryTechStatusPatchInput = (payload: unknown) => techStatu
 export const validateEntryNotesPatchInput = (payload: unknown) => entryNotesPatchSchema.parse(payload);
 export const validateEntryPaymentStatusPatchInput = (payload: unknown) => entryPaymentStatusPatchSchema.parse(payload);
 export const validateEntryPaymentAmountsPatchInput = (payload: unknown) => entryPaymentAmountsPatchSchema.parse(payload);
+export const validateEntryDeleteInput = (payload: unknown) => entryDeleteSchema.parse(payload);

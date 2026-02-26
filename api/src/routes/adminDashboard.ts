@@ -9,6 +9,23 @@ const dashboardSummaryQuerySchema = z.object({
 
 const RECENT_ENTRIES_LIMIT = 10;
 
+const toAgeYears = (birthdate: Date | string | null, referenceDate: Date): number | null => {
+  if (!birthdate) {
+    return null;
+  }
+  const date = birthdate instanceof Date ? birthdate : new Date(birthdate);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  let age = referenceDate.getUTCFullYear() - date.getUTCFullYear();
+  const m = referenceDate.getUTCMonth() - date.getUTCMonth();
+  if (m < 0 || (m === 0 && referenceDate.getUTCDate() < date.getUTCDate())) {
+    age -= 1;
+  }
+  return age >= 0 ? age : null;
+};
+
 export const getDashboardSummary = async (eventId: string) => {
   const db = await getDb();
 
@@ -26,7 +43,8 @@ export const getDashboardSummary = async (eventId: string) => {
     exportsQueuedTotalRows,
     exportsProcessingTotalRows,
     classDistribution,
-    recentEntryRows
+    recentEntryRows,
+    driverAgeRows
   ] = await Promise.all([
     db
       .select({ value: sql<number>`count(*)::int` })
@@ -80,8 +98,44 @@ export const getDashboardSummary = async (eventId: string) => {
       .innerJoin(eventClass, eq(entry.classId, eventClass.id))
       .where(eq(entry.eventId, eventId))
       .orderBy(desc(entry.createdAt))
-      .limit(RECENT_ENTRIES_LIMIT)
+      .limit(RECENT_ENTRIES_LIMIT),
+    db
+      .select({
+        driverFirstName: person.firstName,
+        driverLastName: person.lastName,
+        className: eventClass.name,
+        birthdate: person.birthdate
+      })
+      .from(entry)
+      .innerJoin(person, eq(entry.driverPersonId, person.id))
+      .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+      .where(eq(entry.eventId, eventId))
   ]);
+
+  const now = new Date();
+  const ageRows = driverAgeRows
+    .map((row) => ({
+      age: toAgeYears(row.birthdate, now),
+      driverLabel: `${row.driverFirstName} ${row.driverLastName}`.trim(),
+      className: row.className
+    }))
+    .filter((row): row is { age: number; driverLabel: string; className: string } => row.age !== null);
+
+  const sortedAgeRows = [...ageRows].sort((a, b) => a.age - b.age);
+  const youngestDriverAge = sortedAgeRows.length > 0 ? sortedAgeRows[0].age : null;
+  const oldestRow = sortedAgeRows.length > 0 ? sortedAgeRows[sortedAgeRows.length - 1] : null;
+  const oldestDriverAge = oldestRow ? oldestRow.age : null;
+  const oldestDriverLabel = oldestRow ? `${oldestRow.driverLabel} (${oldestRow.className})` : null;
+
+  let medianDriverAge: number | null = null;
+  if (sortedAgeRows.length > 0) {
+    const mid = Math.floor(sortedAgeRows.length / 2);
+    if (sortedAgeRows.length % 2 === 1) {
+      medianDriverAge = sortedAgeRows[mid].age;
+    } else {
+      medianDriverAge = (sortedAgeRows[mid - 1].age + sortedAgeRows[mid].age) / 2;
+    }
+  }
 
   return {
     summary: {
@@ -92,6 +146,12 @@ export const getDashboardSummary = async (eventId: string) => {
       mailQueuedTotal: mailQueuedTotalRows[0]?.value ?? 0,
       exportsQueuedTotal: exportsQueuedTotalRows[0]?.value ?? 0,
       exportsProcessingTotal: exportsProcessingTotalRows[0]?.value ?? 0
+    },
+    driverAgeStats: {
+      oldestDriverAge,
+      oldestDriverLabel,
+      youngestDriverAge,
+      medianDriverAge
     },
     classDistribution,
     recentEntries: recentEntryRows.map((row) => ({

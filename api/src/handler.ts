@@ -49,6 +49,7 @@ import {
   validateEntryNotesPatchInput,
   validateEntryPaymentStatusPatchInput,
   validateEntryPaymentAmountsPatchInput,
+  validateEntryDeleteInput,
   validateListEntriesQuery
 } from './routes/adminEntries';
 import {
@@ -1113,12 +1114,20 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return errorJson(403, 'Forbidden');
     }
     try {
-      const result = await deleteEntry(entryDetailMatch[1], auth.sub);
+      const payload = parseJsonBody(event);
+      const input = validateEntryDeleteInput(payload);
+      const result = await deleteEntry(entryDetailMatch[1], input, auth.sub, auth.email ?? auth.sub);
       if (!result) {
         return errorJson(404, 'Entry not found');
       }
       return json(200, { ok: true, ...result });
     } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
       if (error instanceof Error && error.message === 'ENTRY_DELETE_FORBIDDEN_CHECKIN') {
         return errorJson(
           409,

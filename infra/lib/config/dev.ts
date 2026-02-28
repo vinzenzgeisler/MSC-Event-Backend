@@ -9,8 +9,8 @@ const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrat
   cognitoLogoutUrls: ['http://localhost:5173/admin/login'],
   cognitoDomainPrefix: 'dreiecksrennen-dev-auth',
   sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
-  publicVerifyBaseUrl: 'http://localhost:5173/anmeldung/verify',
-  assetsCorsAllowedOrigins: ['http://localhost:5173', 'http://localhost:4173'],
+  publicVerifyBaseUrl: 'https://msc-oberlausitzer-dreilaendereck.de/anmeldung/verify',
+  assetsCorsAllowedOrigins: ['https://msc-oberlausitzer-dreilaendereck.de', 'http://localhost:5173', 'http://localhost:4173'],
   devCleanupEnabled: false,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,

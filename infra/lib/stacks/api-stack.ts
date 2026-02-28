@@ -258,7 +258,17 @@ export class ApiStack extends Stack {
     const integration = new SharedPermissionHttpLambdaIntegration('ApiIntegration', apiHandler);
 
     this.api = new apigwv2.HttpApi(this, 'HttpApi', {
-      apiName: `${props.config.prefix}-http-api`
+      apiName: `${props.config.prefix}-http-api`,
+      ...(props.config.assetsCorsAllowedOrigins.length > 0
+        ? {
+            corsPreflight: {
+              allowOrigins: props.config.assetsCorsAllowedOrigins,
+              allowMethods: [apigwv2.CorsHttpMethod.GET, apigwv2.CorsHttpMethod.POST, apigwv2.CorsHttpMethod.PATCH, apigwv2.CorsHttpMethod.DELETE, apigwv2.CorsHttpMethod.PUT, apigwv2.CorsHttpMethod.OPTIONS],
+              allowHeaders: ['content-type', 'authorization'],
+              maxAge: cdk.Duration.hours(1)
+            }
+          }
+        : {})
     });
 
     apiHandler.addPermission('HttpApiInvokePermission', {

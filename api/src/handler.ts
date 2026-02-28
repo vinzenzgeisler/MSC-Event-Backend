@@ -77,6 +77,8 @@ import {
 } from './routes/adminIam';
 import {
   DuplicateRequestError,
+  LifecycleMailError,
+  toLifecycleApiError,
   queueBroadcastMail,
   queueLifecycleMail,
   queueMail,
@@ -213,7 +215,14 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(409, 'Driver email already used by another active entry in this event', undefined, 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
       }
       if (error instanceof Error && error.message === 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD') {
-        return errorJson(409, 'Idempotency key reused with different payload', undefined, 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD');
+        return errorJson(
+          409,
+          'Idempotency key reused with different payload',
+          {
+            hint: 'Use a new clientSubmissionKey for changed payloads. Retries with the same key should keep non-functional fields stable.'
+          },
+          'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'
+        );
       }
       return errorJson(500, 'Public registration failed');
     }
@@ -292,7 +301,14 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(409, 'Driver email already used by another active entry in this event', undefined, 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
       }
       if (error instanceof Error && error.message === 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD') {
-        return errorJson(409, 'Idempotency key reused with different payload', undefined, 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD');
+        return errorJson(
+          409,
+          'Idempotency key reused with different payload',
+          {
+            hint: 'Use a new clientSubmissionKey for changed payloads. Retries with the same key should keep non-functional fields stable.'
+          },
+          'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'
+        );
       }
       if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
         return errorJson(
@@ -796,7 +812,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(409, 'Duplicate request', undefined, 'DUPLICATE_REQUEST');
       }
       if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
-        return errorJson(404, 'Template not found');
+        return errorJson(404, 'Template not found', undefined, 'TEMPLATE_NOT_FOUND');
       }
       if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
         return errorJson(404, 'Event not found');
@@ -860,11 +876,24 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
       }
+      if (error instanceof DuplicateRequestError) {
+        return errorJson(409, 'Duplicate request', {
+          existingOutboxId: error.existingOutboxId,
+          blockedUntil: error.blockedUntil
+        });
+      }
+      if (error instanceof LifecycleMailError) {
+        const mapped = toLifecycleApiError(error);
+        return errorJson(mapped.statusCode, mapped.message, mapped.details, mapped.code);
+      }
       if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
         return errorJson(409, 'Duplicate request');
       }
       if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
-        return errorJson(404, 'Template not found');
+        return errorJson(404, 'Template not found', { reason: 'template_not_found' }, 'TEMPLATE_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'ENTRY_NOT_FOUND') {
+        return errorJson(404, 'Entry not found', { reason: 'entry_not_found' }, 'ENTRY_NOT_FOUND');
       }
       if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
         return errorJson(404, 'Event not found');
@@ -872,7 +901,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
         return errorJson(409, 'Event is read-only');
       }
-      return errorJson(500, 'Lifecycle mail queue failed');
+      return errorJson(
+        409,
+        'Lifecycle outbox insert failed',
+        { reason: error instanceof Error ? error.message : 'unknown_lifecycle_error' },
+        'OUTBOX_INSERT_FAILED'
+      );
     }
   }
 

@@ -9,6 +9,7 @@ import { getTemplateVersion } from '../mail/templateStore';
 import { buildPublicVerificationUrl } from '../mail/verificationUrl';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
+import { renderTemplateString } from '../mail/templates';
 
 const queueMailSchema = z
   .object({
@@ -105,6 +106,62 @@ export class DuplicateRequestError extends Error {
   }
 }
 
+export class LifecycleMailError extends Error {
+  public readonly code: LifecycleMailErrorCode;
+  public readonly reason: string;
+
+  constructor(code: LifecycleMailErrorCode, reason: string) {
+    super(code);
+    this.code = code;
+    this.reason = reason;
+  }
+}
+
+export type LifecycleMailErrorCode =
+  | 'NO_RECIPIENT'
+  | 'NOT_ALLOWED'
+  | 'TEMPLATE_RENDER_FAILED'
+  | 'OUTBOX_INSERT_FAILED'
+  | 'TEMPLATE_NOT_FOUND'
+  | 'ENTRY_NOT_FOUND';
+
+const lifecycleErrorMeta: Record<LifecycleMailErrorCode, { statusCode: number; message: string }> = {
+  NO_RECIPIENT: {
+    statusCode: 409,
+    message: 'No recipient email available'
+  },
+  NOT_ALLOWED: {
+    statusCode: 409,
+    message: 'Lifecycle mail not allowed for this entry'
+  },
+  TEMPLATE_RENDER_FAILED: {
+    statusCode: 400,
+    message: 'Lifecycle template render failed'
+  },
+  OUTBOX_INSERT_FAILED: {
+    statusCode: 409,
+    message: 'Lifecycle outbox insert failed'
+  },
+  TEMPLATE_NOT_FOUND: {
+    statusCode: 404,
+    message: 'Template not found'
+  },
+  ENTRY_NOT_FOUND: {
+    statusCode: 404,
+    message: 'Entry not found'
+  }
+};
+
+export const toLifecycleApiError = (error: LifecycleMailError) => {
+  const meta = lifecycleErrorMeta[error.code];
+  return {
+    statusCode: meta.statusCode,
+    message: meta.message,
+    code: error.code,
+    details: { reason: error.reason }
+  };
+};
+
 type RecipientTarget = {
   email: string;
   driverPersonId: string | null;
@@ -160,6 +217,15 @@ const findOutboxByIdempotencyKey = async (idempotencyKey: string) => {
 
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
+
+export const hasRequiredRegistrationReceivedVariables = (templateData: Record<string, unknown>): boolean =>
+  Boolean(templateData.eventName && templateData.driverName && templateData.verificationUrl);
+
+const isUndefinedColumnError = (error: unknown): boolean =>
+  typeof error === 'object' &&
+  error !== null &&
+  'code' in error &&
+  (error as { code?: string }).code === '42703';
 
 const upsertEntryVerificationToken = async (entryId: string, seed: string): Promise<string> => {
   const db = await getDb();
@@ -273,7 +339,8 @@ const resolveTemplate = async (
   return {
     templateKey: template.templateKey,
     templateVersion: template.version,
-    subjectTemplate: subjectOverride ?? template.subjectTemplate
+    subjectTemplate: subjectOverride ?? template.subjectTemplate,
+    bodyTemplate: template.bodyTemplate
   };
 };
 
@@ -675,7 +742,15 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   const db = await getDb();
   await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
   const templateKey = templateKeyFromEventType(input.eventType);
-  const template = await resolveTemplate(templateKey, input.templateVersion);
+  let template: Awaited<ReturnType<typeof resolveTemplate>>;
+  try {
+    template = await resolveTemplate(templateKey, input.templateVersion);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
+      throw new LifecycleMailError('TEMPLATE_NOT_FOUND', 'template_not_found');
+    }
+    throw error;
+  }
   const sendAfter = toIsoDate(input.sendAfter);
 
   const rows = await db
@@ -701,20 +776,27 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
     .where(and(eq(entry.eventId, input.eventId), eq(entry.id, input.entryId)));
 
-  if (
-    rows.length === 0 ||
-    !rows[0].email ||
-    rows[0].driverPersonId === null
-  ) {
-    return { queued: 0 };
+  if (rows.length === 0) {
+    throw new LifecycleMailError('ENTRY_NOT_FOUND', 'entry_not_found');
   }
-  const blockedRows = await db
-    .select({ id: person.id })
-    .from(person)
-    .where(and(eq(person.id, rows[0].driverPersonId), or(eq(person.processingRestricted, true), eq(person.objectionFlag, true))))
-    .limit(1);
+  if (!rows[0].email || rows[0].driverPersonId === null) {
+    throw new LifecycleMailError('NO_RECIPIENT', 'entry_has_no_driver_email');
+  }
+  let blockedRows: Array<{ id: string }> = [];
+  try {
+    blockedRows = await db
+      .select({ id: person.id })
+      .from(person)
+      .where(and(eq(person.id, rows[0].driverPersonId), or(eq(person.processingRestricted, true), eq(person.objectionFlag, true))))
+      .limit(1);
+  } catch (error) {
+    if (!isUndefinedColumnError(error)) {
+      throw new LifecycleMailError('NOT_ALLOWED', 'policy_guard_query_failed');
+    }
+    blockedRows = [];
+  }
   if (blockedRows[0]) {
-    return { queued: 0 };
+    throw new LifecycleMailError('NOT_ALLOWED', 'processing_restricted_or_objection');
   }
 
   const row = rows[0];
@@ -743,7 +825,12 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   };
 
   if (template.templateKey === 'registration_received') {
-    const token = await upsertEntryVerificationToken(row.entryId, email);
+    let token: string;
+    try {
+      token = await upsertEntryVerificationToken(row.entryId, email);
+    } catch {
+      throw new LifecycleMailError('TEMPLATE_RENDER_FAILED', 'verification_token_upsert_failed');
+    }
     const existingVerificationUrl = isNonEmptyString(templateData.verificationUrl) ? templateData.verificationUrl : null;
     const generatedVerificationUrl = buildPublicVerificationUrl(row.entryId, token);
     templateData = {
@@ -751,6 +838,18 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       verificationToken: token,
       verificationUrl: generatedVerificationUrl ?? existingVerificationUrl
     };
+  }
+
+  if (template.templateKey === 'registration_received') {
+    if (!hasRequiredRegistrationReceivedVariables(templateData)) {
+      throw new LifecycleMailError('TEMPLATE_RENDER_FAILED', 'missing_required_registration_received_variables');
+    }
+  }
+
+  const renderedSubject = renderTemplateString(template.subjectTemplate, templateData).trim();
+  const renderedBody = renderTemplateString(template.bodyTemplate, templateData).trim();
+  if (!renderedSubject || !renderedBody) {
+    throw new LifecycleMailError('TEMPLATE_RENDER_FAILED', 'rendered_subject_or_body_empty');
   }
 
   const lifecycleDedupeKey = buildDedupeKey(
@@ -776,27 +875,41 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     ? `${lifecycleDedupeKey}:allowDuplicate:${Date.now()}:${randomUUID()}`
     : lifecycleDedupeKey;
 
+  let createdOutboxId: string | null = null;
   try {
-    await insertOutboxRows(
-      input.eventId,
-      template.templateKey,
-      template.templateVersion,
-      template.subjectTemplate,
-      sendAfter,
-      [
-        {
-          toEmail: email,
-          templateData,
-          idempotencyKey
-        }
-      ]
-    );
+    const inserted = await db
+      .insert(emailOutbox)
+      .values({
+        eventId: input.eventId,
+        toEmail: email,
+        subject: template.subjectTemplate,
+        templateId: template.templateKey,
+        templateVersion: template.templateVersion,
+        templateData,
+        status: 'queued',
+        sendAfter,
+        idempotencyKey,
+        maxAttempts: 5
+      })
+      .returning({ id: emailOutbox.id });
+    createdOutboxId = inserted[0]?.id ?? null;
   } catch (error) {
     if (!input.allowDuplicate && error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
       const existing = await findOutboxByIdempotencyKey(lifecycleDedupeKey);
       throw new DuplicateRequestError(existing?.id ?? null, existing?.sendAfter?.toISOString() ?? null);
     }
-    throw error;
+    if (isPgUniqueViolation(error) && !input.allowDuplicate) {
+      const existing = await findOutboxByIdempotencyKey(lifecycleDedupeKey);
+      throw new DuplicateRequestError(existing?.id ?? null, existing?.sendAfter?.toISOString() ?? null);
+    }
+    if (error instanceof Error) {
+      throw new LifecycleMailError('OUTBOX_INSERT_FAILED', error.message);
+    }
+    throw new LifecycleMailError('OUTBOX_INSERT_FAILED', 'unknown_outbox_insert_error');
+  }
+
+  if (!createdOutboxId) {
+    throw new LifecycleMailError('OUTBOX_INSERT_FAILED', 'no_outbox_id_returned');
   }
 
   await writeAuditLog(db as never, {
@@ -812,7 +925,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     }
   });
 
-  return { queued: 1 };
+  return { queued: 1, skipped: 0, outboxIds: [createdOutboxId] };
 };
 
 export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: string | null) => {

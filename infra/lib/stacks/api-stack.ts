@@ -263,7 +263,13 @@ export class ApiStack extends Stack {
         ? {
             corsPreflight: {
               allowOrigins: props.config.assetsCorsAllowedOrigins,
-              allowMethods: [apigwv2.CorsHttpMethod.GET, apigwv2.CorsHttpMethod.POST, apigwv2.CorsHttpMethod.OPTIONS],
+              allowMethods: [
+                apigwv2.CorsHttpMethod.GET,
+                apigwv2.CorsHttpMethod.POST,
+                apigwv2.CorsHttpMethod.PATCH,
+                apigwv2.CorsHttpMethod.DELETE,
+                apigwv2.CorsHttpMethod.OPTIONS
+              ],
               allowHeaders: ['content-type', 'authorization'],
               maxAge: cdk.Duration.hours(1)
             }

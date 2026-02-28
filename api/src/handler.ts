@@ -1839,13 +1839,22 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Invalid JSON body');
       }
       if (error instanceof Error && error.message === 'IAM_USER_EXISTS') {
-        return errorJson(409, 'User already exists');
+        return errorJson(409, 'User already exists', { reason: 'USER_ALREADY_EXISTS' }, 'USER_ALREADY_EXISTS');
+      }
+      if (error instanceof Error && error.message === 'IAM_PERMISSION_DENIED') {
+        return errorJson(403, 'Permission denied', { reason: 'PERMISSION_DENIED' }, 'PERMISSION_DENIED');
+      }
+      if (error instanceof Error && error.message === 'IAM_INVALID_TEMP_PASSWORD') {
+        return errorJson(400, 'Invalid temporary password', { reason: 'INVALID_TEMP_PASSWORD' }, 'INVALID_TEMP_PASSWORD');
       }
       if (error instanceof Error && error.message === 'IAM_INVALID_PARAMETER') {
         return errorJson(400, 'Invalid IAM user payload');
       }
-      if (error instanceof Error && error.message === 'IAM_GROUP_NOT_FOUND') {
-        return errorJson(400, 'Configured IAM role group not found');
+      if (error instanceof Error && error.message === 'IAM_ROLE_MAPPING_FAILED') {
+        return errorJson(409, 'Role mapping failed', { reason: 'ROLE_MAPPING_FAILED' }, 'ROLE_MAPPING_FAILED');
+      }
+      if (error instanceof Error && error.message === 'IAM_INVITATION_SEND_FAILED') {
+        return errorJson(409, 'Invitation could not be sent', { reason: 'INVITATION_SEND_FAILED' }, 'INVITATION_SEND_FAILED');
       }
       if (error instanceof Error && error.message === 'IAM_USER_POOL_NOT_CONFIGURED') {
         return errorJson(500, 'IAM is not configured');
@@ -1884,8 +1893,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'IAM_USER_NOT_FOUND') {
         return errorJson(404, 'IAM user not found');
       }
-      if (error instanceof Error && error.message === 'IAM_GROUP_NOT_FOUND') {
-        return errorJson(400, 'Configured IAM role group not found');
+      if (error instanceof Error && error.message === 'IAM_ROLE_MAPPING_FAILED') {
+        return errorJson(409, 'Role mapping failed', { reason: 'ROLE_MAPPING_FAILED' }, 'ROLE_MAPPING_FAILED');
       }
       if (error instanceof Error && error.message === 'IAM_USER_POOL_NOT_CONFIGURED') {
         return errorJson(500, 'IAM is not configured');

@@ -29,6 +29,15 @@ const createUserSchema = z.object({
   roles: z.array(roleSchema).min(1),
   temporaryPassword: z.string().min(8).max(256).optional(),
   sendInvitation: z.boolean().default(true)
+}).superRefine((value, ctx) => {
+  // Without invitation mail, an explicit temporary password is required so the account can be used.
+  if (!value.sendInvitation && !value.temporaryPassword) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['temporaryPassword'],
+      message: 'temporaryPassword is required when sendInvitation is false'
+    });
+  }
 });
 
 const patchRolesSchema = z.object({
@@ -130,11 +139,20 @@ const mapCognitoError = (error: unknown): never => {
   if (error.name === 'UsernameExistsException') {
     throw new Error('IAM_USER_EXISTS');
   }
+  if (error.name === 'NotAuthorizedException') {
+    throw new Error('IAM_PERMISSION_DENIED');
+  }
+  if (error.name === 'InvalidPasswordException') {
+    throw new Error('IAM_INVALID_TEMP_PASSWORD');
+  }
+  if (error.name === 'CodeDeliveryFailureException') {
+    throw new Error('IAM_INVITATION_SEND_FAILED');
+  }
   if (error.name === 'InvalidParameterException') {
     throw new Error('IAM_INVALID_PARAMETER');
   }
   if (error.name === 'GroupNotFoundException') {
-    throw new Error('IAM_GROUP_NOT_FOUND');
+    throw new Error('IAM_ROLE_MAPPING_FAILED');
   }
   throw error;
 };
@@ -200,6 +218,9 @@ export const createIamUser = async (input: CreateUserInput) => {
   const userPoolId = getUserPoolId();
   const username = input.email.trim().toLowerCase();
   const roles = normalizeRoles(input.roles);
+  if (roles.length === 0) {
+    throw new Error('IAM_ROLE_MAPPING_FAILED');
+  }
 
   try {
     await client.send(
@@ -208,9 +229,9 @@ export const createIamUser = async (input: CreateUserInput) => {
         Username: username,
         UserAttributes: [
           { Name: 'email', Value: username },
-          { Name: 'email_verified', Value: 'true' }
+          { Name: 'email_verified', Value: 'false' }
         ],
-        DesiredDeliveryMediums: ['EMAIL'],
+        DesiredDeliveryMediums: input.sendInvitation ? ['EMAIL'] : undefined,
         MessageAction: input.sendInvitation ? undefined : 'SUPPRESS',
         TemporaryPassword: input.temporaryPassword
       })
@@ -238,6 +259,9 @@ export const patchIamUserRoles = async (userId: string, input: PatchRolesInput) 
   const client = createClient();
   const userPoolId = getUserPoolId();
   const desiredRoles = normalizeRoles(input.roles);
+  if (desiredRoles.length === 0) {
+    throw new Error('IAM_ROLE_MAPPING_FAILED');
+  }
 
   try {
     await loadUserDto(client, userPoolId, userId);

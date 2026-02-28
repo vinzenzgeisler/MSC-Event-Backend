@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/handler.js",
-    "test": "npm run build && node tests/lifecycle-mail.test.js",
+    "test": "npm run build && node tests/lifecycle-mail.test.js && node tests/admin-iam.test.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/run-sql-migrations.js",
     "db:migrate:drizzle": "drizzle-kit migrate",

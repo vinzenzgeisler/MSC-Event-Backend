@@ -385,7 +385,9 @@ const canonicalizePayload = (value: unknown): unknown => {
     return value.map((item) => canonicalizePayload(item));
   }
   if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== 'consentCapturedAt')
+      .sort(([a], [b]) => a.localeCompare(b));
     return Object.fromEntries(entries.map(([key, current]) => [key, canonicalizePayload(current)]));
   }
   return value;
@@ -393,6 +395,9 @@ const canonicalizePayload = (value: unknown): unknown => {
 
 const createPayloadHash = (value: unknown): string =>
   createHash('sha256').update(JSON.stringify(canonicalizePayload(value))).digest('hex');
+
+// Verification links should remain valid long-term.
+const verificationTokenFarFutureExpiry = (): Date => new Date('2099-12-31T23:59:59.000Z');
 
 export const createPublicEntriesBatch = async (input: CreateBatchInput) => {
   return createPublicEntriesBatchInternal(input);
@@ -403,7 +408,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
   const db = await getDb();
   const now = new Date();
   const token = createHash('sha256').update(`${randomUUID()}:${input.driver.email}:${Date.now()}`).digest('hex');
-  const tokenExpiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24);
+  const tokenExpiresAt = verificationTokenFarFutureExpiry();
   const normalizedDriverEmail = normalizeEmail(input.driver.email);
   const payloadHash = createPayloadHash(input);
 
@@ -1130,9 +1135,6 @@ export const verifyPublicEntryEmail = async (entryId: string, input: VerifyInput
   }
   if (verification.verifiedAt) {
     throw new Error('VERIFY_TOKEN_ALREADY_USED');
-  }
-  if (verification.expiresAt < now) {
-    throw new Error('VERIFY_TOKEN_EXPIRED');
   }
   const conflictGroups = await db
     .select({

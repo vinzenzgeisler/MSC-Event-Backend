@@ -125,7 +125,7 @@ export const getDashboardSummary = async (eventId: string) => {
   const youngestDriverAge = sortedAgeRows.length > 0 ? sortedAgeRows[0].age : null;
   const oldestRow = sortedAgeRows.length > 0 ? sortedAgeRows[sortedAgeRows.length - 1] : null;
   const oldestDriverAge = oldestRow ? oldestRow.age : null;
-  const oldestDriverLabel = oldestRow ? `${oldestRow.driverLabel} (${oldestRow.className})` : null;
+  const oldestDriverLabel = oldestRow ? `${oldestRow.driverLabel} (${oldestRow.className})` : '';
 
   let medianDriverAge: number | null = null;
   if (sortedAgeRows.length > 0) {
@@ -145,13 +145,13 @@ export const getDashboardSummary = async (eventId: string) => {
       mailFailedTotal: mailFailedTotalRows[0]?.value ?? 0,
       mailQueuedTotal: mailQueuedTotalRows[0]?.value ?? 0,
       exportsQueuedTotal: exportsQueuedTotalRows[0]?.value ?? 0,
-      exportsProcessingTotal: exportsProcessingTotalRows[0]?.value ?? 0
-    },
-    driverAgeStats: {
-      oldestDriverAge,
-      oldestDriverLabel,
-      youngestDriverAge,
-      medianDriverAge
+      exportsProcessingTotal: exportsProcessingTotalRows[0]?.value ?? 0,
+      driverAgeStats: {
+        oldestDriverAge,
+        oldestDriverLabel,
+        youngestDriverAge,
+        medianDriverAge
+      }
     },
     classDistribution,
     recentEntries: recentEntryRows.map((row) => ({

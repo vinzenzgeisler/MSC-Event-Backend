@@ -551,24 +551,6 @@ export const exportJob = pgTable(
   })
 );
 
-export const entryEmailVerification = pgTable(
-  'entry_email_verification',
-  {
-    id: uuid('id').defaultRandom().primaryKey(),
-    entryId: uuid('entry_id')
-      .notNull()
-      .references(() => entry.id, { onDelete: 'cascade' }),
-    token: text('token').notNull(),
-    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-    verifiedAt: timestamp('verified_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
-  },
-  (table) => ({
-    entryUnique: uniqueIndex('entry_email_verification_entry_unique').on(table.entryId),
-    tokenUnique: uniqueIndex('entry_email_verification_token_unique').on(table.token)
-  })
-);
-
 export const vehicleImageUpload = pgTable(
   'vehicle_image_upload',
   {

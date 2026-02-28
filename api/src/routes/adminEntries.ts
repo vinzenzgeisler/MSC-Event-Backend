@@ -418,6 +418,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
 
   const vehicleLabel = toVehicleLabel(current.vehicleMake, current.vehicleModel, current.startNumberNorm);
   const vehicleThumbUrl = await getVehicleThumbUrl(current.vehicleImageS3Key);
+  const backupVehicleThumbUrl = await getVehicleThumbUrl(backupVehicle?.imageS3Key ?? null);
 
   return {
     entry: {
@@ -439,6 +440,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       relatedEntryIds,
       vehicleLabel,
       vehicleThumbUrl,
+      backupVehicleThumbUrl,
       confirmationMailSent: current.confirmationMailSentAt !== null,
       confirmationMailVerified: current.confirmationMailVerifiedAt !== null,
       person: {

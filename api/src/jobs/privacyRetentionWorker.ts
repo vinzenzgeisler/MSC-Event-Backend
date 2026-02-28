@@ -59,13 +59,6 @@ export const handler = async () => {
   );
 
   await execute(
-    'entry_email_verification',
-    `delete from "entry_email_verification"
-     where coalesce("verified_at", "expires_at", "created_at") < now() - ($1 * interval '1 day')`,
-    [settings.verificationDays]
-  );
-
-  await execute(
     'public_entry_submission',
     `delete from "public_entry_submission"
      where "created_at" < now() - ($1 * interval '1 day')`,

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { and, eq, inArray, isNull, or, SQL } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { emailOutbox, entry, entryEmailVerification, event, eventClass, invoice, person } from '../db/schema';
+import { emailOutbox, entry, event, eventClass, invoice, person, registrationGroupEmailVerification } from '../db/schema';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { writeAuditLog } from '../audit/log';
 import { getTemplateVersion } from '../mail/templateStore';
@@ -170,6 +170,7 @@ type RecipientTarget = {
 
 type RegistrationContext = {
   entryId: string | null;
+  registrationGroupId: string | null;
   eventName: string | null;
   driverName: string | null;
 };
@@ -227,19 +228,20 @@ const isUndefinedColumnError = (error: unknown): boolean =>
   'code' in error &&
   (error as { code?: string }).code === '42703';
 
-const upsertEntryVerificationToken = async (entryId: string, seed: string): Promise<string> => {
+const upsertRegistrationGroupVerificationToken = async (registrationGroupId: string, seed: string): Promise<string> => {
   const db = await getDb();
   const now = new Date();
   const existingRows = await db
     .select({
-      token: entryEmailVerification.token,
-      expiresAt: entryEmailVerification.expiresAt
+      token: registrationGroupEmailVerification.token,
+      expiresAt: registrationGroupEmailVerification.expiresAt,
+      verifiedAt: registrationGroupEmailVerification.verifiedAt
     })
-    .from(entryEmailVerification)
-    .where(eq(entryEmailVerification.entryId, entryId))
+    .from(registrationGroupEmailVerification)
+    .where(eq(registrationGroupEmailVerification.registrationGroupId, registrationGroupId))
     .limit(1);
   const existing = existingRows[0];
-  if (existing && existing.expiresAt > now) {
+  if (existing && existing.expiresAt > now && existing.verifiedAt === null) {
     return existing.token;
   }
 
@@ -247,16 +249,16 @@ const upsertEntryVerificationToken = async (entryId: string, seed: string): Prom
   const expiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24);
 
   await db
-    .insert(entryEmailVerification)
+    .insert(registrationGroupEmailVerification)
     .values({
-      entryId,
+      registrationGroupId,
       token,
       expiresAt,
       verifiedAt: null,
       createdAt: now
     })
     .onConflictDoUpdate({
-      target: entryEmailVerification.entryId,
+      target: registrationGroupEmailVerification.registrationGroupId,
       set: {
         token,
         expiresAt,
@@ -281,6 +283,7 @@ const resolveRegistrationContext = async (
     const rows = await db
       .select({
         entryId: entry.id,
+        registrationGroupId: entry.registrationGroupId,
         eventName: event.name,
         driverFirstName: person.firstName,
         driverLastName: person.lastName
@@ -294,6 +297,7 @@ const resolveRegistrationContext = async (
     if (row) {
       return {
         entryId: row.entryId,
+        registrationGroupId: row.registrationGroupId,
         eventName: row.eventName,
         driverName: `${row.driverFirstName} ${row.driverLastName}`.trim()
       };
@@ -303,6 +307,7 @@ const resolveRegistrationContext = async (
   const rows = await db
     .select({
       entryId: entry.id,
+      registrationGroupId: entry.registrationGroupId,
       eventName: event.name,
       driverFirstName: person.firstName,
       driverLastName: person.lastName
@@ -316,12 +321,14 @@ const resolveRegistrationContext = async (
   if (!row) {
     return {
       entryId: candidateEntryId,
+      registrationGroupId: null,
       eventName: isNonEmptyString(templateData?.eventName) ? templateData.eventName : null,
       driverName: isNonEmptyString(templateData?.driverName) ? templateData.driverName : null
     };
   }
   return {
     entryId: row.entryId,
+    registrationGroupId: row.registrationGroupId,
     eventName: row.eventName,
     driverName: `${row.driverFirstName} ${row.driverLastName}`.trim()
   };
@@ -539,8 +546,8 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
 
       if (template.templateKey === 'registration_received') {
         const context = await resolveRegistrationContext(input.eventId, target, input.templateData);
-        if (context.entryId) {
-          const token = await upsertEntryVerificationToken(context.entryId, target.email);
+        if (context.entryId && context.registrationGroupId) {
+          const token = await upsertRegistrationGroupVerificationToken(context.registrationGroupId, target.email);
           const existingVerificationUrl = isNonEmptyString(templateData.verificationUrl)
             ? templateData.verificationUrl
             : null;
@@ -757,6 +764,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     .select({
       eventId: entry.eventId,
       entryId: entry.id,
+      registrationGroupId: entry.registrationGroupId,
       driverPersonId: entry.driverPersonId,
       driverNote: entry.driverNote,
       registrationStatus: entry.registrationStatus,
@@ -825,9 +833,12 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   };
 
   if (template.templateKey === 'registration_received') {
+    if (!row.registrationGroupId) {
+      throw new LifecycleMailError('TEMPLATE_RENDER_FAILED', 'missing_registration_group');
+    }
     let token: string;
     try {
-      token = await upsertEntryVerificationToken(row.entryId, email);
+      token = await upsertRegistrationGroupVerificationToken(row.registrationGroupId, email);
     } catch {
       throw new LifecycleMailError('TEMPLATE_RENDER_FAILED', 'verification_token_upsert_failed');
     }

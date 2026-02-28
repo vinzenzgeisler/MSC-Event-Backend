@@ -566,6 +566,22 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
           throw new Error('CLASS_VEHICLE_TYPE_MISMATCH');
         }
 
+        const activeStartNumberConflict = await tx
+          .select({ id: entry.id })
+          .from(entry)
+          .where(
+            and(
+              eq(entry.eventId, input.eventId),
+              eq(entry.classId, item.classId),
+              eq(entry.startNumberNorm, normalizedStartNumber),
+              sql`${entry.deletedAt} is null`
+            )
+          )
+          .limit(1);
+        if (activeStartNumberConflict[0]) {
+          throw new Error('UNIQUE_VIOLATION');
+        }
+
         let codriverId: string | null = null;
         if (item.codriver) {
           const codriver = await upsertPersonByEmail(item.codriver);
@@ -999,7 +1015,8 @@ export const validatePublicStartNumber = async (input: ValidateStartNumberInput)
       and(
         eq(entry.eventId, input.eventId),
         eq(entry.classId, input.classId),
-        eq(entry.startNumberNorm, normalizedStartNumber)
+        eq(entry.startNumberNorm, normalizedStartNumber),
+        sql`${entry.deletedAt} is null`
       )
     )
     .limit(1);
@@ -1136,6 +1153,10 @@ export const verifyPublicEntryEmail = async (entryId: string, input: VerifyInput
   if (verification.verifiedAt) {
     throw new Error('VERIFY_TOKEN_ALREADY_USED');
   }
+  if (verification.expiresAt < now) {
+    throw new Error('VERIFY_TOKEN_EXPIRED');
+  }
+
   const conflictGroups = await db
     .select({
       id: registrationGroup.id

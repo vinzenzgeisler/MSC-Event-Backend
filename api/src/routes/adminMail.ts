@@ -35,7 +35,13 @@ const hasRecipientFilter = (filters: RecipientFilter | undefined): boolean =>
 
 type TemplateScope = 'process' | 'campaign';
 
-const CAMPAIGN_TEMPLATE_KEYS = new Set(['newsletter', 'event_update', 'free_form']);
+const CAMPAIGN_TEMPLATE_KEYS = new Set([
+  'newsletter',
+  'event_update',
+  'free_form',
+  'payment_reminder_followup',
+  'email_confirmation'
+]);
 const DISABLED_LIFECYCLE_EVENTS = new Set<LifecycleInput['eventType']>(['preselection']);
 
 const getTemplateScope = (templateKey: string): TemplateScope =>

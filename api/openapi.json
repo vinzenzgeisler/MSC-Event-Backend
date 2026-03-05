@@ -7009,7 +7009,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Campaign endpoint only. Allowed template keys: newsletter, event_update, free_form. Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates. Send is blocked when required placeholders are missing.",
+        "description": "Campaign endpoint only. Allowed template keys: newsletter, event_update, free_form, payment_reminder_followup, email_confirmation. Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates. Send is blocked when required placeholders are missing.",
         "security": [
           {
             "bearerAuth": []
@@ -7062,6 +7062,21 @@
                     "additionalEmails": [
                       "extra@example.com"
                     ]
+                  }
+                },
+                "email_confirmation_by_ids": {
+                  "value": {
+                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
+                    "templateKey": "email_confirmation",
+                    "driverPersonIds": [
+                      "96da7e10-4277-4e59-96e8-f2c112624486"
+                    ],
+                    "templateData": {
+                      "verificationUrl": "https://nennungstool.example.org/verify?token=abc123",
+                      "introText": "Bitte bestaetige erneut deine E-Mail-Adresse.",
+                      "detailsText": "Ohne Bestaetigung koennen wir deine Anmeldung nicht abschliessen.",
+                      "closingText": "Danke fuer deine Mithilfe."
+                    }
                   }
                 }
               }
@@ -7153,7 +7168,7 @@
             "bearerAuth": []
           }
         ],
-        "description": "Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates.",
+        "description": "Campaign endpoint only. Allowed template keys: newsletter, event_update, free_form, payment_reminder_followup, email_confirmation. Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates.",
         "requestBody": {
           "required": true,
           "content": {
@@ -8310,6 +8325,22 @@
             "label": "Freies Mailing",
             "subject": "Mitteilung - {{eventName}}",
             "bodyText": "Freitextinhalt",
+            "status": "published",
+            "isActive": true
+          },
+          {
+            "key": "payment_reminder_followup",
+            "label": "Erneute Zahlungsaufforderung",
+            "subject": "Erneute Zahlungsaufforderung - {{eventName}}",
+            "bodyText": "Hallo {{driverName}}, offen: {{amountOpen}}. Frist: {{paymentDeadline}}.",
+            "status": "published",
+            "isActive": true
+          },
+          {
+            "key": "email_confirmation",
+            "label": "E-Mail-Bestaetigung",
+            "subject": "Bitte E-Mail bestaetigen - {{eventName}}",
+            "bodyText": "Hallo {{driverName}}, bestaetige hier: {{verificationUrl}}",
             "status": "published",
             "isActive": true
           }

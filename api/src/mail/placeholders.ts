@@ -21,7 +21,8 @@ export const PLACEHOLDER_CATALOG: PlaceholderCatalogItem[] = [
   { name: 'detailsText', description: 'Weiterer Detailabschnitt', example: 'Zeitplan und Anreise wurden aktualisiert.' },
   { name: 'ctaText', description: 'Button-Beschriftung fuer Kampagneninhalt', example: 'Alle Infos ansehen' },
   { name: 'ctaUrl', description: 'Button-Link fuer Kampagneninhalt', example: 'https://nennungstool.example.org/news' },
-  { name: 'closingText', description: 'Abschlusstext', example: 'Viele Gruesse, euer Orga-Team' }
+  { name: 'closingText', description: 'Abschlusstext', example: 'Viele Gruesse, euer Orga-Team' },
+  { name: 'paymentDeadline', description: 'Frist fuer Zahlung', example: '15.04.2026' }
 ];
 
 export const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
@@ -31,7 +32,9 @@ export const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
   rejected: ['eventName', 'driverName'],
   newsletter: ['eventName'],
   event_update: ['eventName'],
-  free_form: []
+  free_form: [],
+  payment_reminder_followup: ['eventName', 'driverName', 'amountOpen', 'paymentDeadline'],
+  email_confirmation: ['eventName', 'driverName', 'verificationUrl']
 };
 
 export const KNOWN_PLACEHOLDER_NAMES = new Set(PLACEHOLDER_CATALOG.map((item) => item.name));

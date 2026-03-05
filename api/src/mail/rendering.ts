@@ -146,11 +146,23 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   free_form: {
     mailLabel: '',
     heroSubtitle: 'Mitteilung vom Orga-Team.'
+  },
+  payment_reminder_followup: {
+    mailLabel: '',
+    heroSubtitle: 'Erinnerung zu offenem Betrag.'
+  },
+  email_confirmation: {
+    mailLabel: '',
+    heroSubtitle: 'Bitte bestaetige deine E-Mail-Adresse.'
   }
 };
 
 const isCampaignTemplate = (templateKey: string): boolean =>
-  templateKey === 'newsletter' || templateKey === 'event_update' || templateKey === 'free_form';
+  templateKey === 'newsletter' ||
+  templateKey === 'event_update' ||
+  templateKey === 'free_form' ||
+  templateKey === 'payment_reminder_followup' ||
+  templateKey === 'email_confirmation';
 
 const buildHtmlDocument = (input: {
   templateKey: string;
@@ -192,9 +204,10 @@ const buildHtmlDocument = (input: {
   const dateHtml = eventDateText ? `<div>${escapeHtml(eventName)} · ${escapeHtml(eventDateText)}</div>` : `<div>${escapeHtml(eventName)}</div>`;
   const campaignCtaUrl = normalizePublicUrl(input.data.ctaUrl);
   const campaignCtaText = isPresentValue(input.data.ctaText) ? toStringValue(input.data.ctaText) : 'Mehr erfahren';
+  const verificationCtaLabel = input.templateKey === 'email_confirmation' ? 'E-Mail bestaetigen' : 'Anmeldung bestaetigen';
   const ctaBlock =
-    input.templateKey === 'registration_received' && input.verificationUrl
-      ? `<p style="margin-top:18px;"><a class="btn" href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer">Anmeldung bestaetigen</a></p><p class="muted">Falls der Button nicht funktioniert: ${escapeHtml(input.verificationUrl)}</p>`
+    (input.templateKey === 'registration_received' || input.templateKey === 'email_confirmation') && input.verificationUrl
+      ? `<p style="margin-top:18px;"><a class="btn" href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer">${verificationCtaLabel}</a></p><p class="muted">Falls der Button nicht funktioniert: ${escapeHtml(input.verificationUrl)}</p>`
       : isCampaignTemplate(input.templateKey) && campaignCtaUrl
         ? `<p style="margin-top:18px;"><a class="btn" href="${escapeHtml(campaignCtaUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(campaignCtaText)}</a></p><p class="muted">Falls der Button nicht funktioniert: ${escapeHtml(campaignCtaUrl)}</p>`
         : '';
@@ -262,7 +275,7 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
 
   const verificationUrl = normalizePublicUrl(input.data.verificationUrl);
   let bodyTextRendered = bodyText.rendered.trim();
-  if (input.templateKey === 'registration_received') {
+  if (input.templateKey === 'registration_received' || input.templateKey === 'email_confirmation') {
     if (!verificationUrl) {
       warnings.push('verificationUrl fehlt; CTA und Verifizierungslink koennen nicht gerendert werden.');
     } else if (!bodyTextRendered.includes(verificationUrl)) {

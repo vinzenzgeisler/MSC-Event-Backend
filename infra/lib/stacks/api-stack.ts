@@ -382,6 +382,41 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/mail/send',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/templates',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/templates/{id}',
+      methods: [apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/templates/{id}/versions',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/templates/{id}/preview',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/events',
       methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
       integration,
@@ -572,6 +607,13 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/entries/{id}/status',
+      methods: [apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/entries/{id}/class',
       methods: [apigwv2.HttpMethod.PATCH],
       integration,
       authorizer: jwtAuthorizer

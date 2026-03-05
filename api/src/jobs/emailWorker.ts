@@ -112,8 +112,9 @@ export const handler = async () => {
       }
 
       const subject = renderTemplateString(row.subject, row.template_data);
-      const body = renderTemplateString(template.bodyTemplate, row.template_data);
-      const response = await sendEmail(row.to_email, subject, body);
+      const bodyText = renderTemplateString(template.bodyTextTemplate, row.template_data);
+      const bodyHtml = renderTemplateString(template.bodyHtmlTemplate, row.template_data);
+      const response = await sendEmail(row.to_email, subject, bodyText, bodyHtml);
       await markSent(row.id, response.MessageId ?? null, response);
     } catch (error) {
       await markFailed(row.id, row.attempt_count, row.max_attempts, error);

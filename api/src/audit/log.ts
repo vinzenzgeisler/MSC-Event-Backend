@@ -12,6 +12,7 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   batch_document_generated: ['type', 'templateVersion', 'count', 's3Key'],
   document_download_url_issued: ['expiresInSeconds'],
   entry_status_updated: ['from', 'to'],
+  entry_class_updated: ['previousClassId', 'classId', 'isBackupVehicle', 'backupOfEntryId', 'backupVehicleId'],
   entry_tech_status_updated: ['techStatus'],
   entry_notes_updated: ['internalNoteUpdated', 'driverNoteUpdated'],
   entry_payment_status_set: ['paymentStatus', 'paidAmountCents', 'amountOpenCents', 'invoiceId'],

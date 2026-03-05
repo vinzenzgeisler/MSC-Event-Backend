@@ -46,6 +46,13 @@ const techStatusPatchSchema = z.object({
   techStatus: z.enum(['pending', 'passed', 'failed'])
 });
 
+const entryClassPatchSchema = z.object({
+  classId: z.string().uuid(),
+  isBackupVehicle: z.boolean().optional(),
+  backupOfEntryId: z.string().uuid().nullable().optional(),
+  backupVehicleId: z.string().uuid().nullable().optional()
+});
+
 const entryNotesPatchSchema = z
   .object({
     internalNote: z.string().max(2000).nullable().optional(),
@@ -89,6 +96,7 @@ const entryDeleteSchema = z
 type ListEntriesQuery = z.infer<typeof listEntriesQuerySchema>;
 type EntryStatusPatch = z.infer<typeof entryStatusPatchSchema>;
 type TechStatusPatch = z.infer<typeof techStatusPatchSchema>;
+type EntryClassPatch = z.infer<typeof entryClassPatchSchema>;
 type EntryNotesPatch = z.infer<typeof entryNotesPatchSchema>;
 type EntryPaymentStatusPatch = z.infer<typeof entryPaymentStatusPatchSchema>;
 type EntryPaymentAmountsPatch = z.infer<typeof entryPaymentAmountsPatchSchema>;
@@ -640,6 +648,147 @@ export const patchEntryTechStatus = async (entryId: string, input: TechStatusPat
   return updated ?? null;
 };
 
+export const patchEntryClass = async (entryId: string, input: EntryClassPatch, actorUserId: string | null) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: entry.id,
+      eventId: entry.eventId,
+      classId: entry.classId,
+      vehicleId: entry.vehicleId,
+      backupVehicleId: entry.backupVehicleId,
+      isBackupVehicle: entry.isBackupVehicle,
+      backupOfEntryId: entry.backupOfEntryId,
+      driverPersonId: entry.driverPersonId,
+      vehicleType: vehicle.vehicleType,
+      deletedAt: entry.deletedAt
+    })
+    .from(entry)
+    .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+    .where(eq(entry.id, entryId))
+    .limit(1);
+
+  const existing = rows[0];
+  if (!existing) {
+    return null;
+  }
+  if (existing.deletedAt) {
+    throw new Error('ENTRY_DELETED');
+  }
+  await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
+
+  const classRows = await db
+    .select({
+      id: eventClass.id,
+      eventId: eventClass.eventId,
+      vehicleType: eventClass.vehicleType
+    })
+    .from(eventClass)
+    .where(eq(eventClass.id, input.classId))
+    .limit(1);
+  const targetClass = classRows[0];
+  if (!targetClass) {
+    throw new Error('CLASS_NOT_FOUND');
+  }
+  if (targetClass.eventId !== existing.eventId) {
+    throw new Error('CLASS_EVENT_MISMATCH');
+  }
+  if (targetClass.vehicleType !== existing.vehicleType) {
+    throw new Error('CLASS_VEHICLE_TYPE_MISMATCH');
+  }
+
+  let nextBackupVehicleId = input.backupVehicleId === undefined ? existing.backupVehicleId : input.backupVehicleId;
+  if (nextBackupVehicleId) {
+    if (nextBackupVehicleId === existing.vehicleId) {
+      throw new Error('BACKUP_VEHICLE_INVALID');
+    }
+    const backupVehicleRows = await db
+      .select({
+        id: vehicle.id,
+        vehicleType: vehicle.vehicleType
+      })
+      .from(vehicle)
+      .where(eq(vehicle.id, nextBackupVehicleId))
+      .limit(1);
+    const backupVehicleRow = backupVehicleRows[0];
+    if (!backupVehicleRow || backupVehicleRow.vehicleType !== targetClass.vehicleType) {
+      throw new Error('BACKUP_VEHICLE_INVALID');
+    }
+  }
+
+  const nextIsBackupVehicle = input.isBackupVehicle ?? existing.isBackupVehicle;
+  const requestedBackupOfEntryId = input.backupOfEntryId === undefined ? existing.backupOfEntryId : input.backupOfEntryId;
+  let nextBackupOfEntryId = nextIsBackupVehicle ? requestedBackupOfEntryId : null;
+
+  if (nextIsBackupVehicle && !nextBackupOfEntryId) {
+    throw new Error('BACKUP_LINK_REQUIRED');
+  }
+
+  if (nextBackupOfEntryId) {
+    if (nextBackupOfEntryId === entryId) {
+      throw new Error('BACKUP_ENTRY_INVALID_LINK');
+    }
+    const baseEntryRows = await db
+      .select({
+        id: entry.id,
+        eventId: entry.eventId,
+        classId: entry.classId,
+        driverPersonId: entry.driverPersonId,
+        deletedAt: entry.deletedAt
+      })
+      .from(entry)
+      .where(eq(entry.id, nextBackupOfEntryId))
+      .limit(1);
+    const baseEntry = baseEntryRows[0];
+    if (
+      !baseEntry ||
+      baseEntry.deletedAt ||
+      baseEntry.eventId !== existing.eventId ||
+      baseEntry.driverPersonId !== existing.driverPersonId ||
+      baseEntry.classId !== input.classId
+    ) {
+      throw new Error('BACKUP_ENTRY_INVALID_LINK');
+    }
+  }
+
+  const [updated] = await db
+    .update(entry)
+    .set({
+      classId: input.classId,
+      isBackupVehicle: nextIsBackupVehicle,
+      backupOfEntryId: nextBackupOfEntryId,
+      backupVehicleId: nextBackupVehicleId,
+      updatedAt: new Date()
+    })
+    .where(eq(entry.id, entryId))
+    .returning({
+      id: entry.id,
+      eventId: entry.eventId,
+      classId: entry.classId,
+      isBackupVehicle: entry.isBackupVehicle,
+      backupOfEntryId: entry.backupOfEntryId,
+      backupVehicleId: entry.backupVehicleId,
+      updatedAt: entry.updatedAt
+    });
+
+  await writeAuditLog(db as never, {
+    eventId: existing.eventId,
+    actorUserId,
+    action: 'entry_class_updated',
+    entityType: 'entry',
+    entityId: entryId,
+    payload: {
+      previousClassId: existing.classId,
+      classId: input.classId,
+      isBackupVehicle: nextIsBackupVehicle,
+      backupOfEntryId: nextBackupOfEntryId,
+      backupVehicleId: nextBackupVehicleId
+    }
+  });
+
+  return updated ?? null;
+};
+
 export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, actorUserId: string | null) => {
   const db = await getDb();
   const rows = await db
@@ -1169,6 +1318,7 @@ export const validateListEntriesQuery = (query: Record<string, string | undefine
   });
 export const validateEntryStatusPatchInput = (payload: unknown) => entryStatusPatchSchema.parse(payload);
 export const validateEntryTechStatusPatchInput = (payload: unknown) => techStatusPatchSchema.parse(payload);
+export const validateEntryClassPatchInput = (payload: unknown) => entryClassPatchSchema.parse(payload);
 export const validateEntryNotesPatchInput = (payload: unknown) => entryNotesPatchSchema.parse(payload);
 export const validateEntryPaymentStatusPatchInput = (payload: unknown) => entryPaymentStatusPatchSchema.parse(payload);
 export const validateEntryPaymentAmountsPatchInput = (payload: unknown) => entryPaymentAmountsPatchSchema.parse(payload);

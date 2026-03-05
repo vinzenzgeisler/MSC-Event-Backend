@@ -11,7 +11,7 @@ const getSender = (): string => {
   return sender;
 };
 
-export const sendEmail = async (to: string, subject: string, bodyText: string) => {
+export const sendEmail = async (to: string, subject: string, bodyText: string, bodyHtml?: string) => {
   const client = getSesClient();
   const command = new SendEmailCommand({
     Source: getSender(),
@@ -21,7 +21,8 @@ export const sendEmail = async (to: string, subject: string, bodyText: string) =
     Message: {
       Subject: { Data: subject },
       Body: {
-        Text: { Data: bodyText }
+        Text: { Data: bodyText },
+        ...(bodyHtml && bodyHtml.trim().length > 0 ? { Html: { Data: bodyHtml } } : {})
       }
     }
   });

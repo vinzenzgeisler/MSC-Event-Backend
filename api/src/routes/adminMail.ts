@@ -1,8 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { and, eq, inArray, isNull, or, SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, SQL } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { emailOutbox, entry, event, eventClass, invoice, person, registrationGroupEmailVerification } from '../db/schema';
+import {
+  emailOutbox,
+  emailTemplate,
+  emailTemplateVersion,
+  entry,
+  event,
+  eventClass,
+  invoice,
+  person,
+  registrationGroupEmailVerification
+} from '../db/schema';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { writeAuditLog } from '../audit/log';
 import { getTemplateVersion } from '../mail/templateStore';
@@ -89,11 +99,68 @@ const listOutboxSchema = z.object({
   sortDir: z.enum(['asc', 'desc']).optional()
 });
 
+const templateCreateSchema = z.object({
+  templateKey: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  isActive: z.boolean().optional().default(true),
+  subject: z.string().min(1),
+  html: z.string().min(1),
+  text: z.string().min(1)
+});
+
+const templatePatchSchema = z
+  .object({
+    name: z.string().trim().min(1).optional(),
+    isActive: z.boolean().optional()
+  })
+  .refine((value) => value.name !== undefined || value.isActive !== undefined, {
+    message: 'Provide at least one field to update'
+  });
+
+const templateVersionCreateSchema = z.object({
+  subject: z.string().min(1),
+  html: z.string().min(1),
+  text: z.string().min(1)
+});
+
+const templatePreviewSchema = z.object({
+  version: z.number().int().positive().optional(),
+  subject: z.string().min(1).optional(),
+  html: z.string().min(1).optional(),
+  text: z.string().min(1).optional(),
+  templateData: z.record(z.unknown()).optional()
+});
+
+const communicationSendSchema = z.object({
+  eventId: z.string().uuid(),
+  templateId: z.string().min(1),
+  templateVersion: z.number().int().positive().optional(),
+  subject: z.string().min(1).optional(),
+  templateData: z.record(z.unknown()).optional(),
+  sendAfter: z.string().datetime().optional(),
+  additionalEmails: z.array(z.string().email()).optional(),
+  driverPersonIds: z.array(z.string().uuid()).optional(),
+  entryIds: z.array(z.string().uuid()).optional(),
+  filters: z
+    .object({
+      acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+      registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
+      paymentStatus: z.enum(['due', 'paid']).optional(),
+      classId: z.string().uuid().optional()
+    })
+    .optional()
+});
+
 type QueueMailInput = z.infer<typeof queueMailSchema>;
 type ReminderInput = z.infer<typeof reminderSchema>;
 type LifecycleInput = z.infer<typeof lifecycleSchema>;
 type BroadcastInput = z.infer<typeof broadcastSchema>;
 type ListOutboxInput = z.infer<typeof listOutboxSchema>;
+type TemplateCreateInput = z.infer<typeof templateCreateSchema>;
+type TemplatePatchInput = z.infer<typeof templatePatchSchema>;
+type TemplateVersionCreateInput = z.infer<typeof templateVersionCreateSchema>;
+type TemplatePreviewInput = z.infer<typeof templatePreviewSchema>;
+type CommunicationSendInput = z.infer<typeof communicationSendSchema>;
 
 export class DuplicateRequestError extends Error {
   public readonly existingOutboxId: string | null;
@@ -347,7 +414,9 @@ const resolveTemplate = async (
     templateKey: template.templateKey,
     templateVersion: template.version,
     subjectTemplate: subjectOverride ?? template.subjectTemplate,
-    bodyTemplate: template.bodyTemplate
+    bodyTemplate: template.bodyTextTemplate,
+    bodyHtmlTemplate: template.bodyHtmlTemplate,
+    bodyTextTemplate: template.bodyTextTemplate
   };
 };
 
@@ -365,7 +434,9 @@ const dedupeTargets = (targets: RecipientTarget[]): RecipientTarget[] => {
 
 const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]> => {
   const db = await getDb();
-  if (input.recipientEmails) {
+  const collected: RecipientTarget[] = [];
+
+  if (input.recipientEmails && input.recipientEmails.length > 0) {
     const candidates = dedupeTargets(
       input.recipientEmails.map((email) => ({
         email,
@@ -387,17 +458,18 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
           ),
           or(eq(person.processingRestricted, true), eq(person.objectionFlag, true))
         )
-      );
+    );
     const blocked = new Set(blockedRows.map((row) => (row.email ?? '').toLowerCase()).filter((email) => email.length > 0));
-    return candidates.filter((candidate) => !blocked.has(candidate.email.toLowerCase()));
+    collected.push(...candidates.filter((candidate) => !blocked.has(candidate.email.toLowerCase())));
   }
 
-  if (input.driverPersonIds) {
+  if (input.driverPersonIds && input.driverPersonIds.length > 0) {
     const rows = await db
       .select({ email: person.email, driverPersonId: person.id })
       .from(person)
       .where(and(inArray(person.id, input.driverPersonIds), eq(person.processingRestricted, false), eq(person.objectionFlag, false)));
-    return dedupeTargets(
+    collected.push(
+      ...
       rows
         .filter((row) => row.email)
         .map((row) => ({
@@ -408,7 +480,7 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
     );
   }
 
-  if (input.entryIds) {
+  if (input.entryIds && input.entryIds.length > 0) {
     const rows = await db
       .select({
         email: person.email,
@@ -418,7 +490,8 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
       .from(entry)
       .innerJoin(person, eq(entry.driverPersonId, person.id))
       .where(and(inArray(entry.id, input.entryIds), eq(person.processingRestricted, false), eq(person.objectionFlag, false)));
-    return dedupeTargets(
+    collected.push(
+      ...
       rows
         .filter((row) => row.email)
         .map((row) => ({
@@ -459,7 +532,20 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
         .innerJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
         .where(and(...conditions, eq(invoice.paymentStatus, input.filters.paymentStatus)));
 
-      return dedupeTargets(
+      collected.push(
+        ...
+        rows
+          .filter((row) => row.email)
+          .map((row) => ({
+            email: row.email as string,
+            driverPersonId: row.driverPersonId,
+            entryId: row.entryId
+          }))
+      );
+    } else {
+      const rows = await query.where(and(...conditions));
+      collected.push(
+        ...
         rows
           .filter((row) => row.email)
           .map((row) => ({
@@ -469,20 +555,9 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
           }))
       );
     }
-
-    const rows = await query.where(and(...conditions));
-    return dedupeTargets(
-      rows
-        .filter((row) => row.email)
-        .map((row) => ({
-          email: row.email as string,
-          driverPersonId: row.driverPersonId,
-          entryId: row.entryId
-        }))
-    );
   }
 
-  return [];
+  return dedupeTargets(collected);
 };
 
 const insertOutboxRows = async (
@@ -858,7 +933,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   }
 
   const renderedSubject = renderTemplateString(template.subjectTemplate, templateData).trim();
-  const renderedBody = renderTemplateString(template.bodyTemplate, templateData).trim();
+  const renderedBody = renderTemplateString(template.bodyTextTemplate, templateData).trim();
   if (!renderedSubject || !renderedBody) {
     throw new LifecycleMailError('TEMPLATE_RENDER_FAILED', 'rendered_subject_or_body_empty');
   }
@@ -1136,6 +1211,216 @@ export const retryOutboxMail = async (outboxId: string, actorUserId: string | nu
   return updated ?? null;
 };
 
+export const listMailTemplates = async () => {
+  const db = await getDb();
+  const templates = await db
+    .select({
+      id: emailTemplate.id,
+      templateKey: emailTemplate.templateKey,
+      name: emailTemplate.description,
+      isActive: emailTemplate.isActive,
+      createdAt: emailTemplate.createdAt,
+      updatedAt: emailTemplate.updatedAt
+    })
+    .from(emailTemplate)
+    .orderBy(emailTemplate.templateKey);
+
+  if (templates.length === 0) {
+    return [];
+  }
+
+  const templateIds = templates.map((item) => item.id);
+  const versionRows = await db
+    .select({
+      templateId: emailTemplateVersion.templateId,
+      version: emailTemplateVersion.version,
+      createdAt: emailTemplateVersion.createdAt
+    })
+    .from(emailTemplateVersion)
+    .where(inArray(emailTemplateVersion.templateId, templateIds))
+    .orderBy(desc(emailTemplateVersion.version));
+
+  const latestByTemplateId = new Map<string, { version: number; createdAt: Date }>();
+  versionRows.forEach((row) => {
+    if (!latestByTemplateId.has(row.templateId)) {
+      latestByTemplateId.set(row.templateId, {
+        version: row.version,
+        createdAt: row.createdAt
+      });
+    }
+  });
+
+  return templates.map((item) => ({
+    ...item,
+    latestVersion: latestByTemplateId.get(item.id)?.version ?? null,
+    latestVersionCreatedAt: latestByTemplateId.get(item.id)?.createdAt ?? null
+  }));
+};
+
+const getTemplateByKey = async (templateKey: string) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: emailTemplate.id,
+      templateKey: emailTemplate.templateKey,
+      description: emailTemplate.description,
+      isActive: emailTemplate.isActive
+    })
+    .from(emailTemplate)
+    .where(eq(emailTemplate.templateKey, templateKey))
+    .limit(1);
+  return rows[0] ?? null;
+};
+
+export const createMailTemplate = async (input: TemplateCreateInput, actorUserId: string | null) => {
+  const db = await getDb();
+  const now = new Date();
+  try {
+    return db.transaction(async (tx) => {
+      const [templateRow] = await tx
+        .insert(emailTemplate)
+        .values({
+          templateKey: input.templateKey,
+          description: input.name,
+          isActive: input.isActive,
+          updatedAt: now
+        })
+        .returning({
+          id: emailTemplate.id,
+          templateKey: emailTemplate.templateKey,
+          name: emailTemplate.description,
+          isActive: emailTemplate.isActive
+        });
+
+      const [versionRow] = await tx
+        .insert(emailTemplateVersion)
+        .values({
+          templateId: templateRow.id,
+          version: 1,
+          subjectTemplate: input.subject,
+          bodyTemplate: input.text,
+          bodyHtmlTemplate: input.html,
+          bodyTextTemplate: input.text,
+          createdBy: actorUserId
+        })
+        .returning({
+          version: emailTemplateVersion.version
+        });
+
+      return {
+        ...templateRow,
+        version: versionRow?.version ?? 1
+      };
+    });
+  } catch (error) {
+    if (isPgUniqueViolation(error)) {
+      throw new Error('TEMPLATE_KEY_NOT_UNIQUE');
+    }
+    throw error;
+  }
+};
+
+export const patchMailTemplate = async (templateKey: string, input: TemplatePatchInput) => {
+  const db = await getDb();
+  const existing = await getTemplateByKey(templateKey);
+  if (!existing) {
+    return null;
+  }
+  const [updated] = await db
+    .update(emailTemplate)
+    .set({
+      description: input.name ?? existing.description,
+      isActive: input.isActive ?? existing.isActive,
+      updatedAt: new Date()
+    })
+    .where(eq(emailTemplate.id, existing.id))
+    .returning({
+      id: emailTemplate.id,
+      templateKey: emailTemplate.templateKey,
+      name: emailTemplate.description,
+      isActive: emailTemplate.isActive,
+      updatedAt: emailTemplate.updatedAt
+    });
+
+  return updated ?? null;
+};
+
+export const createMailTemplateVersion = async (
+  templateKey: string,
+  input: TemplateVersionCreateInput,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const template = await getTemplateByKey(templateKey);
+  if (!template) {
+    return null;
+  }
+
+  const latestRows = await db
+    .select({
+      version: emailTemplateVersion.version
+    })
+    .from(emailTemplateVersion)
+    .where(eq(emailTemplateVersion.templateId, template.id))
+    .orderBy(desc(emailTemplateVersion.version))
+    .limit(1);
+
+  const nextVersion = (latestRows[0]?.version ?? 0) + 1;
+
+  const [created] = await db
+    .insert(emailTemplateVersion)
+    .values({
+      templateId: template.id,
+      version: nextVersion,
+      subjectTemplate: input.subject,
+      bodyTemplate: input.text,
+      bodyHtmlTemplate: input.html,
+      bodyTextTemplate: input.text,
+      createdBy: actorUserId
+    })
+    .returning({
+      version: emailTemplateVersion.version,
+      createdAt: emailTemplateVersion.createdAt
+    });
+
+  return {
+    templateKey,
+    version: created?.version ?? nextVersion,
+    createdAt: created?.createdAt ?? new Date()
+  };
+};
+
+export const previewMailTemplate = async (templateKey: string, input: TemplatePreviewInput) => {
+  const template = await resolveTemplate(templateKey, input.version, input.subject);
+  const data = input.templateData ?? {};
+  return {
+    templateKey,
+    version: template.templateVersion,
+    rendered: {
+      subject: renderTemplateString(template.subjectTemplate, data).trim(),
+      html: renderTemplateString(input.html ?? template.bodyHtmlTemplate, data).trim(),
+      text: renderTemplateString(input.text ?? template.bodyTextTemplate, data).trim()
+    }
+  };
+};
+
+export const queueCommunicationSend = async (input: CommunicationSendInput, actorUserId: string | null) =>
+  queueMail(
+    {
+      eventId: input.eventId,
+      templateId: input.templateId,
+      templateVersion: input.templateVersion,
+      subject: input.subject,
+      templateData: input.templateData,
+      sendAfter: input.sendAfter,
+      recipientEmails: input.additionalEmails,
+      driverPersonIds: input.driverPersonIds,
+      entryIds: input.entryIds,
+      filters: input.filters
+    },
+    actorUserId
+  );
+
 export const validateQueueMailInput = (payload: unknown) => queueMailSchema.parse(payload);
 export const validateReminderInput = (payload: unknown) => reminderSchema.parse(payload);
 export const validateLifecycleInput = (payload: unknown) => lifecycleSchema.parse(payload);
@@ -1149,3 +1434,8 @@ export const validateListOutboxInput = (query: Record<string, string | undefined
     sortBy: query.sortBy,
     sortDir: query.sortDir
   });
+export const validateMailTemplateCreateInput = (payload: unknown) => templateCreateSchema.parse(payload);
+export const validateMailTemplatePatchInput = (payload: unknown) => templatePatchSchema.parse(payload);
+export const validateMailTemplateVersionCreateInput = (payload: unknown) => templateVersionCreateSchema.parse(payload);
+export const validateMailTemplatePreviewInput = (payload: unknown) => templatePreviewSchema.parse(payload);
+export const validateCommunicationSendInput = (payload: unknown) => communicationSendSchema.parse(payload);

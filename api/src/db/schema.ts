@@ -489,6 +489,8 @@ export const emailTemplateVersion = pgTable(
     version: integer('version').notNull(),
     subjectTemplate: text('subject_template').notNull(),
     bodyTemplate: text('body_template').notNull(),
+    bodyHtmlTemplate: text('body_html_template'),
+    bodyTextTemplate: text('body_text_template'),
     createdBy: text('created_by'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
   },

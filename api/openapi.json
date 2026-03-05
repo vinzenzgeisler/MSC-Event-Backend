@@ -6648,6 +6648,7 @@
         "tags": [
           "admin"
         ],
+        "description": "Uses the same rendering pipeline as actual send. htmlDocument is final send-ready HTML.",
         "security": [
           {
             "bearerAuth": []
@@ -7008,7 +7009,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Campaign endpoint only. Allowed template keys: newsletter, event_update, free_form. Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates.",
+        "description": "Campaign endpoint only. Allowed template keys: newsletter, event_update, free_form. Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates. Send is blocked when required placeholders are missing.",
         "security": [
           {
             "bearerAuth": []
@@ -7376,7 +7377,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Entity (code: TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN)",
+            "description": "Unprocessable Entity (code: TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN, MISSING_REQUIRED_PLACEHOLDERS)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7388,6 +7389,13 @@
                       "ok": false,
                       "code": "TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN",
                       "message": "Template is not allowed in campaign endpoint"
+                    }
+                  },
+                  "missing_required_placeholders": {
+                    "value": {
+                      "ok": false,
+                      "code": "MISSING_REQUIRED_PLACEHOLDERS",
+                      "message": "Missing required placeholders"
                     }
                   }
                 }

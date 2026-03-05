@@ -118,6 +118,37 @@ const buildInfoBoxes = (data: TemplateData): string => {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;padding:0 16px;margin:0 0 20px 0;"><tbody>${items}</tbody></table>`;
 };
 
+const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: string }> = {
+  registration_received: {
+    mailLabel: 'Prozessmail',
+    heroSubtitle: 'Bitte bestaetige deine E-Mail-Adresse, um die Anmeldung abzuschliessen.'
+  },
+  accepted_open_payment: {
+    mailLabel: 'Prozessmail',
+    heroSubtitle: 'Dein Startplatz ist bestaetigt.'
+  },
+  payment_reminder: {
+    mailLabel: 'Prozessmail',
+    heroSubtitle: 'Offener Betrag fuer deine Nennung.'
+  },
+  rejected: {
+    mailLabel: 'Prozessmail',
+    heroSubtitle: 'Update zu deiner Anmeldung.'
+  },
+  newsletter: {
+    mailLabel: 'Kampagne',
+    heroSubtitle: 'Neuigkeiten rund um das Event.'
+  },
+  event_update: {
+    mailLabel: 'Kampagne',
+    heroSubtitle: 'Wichtige organisatorische Infos.'
+  },
+  free_form: {
+    mailLabel: 'Kampagne',
+    heroSubtitle: 'Mitteilung vom Orga-Team.'
+  }
+};
+
 const buildHtmlDocument = (input: {
   templateKey: string;
   subjectRendered: string;
@@ -128,9 +159,20 @@ const buildHtmlDocument = (input: {
   const eventName = isPresentValue(input.data.eventName)
     ? toStringValue(input.data.eventName)
     : (process.env.MAIL_BRAND_EVENT_NAME ?? 'MSC Event');
-  const logoText = process.env.MAIL_BRAND_LOGO_TEXT ?? eventName;
-  const contactHint = process.env.MAIL_CONTACT_HINT ?? 'Bei Rueckfragen bitte auf diese E-Mail antworten.';
-  const imprintHint = process.env.MAIL_IMPRINT_HINT ?? 'Impressum und Datenschutz finden Sie auf der offiziellen Event-Webseite.';
+  const templatePresentation = TEMPLATE_PRESENTATION[input.templateKey] ?? {
+    mailLabel: 'Mitteilung',
+    heroSubtitle: 'Information vom Veranstalter.'
+  };
+  const mailLabel = isPresentValue(input.data.mailLabel) ? toStringValue(input.data.mailLabel) : templatePresentation.mailLabel;
+  const heroSubtitle = isPresentValue(input.data.heroSubtitle)
+    ? toStringValue(input.data.heroSubtitle)
+    : templatePresentation.heroSubtitle;
+  const eventDateText = isPresentValue(input.data.eventDateText)
+    ? toStringValue(input.data.eventDateText)
+    : (process.env.MAIL_EVENT_DATE_TEXT ?? '');
+  const contactEmail = isPresentValue(input.data.contactEmail)
+    ? toStringValue(input.data.contactEmail)
+    : (process.env.MAIL_CONTACT_EMAIL ?? '');
   const baseUrl =
     normalizeBaseUrl(input.data.nennungstoolUrl) ??
     normalizeBaseUrl(input.data.url) ??
@@ -138,11 +180,15 @@ const buildHtmlDocument = (input: {
     normalizeBaseUrl(process.env.NENNUNGSTOOL_URL);
   const impressumUrl = baseUrl ? `${baseUrl}/anmeldung/rechtliches/impressum` : null;
   const datenschutzUrl = baseUrl ? `${baseUrl}/anmeldung/rechtliches/datenschutz` : null;
+  const contactHtml = contactEmail
+    ? `<div style="margin-top:6px;">Kontakt: <a href="mailto:${escapeHtml(contactEmail)}">${escapeHtml(contactEmail)}</a></div>`
+    : '';
   const legalLinks = impressumUrl && datenschutzUrl
-    ? `<div style="font-size:12px;line-height:1.5;color:#94a3b8;margin-top:6px;"><a href="${escapeHtml(impressumUrl)}" style="color:#64748b;text-decoration:underline;">Impressum</a> · <a href="${escapeHtml(datenschutzUrl)}" style="color:#64748b;text-decoration:underline;">Datenschutz</a></div>`
-    : `<div style="font-size:12px;line-height:1.5;color:#94a3b8;margin-top:6px;">${escapeHtml(imprintHint)}</div>`;
+    ? `<div style="margin-top:8px;"><a href="${escapeHtml(impressumUrl)}" target="_blank" rel="noopener noreferrer">Impressum</a> · <a href="${escapeHtml(datenschutzUrl)}" target="_blank" rel="noopener noreferrer">Datenschutz</a></div>`
+    : '';
+  const dateHtml = eventDateText ? `<div>${escapeHtml(eventName)} · ${escapeHtml(eventDateText)}</div>` : `<div>${escapeHtml(eventName)}</div>`;
   const ctaBlock = input.templateKey === 'registration_received' && input.verificationUrl
-    ? `<tr><td style="padding:0 32px 28px 32px;"><a href="${escapeHtml(input.verificationUrl)}" style="display:inline-block;padding:12px 20px;background:#0f172a;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">E-Mail bestaetigen</a></td></tr>`
+    ? `<p style="margin-top:18px;"><a class="btn" href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer">Anmeldung bestaetigen</a></p><p class="muted">Falls der Button nicht funktioniert: ${escapeHtml(input.verificationUrl)}</p>`
     : '';
 
   return [
@@ -152,16 +198,15 @@ const buildHtmlDocument = (input: {
     '<meta charset="utf-8" />',
     '<meta name="viewport" content="width=device-width, initial-scale=1" />',
     `<title>${escapeHtml(input.subjectRendered)}</title>`,
+    '<style>:root{color-scheme:light;}body{margin:0;padding:0;background:#F9FAFB;color:#0F1729;font-family:"IBM Plex Sans","Segoe UI",Arial,sans-serif;}table{border-collapse:separate;} .wrapper{width:100%;background:#F9FAFB;padding:24px 12px;} .container{max-width:640px;margin:0 auto;background:#FFFFFF;border:1px solid #DDE4EE;border-radius:12px;overflow:hidden;} .hero{background:#254CA2;color:#FFFFFF;padding:20px 24px;} .badge{display:inline-block;background:#F4C406;color:#0F1729;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:8px;} .title{margin:14px 0 0;font-family:"Barlow Condensed","IBM Plex Sans","Segoe UI",Arial,sans-serif;font-size:34px;line-height:1.1;font-weight:600;} .subtitle{margin:8px 0 0;color:rgba(255,255,255,.9);font-size:15px;line-height:1.5;} .content{padding:24px;} .content p{margin:0 0 14px;font-size:15px;line-height:1.6;color:#0F1729;} .btn{display:inline-block;background:#F4C406;color:#0F1729 !important;text-decoration:none;font-weight:700;font-size:14px;line-height:1;padding:12px 16px;border-radius:10px;} .muted{color:#637288;font-size:13px;} .footer{border-top:1px solid #DDE4EE;padding:16px 24px 20px;color:#637288;font-size:12px;line-height:1.5;} .footer a{color:#254CA2;text-decoration:underline;} @media only screen and (max-width:600px){ .wrapper{padding:16px 8px;} .hero,.content,.footer{padding:16px;} .title{font-size:28px;} .content p{font-size:16px;} }</style>',
     '</head>',
-    '<body style="margin:0;padding:0;background:#f1f5f9;">',
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:24px 12px;">',
+    '<body>',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="wrapper">',
     '<tr><td align="center">',
-    '<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">',
-    `<tr><td style="padding:22px 28px;background:#f8fafc;border-bottom:1px solid #e2e8f0;"><div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#334155;font-weight:600;">${escapeHtml(logoText)}</div><div style="font-family:Segoe UI,Arial,sans-serif;font-size:12px;color:#64748b;margin-top:4px;">${escapeHtml(eventName)}</div></td></tr>`,
-    `<tr><td style="padding:28px 32px 8px 32px;font-family:Segoe UI,Arial,sans-serif;font-size:22px;line-height:1.3;color:#0f172a;font-weight:700;">${escapeHtml(input.subjectRendered)}</td></tr>`,
-    `<tr><td style="padding:0 32px 0 32px;font-family:Segoe UI,Arial,sans-serif;">${buildInfoBoxes(input.data)}${input.bodyHtmlRendered}</td></tr>`,
-    ctaBlock,
-    `<tr><td style="padding:20px 32px 24px 32px;border-top:1px solid #e2e8f0;background:#f8fafc;font-family:Segoe UI,Arial,sans-serif;"><div style="font-size:12px;line-height:1.5;color:#64748b;">${escapeHtml(contactHint)}</div>${legalLinks}</td></tr>`,
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="container">',
+    `<tr><td class="hero"><span class="badge">${escapeHtml(mailLabel)}</span><h1 class="title">${escapeHtml(eventName)}</h1><p class="subtitle">${escapeHtml(heroSubtitle)}</p></td></tr>`,
+    `<tr><td class="content">${buildInfoBoxes(input.data)}${input.bodyHtmlRendered}${ctaBlock}</td></tr>`,
+    `<tr><td class="footer">${dateHtml}${contactHtml}${legalLinks}</td></tr>`,
     '</table>',
     '</td></tr>',
     '</table>',

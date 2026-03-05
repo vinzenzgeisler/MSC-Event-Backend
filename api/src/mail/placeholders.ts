@@ -21,7 +21,9 @@ export const PLACEHOLDER_CATALOG: PlaceholderCatalogItem[] = [
 
 export const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
   registration_received: ['eventName', 'driverName', 'verificationUrl'],
+  accepted_open_payment: ['eventName', 'driverName', 'className', 'startNumber', 'amountOpen'],
   payment_reminder: ['eventName', 'driverName', 'amountOpen'],
+  rejected: ['eventName', 'driverName'],
   newsletter: ['eventName'],
   event_update: ['eventName'],
   free_form: []

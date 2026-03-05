@@ -80,6 +80,7 @@ import {
 import {
   DuplicateRequestError,
   LifecycleMailError,
+  MissingRequiredPlaceholdersError,
   toLifecycleApiError,
   queueBroadcastMail,
   queueCommunicationSend,
@@ -839,6 +840,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
         return errorJson(409, 'Event is read-only');
       }
+      if (error instanceof MissingRequiredPlaceholdersError) {
+        return errorJson(
+          422,
+          'Missing required placeholders',
+          {
+            missingPlaceholders: error.missingPlaceholders,
+            recipientEmail: error.recipientEmail
+          },
+          'MISSING_REQUIRED_PLACEHOLDERS'
+        );
+      }
       return errorJson(500, 'Mail queue failed');
     }
   }
@@ -1066,6 +1078,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'MISSING_VERIFICATION_URL') {
         return errorJson(409, 'Verification URL is required', undefined, 'MISSING_VERIFICATION_URL');
+      }
+      if (error instanceof MissingRequiredPlaceholdersError) {
+        return errorJson(
+          422,
+          'Missing required placeholders',
+          {
+            missingPlaceholders: error.missingPlaceholders,
+            recipientEmail: error.recipientEmail
+          },
+          'MISSING_REQUIRED_PLACEHOLDERS'
+        );
       }
       if (error instanceof Error && error.message === 'TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN') {
         return errorJson(422, 'Template is not allowed in campaign endpoint', undefined, 'TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN');

@@ -276,6 +276,17 @@ export class LifecycleMailError extends Error {
   }
 }
 
+export class MissingRequiredPlaceholdersError extends Error {
+  public readonly missingPlaceholders: string[];
+  public readonly recipientEmail: string | null;
+
+  constructor(missingPlaceholders: string[], recipientEmail: string | null = null) {
+    super('MISSING_REQUIRED_PLACEHOLDERS');
+    this.missingPlaceholders = missingPlaceholders;
+    this.recipientEmail = recipientEmail;
+  }
+}
+
 export type LifecycleMailErrorCode =
   | 'NO_RECIPIENT'
   | 'NOT_ALLOWED'
@@ -359,6 +370,61 @@ const buildDedupeKey = (
 const toIsoDate = (value: string | undefined): Date => (value ? new Date(value) : new Date());
 
 const formatEuroFromCents = (value: number): string => (value / 100).toFixed(2).replace('.', ',');
+
+const formatEventDateText = (startsAt: string | Date | null, endsAt: string | Date | null): string | null => {
+  const normalize = (value: string | Date | null): Date | null => {
+    if (!value) {
+      return null;
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+  const from = normalize(startsAt);
+  const to = normalize(endsAt);
+  if (!from && !to) {
+    return null;
+  }
+  const format = (value: Date) =>
+    new Intl.DateTimeFormat('de-DE', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'Europe/Berlin'
+    }).format(value);
+  if (from && to) {
+    return `${format(from)} - ${format(to)}`;
+  }
+  return format((from ?? to) as Date);
+};
+
+const getEventMailDefaults = async (eventId: string) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      name: event.name,
+      startsAt: event.startsAt,
+      endsAt: event.endsAt,
+      contactEmail: event.contactEmail
+    })
+    .from(event)
+    .where(eq(event.id, eventId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) {
+    return {
+      eventName: null,
+      eventDateText: null,
+      contactEmail: process.env.MAIL_CONTACT_EMAIL ?? null,
+      nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null
+    };
+  }
+  return {
+    eventName: row.name,
+    eventDateText: formatEventDateText(row.startsAt, row.endsAt),
+    contactEmail: row.contactEmail ?? process.env.MAIL_CONTACT_EMAIL ?? null,
+    nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null
+  };
+};
 
 const templateKeyFromEventType = (eventType: LifecycleInput['eventType']): string => eventType;
 
@@ -708,10 +774,12 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
   }
   const template = await resolveTemplate(templateKey, input.templateVersion, input.subjectOverride ?? input.subject);
   const sendAfter = toIsoDate(input.sendAfter);
+  const eventMailDefaults = await getEventMailDefaults(input.eventId);
 
   const outboxRows = await Promise.all(
     targets.map(async (target) => {
       let templateData: Record<string, unknown> = {
+        ...eventMailDefaults,
         ...(input.templateData ?? {}),
         driverPersonId: target.driverPersonId,
         entryId: target.entryId,
@@ -739,6 +807,17 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         if (!isNonEmptyString(templateData.verificationUrl)) {
           throw new Error('MISSING_VERIFICATION_URL');
         }
+      }
+
+      const renderValidation = renderMailContract({
+        templateKey: template.templateKey,
+        subjectTemplate: template.subjectTemplate,
+        bodyTextTemplate: input.bodyOverride ?? template.bodyTextTemplate,
+        bodyHtmlTemplate: input.bodyHtmlOverride ?? template.bodyHtmlTemplate,
+        data: templateData
+      });
+      if (renderValidation.missingPlaceholders.length > 0) {
+        throw new MissingRequiredPlaceholdersError(renderValidation.missingPlaceholders, target.email);
       }
 
       return {
@@ -841,6 +920,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
   const effectivePaidAmountCents = current.paidAmountCents ?? 0;
   const amountOpenCents = Math.max(0, effectiveTotalCents - effectivePaidAmountCents);
   const amountOpenEur = formatEuroFromCents(amountOpenCents);
+  const amountOpen = `${amountOpenEur} EUR`;
 
   const idempotencyKey = buildDedupeKey(
     'reminder',
@@ -871,7 +951,8 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     totalCents: effectiveTotalCents,
     paidAmountCents: effectivePaidAmountCents,
     amountOpenCents,
-    amountOpenEur
+    amountOpenEur,
+    amountOpen
   };
 
   let createdId: string | null = null;
@@ -956,6 +1037,9 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       totalCents: invoice.totalCents,
       paymentStatus: invoice.paymentStatus,
       eventName: event.name,
+      eventStartsAt: event.startsAt,
+      eventEndsAt: event.endsAt,
+      eventContactEmail: event.contactEmail,
       className: eventClass.name,
       email: person.email,
       firstName: person.firstName,
@@ -1002,6 +1086,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   let templateData: Record<string, unknown> = {
     eventType: input.eventType,
     eventName: row.eventName,
+    eventDateText: formatEventDateText(row.eventStartsAt ?? null, row.eventEndsAt ?? null),
     className: row.className,
     driverName,
     entryId: row.entryId,
@@ -1009,6 +1094,9 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     acceptanceStatus: row.acceptanceStatus,
     paymentStatus: row.paymentStatus ?? null,
     amountOpenCents: row.totalCents ?? 0,
+    amountOpen: `${formatEuroFromCents(row.totalCents ?? 0)} EUR`,
+    contactEmail: row.eventContactEmail ?? process.env.MAIL_CONTACT_EMAIL ?? null,
+    nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null,
     driverNote: includeDriverNoteInLifecycleMail && normalizedDriverNote.length > 0 ? normalizedDriverNote : null,
     driverNoteBlock: includeDriverNoteInLifecycleMail ? driverNoteBlock : '',
     paymentIban: process.env.PAYMENT_IBAN ?? '',
@@ -1618,6 +1706,9 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
     .select({
       entryId: entry.id,
       eventName: event.name,
+      eventStartsAt: event.startsAt,
+      eventEndsAt: event.endsAt,
+      eventContactEmail: event.contactEmail,
       className: eventClass.name,
       firstName: person.firstName,
       lastName: person.lastName,
@@ -1645,6 +1736,7 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
   }
   return {
     eventName: row.eventName,
+    eventDateText: formatEventDateText(row.eventStartsAt ?? null, row.eventEndsAt ?? null),
     firstName: row.firstName,
     lastName: row.lastName,
     driverName: `${row.firstName} ${row.lastName}`.trim(),
@@ -1652,6 +1744,7 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
     startNumber: row.startNumber,
     amountOpen: formatAmountOpen(row.totalCents ?? 0, row.paidAmountCents ?? 0),
     verificationUrl,
+    contactEmail: row.eventContactEmail ?? process.env.MAIL_CONTACT_EMAIL ?? null,
     nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null
   };
 };

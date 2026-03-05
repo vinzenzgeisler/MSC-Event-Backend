@@ -22,6 +22,7 @@ import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 import { renderTemplateString } from '../mail/templates';
 import { PLACEHOLDER_CATALOG, REQUIRED_PLACEHOLDERS_BY_TEMPLATE } from '../mail/placeholders';
 import { renderMailContract } from '../mail/rendering';
+import { CAMPAIGN_TEMPLATE_KEYS, getTemplateContract, MailRenderOptions } from '../mail/templateContracts';
 
 type RecipientFilter = {
   acceptanceStatus?: 'pending' | 'shortlist' | 'accepted' | 'rejected';
@@ -33,28 +34,20 @@ type RecipientFilter = {
 const hasRecipientFilter = (filters: RecipientFilter | undefined): boolean =>
   Boolean(filters?.acceptanceStatus || filters?.registrationStatus || filters?.paymentStatus || filters?.classId);
 
-type TemplateScope = 'process' | 'campaign';
-
-const CAMPAIGN_TEMPLATE_KEYS = new Set([
-  'newsletter',
-  'event_update',
-  'free_form',
-  'payment_reminder_followup',
-  'email_confirmation'
-]);
 const DISABLED_LIFECYCLE_EVENTS = new Set<LifecycleInput['eventType']>(['preselection']);
-
-const getTemplateScope = (templateKey: string): TemplateScope =>
-  CAMPAIGN_TEMPLATE_KEYS.has(templateKey) ? 'campaign' : 'process';
-
-const getTemplateChannels = (templateKey: string): string[] =>
-  getTemplateScope(templateKey) === 'campaign' ? ['campaign'] : ['detail', 'quick_action'];
 
 const assertCampaignTemplateAllowed = (templateKey: string) => {
   if (!CAMPAIGN_TEMPLATE_KEYS.has(templateKey)) {
     throw new Error('TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN');
   }
 };
+
+const renderOptionsSchema = z
+  .object({
+    showBadge: z.boolean().optional(),
+    mailLabel: z.string().nullable().optional()
+  })
+  .optional();
 
 const queueMailSchema = z
   .object({
@@ -67,6 +60,7 @@ const queueMailSchema = z
     bodyOverride: z.string().min(1).optional(),
     bodyHtmlOverride: z.string().min(1).optional(),
     templateData: z.record(z.unknown()).optional(),
+    renderOptions: renderOptionsSchema,
     sendAfter: z.string().datetime().optional(),
     recipientEmails: z.array(z.string().email()).optional(),
     additionalEmails: z.array(z.string().email()).optional(),
@@ -182,10 +176,12 @@ const templateVersionCreateSchema = z.object({
 const templatePreviewSchema = z.object({
   templateKey: z.string().min(1),
   entryId: z.string().uuid().optional(),
+  templateData: z.record(z.unknown()).optional(),
   sampleData: z.record(z.unknown()).optional(),
   subjectOverride: z.string().min(1).optional(),
   bodyOverride: z.string().min(1).optional(),
   bodyHtmlOverride: z.string().min(1).optional(),
+  renderOptions: renderOptionsSchema,
   previewMode: z.enum(['stored', 'draft']).optional().default('stored')
 });
 
@@ -200,6 +196,7 @@ const communicationSendSchema = z
     bodyOverride: z.string().min(1).optional(),
     bodyHtmlOverride: z.string().min(1).optional(),
     templateData: z.record(z.unknown()).optional(),
+    renderOptions: renderOptionsSchema,
     sendAfter: z.string().datetime().optional(),
     additionalEmails: z.array(z.string().email()).optional(),
     driverPersonIds: z.array(z.string().uuid()).optional(),
@@ -285,13 +282,31 @@ export class LifecycleMailError extends Error {
 export class MissingRequiredPlaceholdersError extends Error {
   public readonly missingPlaceholders: string[];
   public readonly recipientEmail: string | null;
+  public readonly templateKey: string | null;
 
-  constructor(missingPlaceholders: string[], recipientEmail: string | null = null) {
+  constructor(missingPlaceholders: string[], recipientEmail: string | null = null, templateKey: string | null = null) {
     super('MISSING_REQUIRED_PLACEHOLDERS');
     this.missingPlaceholders = missingPlaceholders;
     this.recipientEmail = recipientEmail;
+    this.templateKey = templateKey;
   }
 }
+
+const normalizeRenderOptions = (templateKey: string, input?: MailRenderOptions): MailRenderOptions => {
+  const contract = getTemplateContract(templateKey);
+  const mailLabel =
+    input?.mailLabel === undefined
+      ? contract.renderOptions.defaultMailLabel
+      : input.mailLabel === null
+        ? null
+        : input.mailLabel.trim().length > 0
+          ? input.mailLabel.trim()
+          : null;
+  return {
+    showBadge: input?.showBadge ?? contract.renderOptions.showBadgeDefault,
+    mailLabel
+  };
+};
 
 export type LifecycleMailErrorCode =
   | 'NO_RECIPIENT'
@@ -781,12 +796,14 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
   const template = await resolveTemplate(templateKey, input.templateVersion, input.subjectOverride ?? input.subject);
   const sendAfter = toIsoDate(input.sendAfter);
   const eventMailDefaults = await getEventMailDefaults(input.eventId);
+  const renderOptions = normalizeRenderOptions(template.templateKey, input.renderOptions);
 
   const outboxRows = await Promise.all(
     targets.map(async (target) => {
       let templateData: Record<string, unknown> = {
         ...eventMailDefaults,
         ...(input.templateData ?? {}),
+        renderOptions,
         driverPersonId: target.driverPersonId,
         entryId: target.entryId,
         bodyTextOverride: input.bodyOverride ?? null,
@@ -820,10 +837,11 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         subjectTemplate: template.subjectTemplate,
         bodyTextTemplate: input.bodyOverride ?? template.bodyTextTemplate,
         bodyHtmlTemplate: input.bodyHtmlOverride ?? template.bodyHtmlTemplate,
-        data: templateData
+        data: templateData,
+        renderOptions
       });
       if (renderValidation.missingPlaceholders.length > 0) {
-        throw new MissingRequiredPlaceholdersError(renderValidation.missingPlaceholders, target.email);
+        throw new MissingRequiredPlaceholdersError(renderValidation.missingPlaceholders, target.email, template.templateKey);
       }
 
       return {
@@ -1017,7 +1035,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     throw new Error('TEMPLATE_NOT_ALLOWED_IN_PROCESS');
   }
   const templateKey = templateKeyFromEventType(input.eventType);
-  if (getTemplateScope(templateKey) !== 'process') {
+  if (getTemplateContract(templateKey).scope !== 'process') {
     throw new Error('TEMPLATE_NOT_ALLOWED_IN_PROCESS');
   }
   let template: Awaited<ReturnType<typeof resolveTemplate>>;
@@ -1455,11 +1473,14 @@ export const listMailTemplates = async () => {
   const mapped = await Promise.all(
     templates.map(async (item) => {
       const selected = await getPublishedOrLatestTemplateVersion(item.id);
+      const contract = getTemplateContract(item.key);
       return {
         key: item.key,
         label: item.label ?? item.key,
-        scope: getTemplateScope(item.key),
-        channels: getTemplateChannels(item.key),
+        scope: contract.scope,
+        channels: contract.channels,
+        composer: contract.composer,
+        renderOptions: contract.renderOptions,
         subject: selected?.subject ?? '',
         bodyText: selected?.bodyText ?? '',
         bodyHtml: selected?.bodyHtml ?? null,
@@ -1534,11 +1555,14 @@ export const createMailTemplate = async (input: TemplateCreateInput, actorUserId
           updatedBy: emailTemplateVersion.updatedBy
         });
 
+      const contract = getTemplateContract(templateRow.key);
       return {
         key: templateRow.key,
         label: templateRow.label ?? templateRow.key,
-        scope: getTemplateScope(templateRow.key),
-        channels: getTemplateChannels(templateRow.key),
+        scope: contract.scope,
+        channels: contract.channels,
+        composer: contract.composer,
+        renderOptions: contract.renderOptions,
         subject: versionRow?.subject ?? input.subject,
         bodyText: versionRow?.bodyText ?? input.bodyText,
         bodyHtml: versionRow?.bodyHtml ?? input.bodyHtml ?? null,
@@ -1609,11 +1633,14 @@ export const patchMailTemplate = async (templateKey: string, input: TemplatePatc
   }
 
   const selected = await getPublishedOrLatestTemplateVersion(existing.id);
+  const contract = getTemplateContract(existing.templateKey);
   return {
     key: existing.templateKey,
     label: input.label ?? existing.description ?? existing.templateKey,
-    scope: getTemplateScope(existing.templateKey),
-    channels: getTemplateChannels(existing.templateKey),
+    scope: contract.scope,
+    channels: contract.channels,
+    composer: contract.composer,
+    renderOptions: contract.renderOptions,
     subject: selected?.subject ?? '',
     bodyText: selected?.bodyText ?? '',
     bodyHtml: selected?.bodyHtml ?? null,
@@ -1697,8 +1724,10 @@ export const getTemplatePlaceholders = async (key: string) => {
   if (!template) {
     return null;
   }
-  const requiredSet = new Set(REQUIRED_PLACEHOLDERS_BY_TEMPLATE[key] ?? []);
-  return PLACEHOLDER_CATALOG.map((item) => ({
+  const contract = getTemplateContract(key);
+  const requiredSet = new Set(contract.composer.requiredPlaceholders);
+  const allowedSet = new Set(contract.composer.allowedPlaceholders);
+  return PLACEHOLDER_CATALOG.filter((item) => allowedSet.has(item.name)).map((item) => ({
     name: item.name,
     description: item.description,
     example: item.example,
@@ -1758,6 +1787,7 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
 export const previewMailTemplate = async (input: TemplatePreviewInput) => {
   const template = await resolveTemplate(input.templateKey, undefined);
   let data: Record<string, unknown> = {
+    ...(input.templateData ?? {}),
     ...(input.sampleData ?? {})
   };
   if (input.entryId) {
@@ -1774,13 +1804,18 @@ export const previewMailTemplate = async (input: TemplatePreviewInput) => {
   const bodyHtmlTemplate = useDraftMode
     ? input.bodyHtmlOverride ?? template.bodyHtmlTemplate
     : template.bodyHtmlTemplate;
+  const renderOptions = normalizeRenderOptions(input.templateKey, input.renderOptions);
 
   const rendered = renderMailContract({
     templateKey: input.templateKey,
     subjectTemplate,
     bodyTextTemplate,
     bodyHtmlTemplate,
-    data
+    data: {
+      ...data,
+      renderOptions
+    },
+    renderOptions
   });
 
   return {
@@ -1976,6 +2011,7 @@ export const queueCommunicationSend = async (input: CommunicationSendInput, acto
         bodyOverride: input.bodyOverride,
         bodyHtmlOverride: input.bodyHtmlOverride,
         templateData: input.templateData,
+        renderOptions: input.renderOptions,
         sendAfter: input.sendAfter,
         recipientEmails: input.additionalEmails,
         driverPersonIds: input.driverPersonIds,

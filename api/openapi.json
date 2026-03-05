@@ -1167,6 +1167,9 @@
                     "type": "object",
                     "additionalProperties": true
                   },
+                  "renderOptions": {
+                    "$ref": "#/components/schemas/MailRenderOptionsInput"
+                  },
                   "sendAfter": {
                     "type": "string",
                     "format": "date-time"
@@ -6074,7 +6077,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Lists templates with delivery scope metadata. Frontend should use scope=campaign for campaign composer filtering.",
+        "description": "Lists templates with delivery scope metadata and composer contract. Frontend should build the editor from composer.fields and renderOptions.",
         "security": [
           {
             "bearerAuth": []
@@ -6648,7 +6651,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Uses the same rendering pipeline as actual send. htmlDocument is final send-ready HTML.",
+        "description": "Uses the same rendering pipeline as actual send. htmlDocument is final send-ready HTML. Preview and send use the same templateData + renderOptions contract.",
         "security": [
           {
             "bearerAuth": []
@@ -7076,6 +7079,43 @@
                       "introText": "Bitte bestaetige erneut deine E-Mail-Adresse.",
                       "detailsText": "Ohne Bestaetigung koennen wir deine Anmeldung nicht abschliessen.",
                       "closingText": "Danke fuer deine Mithilfe."
+                    },
+                    "renderOptions": {
+                      "showBadge": false,
+                      "mailLabel": null
+                    }
+                  }
+                },
+                "free_form_with_template_data": {
+                  "value": {
+                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
+                    "templateKey": "free_form",
+                    "additionalEmails": [
+                      "extra@example.com"
+                    ],
+                    "templateData": {
+                      "introText": "Kurze Info an dich.",
+                      "detailsText": "Bitte bringe Unterlagen im Original mit.",
+                      "closingText": "Danke und bis bald."
+                    },
+                    "renderOptions": {
+                      "showBadge": false
+                    }
+                  }
+                },
+                "payment_followup_filter": {
+                  "value": {
+                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
+                    "templateKey": "payment_reminder_followup",
+                    "filters": {
+                      "paymentStatus": "due",
+                      "registrationStatus": "submitted_verified"
+                    },
+                    "templateData": {
+                      "introText": "Dies ist eine erneute Zahlungsaufforderung.",
+                      "detailsText": "Bitte beachte unsere Bankdaten im Teilnehmerbereich.",
+                      "closingText": "Vielen Dank.",
+                      "paymentDeadline": "15.04.2026"
                     }
                   }
                 }
@@ -7410,7 +7450,14 @@
                     "value": {
                       "ok": false,
                       "code": "MISSING_REQUIRED_PLACEHOLDERS",
-                      "message": "Missing required placeholders"
+                      "message": "Missing required placeholders",
+                      "details": {
+                        "templateKey": "email_confirmation",
+                        "recipient": "driver@example.com",
+                        "missingPlaceholders": [
+                          "verificationUrl"
+                        ]
+                      }
                     }
                   }
                 }
@@ -8202,6 +8249,9 @@
           "key",
           "label",
           "scope",
+          "channels",
+          "composer",
+          "renderOptions",
           "subject",
           "bodyText",
           "version",
@@ -8226,6 +8276,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "composer": {
+            "$ref": "#/components/schemas/MailTemplateComposer"
+          },
+          "renderOptions": {
+            "$ref": "#/components/schemas/MailTemplateRenderOptions"
           },
           "subject": {
             "type": "string"
@@ -8264,6 +8320,113 @@
           },
           "isActive": {
             "type": "boolean"
+          }
+        }
+      },
+      "MailTemplateComposerField": {
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "type",
+          "required",
+          "multiline",
+          "placeholder",
+          "helpText"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "url"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "multiline": {
+            "type": "boolean"
+          },
+          "placeholder": {
+            "type": "string"
+          },
+          "helpText": {
+            "type": "string"
+          },
+          "defaultValue": {
+            "type": "string"
+          }
+        }
+      },
+      "MailTemplateComposer": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "fields",
+          "allowedPlaceholders",
+          "requiredPlaceholders"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailTemplateComposerField"
+            }
+          },
+          "allowedPlaceholders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requiredPlaceholders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "MailTemplateRenderOptions": {
+        "type": "object",
+        "required": [
+          "showBadgeDefault",
+          "defaultMailLabel"
+        ],
+        "properties": {
+          "showBadgeDefault": {
+            "type": "boolean"
+          },
+          "defaultMailLabel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MailRenderOptionsInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "showBadge": {
+            "type": "boolean"
+          },
+          "mailLabel": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -8414,6 +8577,10 @@
             "type": "string",
             "format": "uuid"
           },
+          "templateData": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "sampleData": {
             "type": "object",
             "additionalProperties": true
@@ -8426,6 +8593,9 @@
           },
           "bodyHtmlOverride": {
             "type": "string"
+          },
+          "renderOptions": {
+            "$ref": "#/components/schemas/MailRenderOptionsInput"
           },
           "previewMode": {
             "type": "string",
@@ -8440,18 +8610,28 @@
           {
             "templateKey": "registration_received",
             "entryId": "11111111-1111-1111-1111-111111111111",
+            "renderOptions": {
+              "showBadge": true,
+              "mailLabel": "Prozessmail"
+            },
             "previewMode": "stored"
           },
           {
-            "templateKey": "registration_received",
-            "sampleData": {
-              "firstName": "Max",
-              "lastName": "Mustermann",
-              "driverName": "Max Mustermann"
+            "templateKey": "newsletter",
+            "templateData": {
+              "driverName": "Max Mustermann",
+              "introText": "Willkommen zum Update.",
+              "detailsText": "Nennschluss ist am Freitag.",
+              "closingText": "Viele Gruesse, MSC Team",
+              "ctaText": "Zur Eventseite",
+              "ctaUrl": "https://nennungstool.example.org/news"
             },
-            "subjectOverride": "Hallo {{firstName}}, bitte E-Mail bestaetigen",
-            "bodyOverride": "Hi {{firstName}}, bitte bestaetige hier: {{verificationUrl}}",
-            "bodyHtmlOverride": "<p>Hi {{firstName}}</p><p>Bitte bestaetigen: <a href=\"{{verificationUrl}}\">Link</a></p>",
+            "subjectOverride": "Newsletter {{eventName}}",
+            "bodyOverride": "Hallo {{driverName}}, {{introText}}",
+            "renderOptions": {
+              "showBadge": false,
+              "mailLabel": null
+            },
             "previewMode": "draft"
           }
         ]

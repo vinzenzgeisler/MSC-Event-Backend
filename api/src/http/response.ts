@@ -9,13 +9,19 @@ type FieldError = {
 export const json = (
   statusCode: number,
   body: Record<string, unknown>
-): APIGatewayProxyStructuredResultV2 => ({
-  statusCode,
-  headers: {
-    'content-type': 'application/json'
-  },
-  body: JSON.stringify(body)
-});
+): APIGatewayProxyStructuredResultV2 => {
+  const origin = process.env.CORS_ALLOW_ORIGIN ?? process.env.WEB_APP_ORIGIN ?? '*';
+  return {
+    statusCode,
+    headers: {
+      'content-type': 'application/json',
+      'access-control-allow-origin': origin,
+      'access-control-allow-headers': 'content-type,authorization',
+      'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS'
+    },
+    body: JSON.stringify(body)
+  };
+};
 
 const defaultCodeForStatus = (statusCode: number): string => {
   if (statusCode === 400) {

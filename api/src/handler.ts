@@ -143,14 +143,19 @@ const isInvalidJson = (error: unknown): boolean =>
   error instanceof Error && error.message === 'Invalid JSON body';
 
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyStructuredResultV2> => {
-  const method = event.requestContext.http.method;
-  const path = event.requestContext.http.path;
-  const stage = process.env.STAGE ?? 'dev';
-  const adminAuth = path.startsWith('/admin/') ? getAuthContext(event) : null;
+  try {
+    const method = event.requestContext.http.method;
+    const path = event.requestContext.http.path;
+    const stage = process.env.STAGE ?? 'dev';
+    const adminAuth = path.startsWith('/admin/') ? getAuthContext(event) : null;
 
-  if (adminAuth && !adminAuth.sub) {
-    return errorJson(401, 'Unauthorized');
-  }
+    if (adminAuth && !adminAuth.sub) {
+      return errorJson(401, 'Unauthorized');
+    }
+
+    if (method === 'OPTIONS') {
+      return json(200, { ok: true });
+    }
 
   if (method === 'GET' && path === '/health') {
     return json(200, { ok: true, stage });
@@ -846,7 +851,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           'Missing required placeholders',
           {
             missingPlaceholders: error.missingPlaceholders,
-            recipientEmail: error.recipientEmail
+            ...(error.recipientEmail ? { recipient: error.recipientEmail } : {}),
+            ...(error.templateKey ? { templateKey: error.templateKey } : {})
           },
           'MISSING_REQUIRED_PLACEHOLDERS'
         );
@@ -1085,7 +1091,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           'Missing required placeholders',
           {
             missingPlaceholders: error.missingPlaceholders,
-            recipientEmail: error.recipientEmail
+            ...(error.recipientEmail ? { recipient: error.recipientEmail } : {}),
+            ...(error.templateKey ? { templateKey: error.templateKey } : {})
           },
           'MISSING_REQUIRED_PLACEHOLDERS'
         );
@@ -2274,5 +2281,11 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
-  return errorJson(404, 'Not Found');
+    return errorJson(404, 'Not Found');
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return errorJson(400, 'Validation failed', { issues: error.issues }, 'VALIDATION_ERROR');
+    }
+    return errorJson(500, 'Unhandled API error', undefined, 'INTERNAL_ERROR');
+  }
 };

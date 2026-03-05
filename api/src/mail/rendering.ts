@@ -1,4 +1,5 @@
 import { KNOWN_PLACEHOLDER_NAMES, REQUIRED_PLACEHOLDERS_BY_TEMPLATE } from './placeholders';
+import { getTemplateContract, MailRenderOptions } from './templateContracts';
 
 type TemplateData = Record<string, unknown>;
 
@@ -170,15 +171,28 @@ const buildHtmlDocument = (input: {
   bodyHtmlRendered: string;
   verificationUrl: string | null;
   data: TemplateData;
+  renderOptions?: MailRenderOptions;
 }): string => {
   const eventName = isPresentValue(input.data.eventName)
     ? toStringValue(input.data.eventName)
     : (process.env.MAIL_BRAND_EVENT_NAME ?? 'MSC Event');
+  const contract = getTemplateContract(input.templateKey);
   const templatePresentation = TEMPLATE_PRESENTATION[input.templateKey] ?? {
     mailLabel: 'Mitteilung',
     heroSubtitle: 'Information vom Veranstalter.'
   };
-  const mailLabel = isPresentValue(input.data.mailLabel) ? toStringValue(input.data.mailLabel) : templatePresentation.mailLabel;
+  const payloadRenderOptions =
+    input.data.renderOptions && typeof input.data.renderOptions === 'object'
+      ? (input.data.renderOptions as MailRenderOptions)
+      : undefined;
+  const showBadge =
+    input.renderOptions?.showBadge ?? payloadRenderOptions?.showBadge ?? contract.renderOptions.showBadgeDefault;
+  const mailLabelValue =
+    input.renderOptions?.mailLabel ??
+    payloadRenderOptions?.mailLabel ??
+    contract.renderOptions.defaultMailLabel ??
+    templatePresentation.mailLabel;
+  const mailLabel = isPresentValue(mailLabelValue) ? toStringValue(mailLabelValue) : '';
   const heroSubtitle = isPresentValue(input.data.heroSubtitle)
     ? toStringValue(input.data.heroSubtitle)
     : templatePresentation.heroSubtitle;
@@ -226,7 +240,7 @@ const buildHtmlDocument = (input: {
     '<tr><td align="center">',
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="container">',
     `<tr><td class="hero">${
-      mailLabel ? `<span class="badge">${escapeHtml(mailLabel)}</span>` : ''
+      showBadge && mailLabel ? `<span class="badge">${escapeHtml(mailLabel)}</span>` : ''
     }<h1 class="title">${escapeHtml(eventName)}</h1><p class="subtitle">${escapeHtml(heroSubtitle)}</p></td></tr>`,
     `<tr><td class="content">${buildInfoBoxes(input.data)}${input.bodyHtmlRendered}${ctaBlock}</td></tr>`,
     `<tr><td class="footer">${dateHtml}${contactHtml}${legalLinks}</td></tr>`,
@@ -244,6 +258,7 @@ export type RenderMailContractInput = {
   bodyTextTemplate: string;
   bodyHtmlTemplate?: string | null;
   data: TemplateData;
+  renderOptions?: MailRenderOptions;
 };
 
 export type RenderMailContractResult = {
@@ -293,7 +308,8 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
     subjectRendered: subject.rendered.trim(),
     bodyHtmlRendered,
     verificationUrl,
-    data: input.data
+    data: input.data,
+    renderOptions: input.renderOptions
   });
 
   return {

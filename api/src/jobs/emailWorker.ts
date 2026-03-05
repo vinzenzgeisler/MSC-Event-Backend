@@ -113,12 +113,17 @@ export const handler = async () => {
 
       const bodyTextOverride = typeof row.template_data?.bodyTextOverride === 'string' ? row.template_data.bodyTextOverride : null;
       const bodyHtmlOverride = typeof row.template_data?.bodyHtmlOverride === 'string' ? row.template_data.bodyHtmlOverride : null;
+      const renderOptions =
+        row.template_data?.renderOptions && typeof row.template_data.renderOptions === 'object'
+          ? (row.template_data.renderOptions as { showBadge?: boolean; mailLabel?: string | null })
+          : undefined;
       const rendered = renderMailContract({
         templateKey: row.template_id,
         subjectTemplate: row.subject,
         bodyTextTemplate: bodyTextOverride ?? template.bodyTextTemplate,
         bodyHtmlTemplate: bodyHtmlOverride ?? template.bodyHtmlTemplate,
-        data: row.template_data ?? {}
+        data: row.template_data ?? {},
+        renderOptions
       });
       if (rendered.missingPlaceholders.length > 0) {
         throw new Error(`TEMPLATE_RENDER_FAILED:missing_placeholders:${rendered.missingPlaceholders.join(',')}`);

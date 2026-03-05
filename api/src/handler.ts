@@ -88,10 +88,13 @@ import {
   queuePaymentReminders,
   createMailTemplate,
   createMailTemplateVersion,
+  getTemplatePlaceholders,
   listMailTemplates,
+  listMailTemplateVersions,
   listOutbox,
   patchMailTemplate,
   previewMailTemplate,
+  resolveBroadcastRecipients,
   retryOutboxMail,
   validateBroadcastInput,
   validateCommunicationSendInput,
@@ -101,6 +104,7 @@ import {
   validateMailTemplatePatchInput,
   validateMailTemplatePreviewInput,
   validateMailTemplateVersionCreateInput,
+  validateResolveRecipientsInput,
   validateQueueMailInput,
   validateReminderInput
 } from './routes/adminMail';
@@ -846,7 +850,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const templates = await listMailTemplates();
       return json(200, { ok: true, templates });
     } catch {
-      return errorJson(500, 'List templates failed');
+      return errorJson(500, 'List templates failed', undefined, 'TEMPLATE_RENDER_FAILED');
     }
   }
 
@@ -870,7 +874,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'TEMPLATE_KEY_NOT_UNIQUE') {
         return errorJson(409, 'Template key already exists', undefined, 'TEMPLATE_KEY_NOT_UNIQUE');
       }
-      return errorJson(500, 'Create template failed');
+      return errorJson(500, 'Create template failed', undefined, 'TEMPLATE_RENDER_FAILED');
     }
   }
 
@@ -883,9 +887,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     try {
       const payload = parseJsonBody(event);
       const input = validateMailTemplatePatchInput(payload);
-      const updated = await patchMailTemplate(mailTemplateMatch[1], input);
+      const updated = await patchMailTemplate(mailTemplateMatch[1], input, auth.sub);
       if (!updated) {
-        return errorJson(404, 'Template not found');
+        return errorJson(404, 'Template not found', undefined, 'TEMPLATE_NOT_FOUND');
       }
       return json(200, { ok: true, template: updated });
     } catch (error) {
@@ -895,22 +899,41 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
       }
-      return errorJson(500, 'Update template failed');
+      if (error instanceof Error && error.message === 'INVALID_STATE') {
+        return errorJson(409, 'Invalid state', undefined, 'INVALID_STATE');
+      }
+      return errorJson(500, 'Update template failed', undefined, 'TEMPLATE_RENDER_FAILED');
     }
   }
 
   const mailTemplateVersionsMatch = path.match(/^\/admin\/mail\/templates\/([^/]+)\/versions$/);
+  if (method === 'GET' && mailTemplateVersionsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
+    }
+    try {
+      const versions = await listMailTemplateVersions(mailTemplateVersionsMatch[1]);
+      if (!versions) {
+        return errorJson(404, 'Template not found', undefined, 'TEMPLATE_NOT_FOUND');
+      }
+      return json(200, { ok: true, key: mailTemplateVersionsMatch[1], versions });
+    } catch {
+      return errorJson(500, 'List template versions failed', undefined, 'TEMPLATE_RENDER_FAILED');
+    }
+  }
+
   if (method === 'POST' && mailTemplateVersionsMatch) {
     const auth = getAuthContext(event);
     if (!hasGroup(auth, 'admin')) {
-      return errorJson(403, 'Forbidden');
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
       const payload = parseJsonBody(event);
       const input = validateMailTemplateVersionCreateInput(payload);
       const created = await createMailTemplateVersion(mailTemplateVersionsMatch[1], input, auth.sub);
       if (!created) {
-        return errorJson(404, 'Template not found');
+        return errorJson(404, 'Template not found', undefined, 'TEMPLATE_NOT_FOUND');
       }
       return json(200, { ok: true, ...created });
     } catch (error) {
@@ -920,20 +943,40 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
       }
-      return errorJson(500, 'Create template version failed');
+      return errorJson(500, 'Create template version failed', undefined, 'TEMPLATE_RENDER_FAILED');
     }
   }
 
-  const mailTemplatePreviewMatch = path.match(/^\/admin\/mail\/templates\/([^/]+)\/preview$/);
-  if (method === 'POST' && mailTemplatePreviewMatch) {
+  const mailTemplatePlaceholdersMatch = path.match(/^\/admin\/mail\/templates\/([^/]+)\/placeholders$/);
+  if (method === 'GET' && mailTemplatePlaceholdersMatch) {
     const auth = getAuthContext(event);
     if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
-      return errorJson(403, 'Forbidden');
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
+    }
+    try {
+      const placeholders = await getTemplatePlaceholders(mailTemplatePlaceholdersMatch[1]);
+      if (!placeholders) {
+        return errorJson(404, 'Template not found', undefined, 'TEMPLATE_NOT_FOUND');
+      }
+      return json(200, {
+        ok: true,
+        templateKey: mailTemplatePlaceholdersMatch[1],
+        placeholders
+      });
+    } catch {
+      return errorJson(500, 'Template placeholders failed', undefined, 'TEMPLATE_RENDER_FAILED');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/mail/templates/preview') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
       const payload = parseJsonBody(event);
       const input = validateMailTemplatePreviewInput(payload);
-      const preview = await previewMailTemplate(mailTemplatePreviewMatch[1], input);
+      const preview = await previewMailTemplate(input);
       return json(200, { ok: true, ...preview });
     } catch (error) {
       if (error instanceof ZodError) {
@@ -942,10 +985,43 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
       }
+      if (error instanceof Error && error.message === 'ENTRY_NOT_FOUND') {
+        return errorJson(404, 'Entry not found', undefined, 'ENTRY_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'MISSING_VERIFICATION_URL') {
+        return errorJson(409, 'Verification URL is required', undefined, 'MISSING_VERIFICATION_URL');
+      }
+      if (error instanceof Error && error.message === 'TEMPLATE_RENDER_FAILED') {
+        return errorJson(409, 'Template render failed', undefined, 'TEMPLATE_RENDER_FAILED');
+      }
       if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
         return errorJson(404, 'Template not found', undefined, 'TEMPLATE_NOT_FOUND');
       }
-      return errorJson(500, 'Template preview failed');
+      return errorJson(500, 'Template preview failed', undefined, 'TEMPLATE_RENDER_FAILED');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/mail/broadcast/resolve-recipients') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateResolveRecipientsInput(payload);
+      const result = await resolveBroadcastRecipients(input);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'INVALID_STATE') {
+        return errorJson(409, 'Invalid state', undefined, 'INVALID_STATE');
+      }
+      return errorJson(500, 'Resolve recipients failed', undefined, 'TEMPLATE_RENDER_FAILED');
     }
   }
 
@@ -1566,7 +1642,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   if (method === 'PATCH' && entryClassMatch) {
     const auth = getAuthContext(event);
     if (!hasAnyGroup(auth, ['admin', 'editor'])) {
-      return errorJson(403, 'Forbidden');
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
 
     try {
@@ -1574,9 +1650,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const input = validateEntryClassPatchInput(payload);
       const result = await patchEntryClass(entryClassMatch[1], input, auth.sub);
       if (!result) {
-        return errorJson(404, 'Entry not found');
+        return errorJson(404, 'Entry not found', undefined, 'ENTRY_NOT_FOUND');
       }
-      return json(200, { ok: true, entry: result });
+      return json(200, { ok: true, entryId: result.id, classId: result.classId });
     } catch (error) {
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
@@ -1584,34 +1660,25 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (isInvalidJson(error)) {
         return errorJson(400, 'Invalid JSON body');
       }
-      if (error instanceof Error && error.message === 'ENTRY_DELETED') {
-        return errorJson(409, 'Entry is deleted', undefined, 'ENTRY_DELETED');
-      }
       if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') {
         return errorJson(404, 'Class not found', undefined, 'CLASS_NOT_FOUND');
       }
-      if (error instanceof Error && error.message === 'CLASS_EVENT_MISMATCH') {
-        return errorJson(409, 'Class does not belong to entry event', undefined, 'CLASS_EVENT_MISMATCH');
+      if (error instanceof Error && error.message === 'CLASS_INCOMPATIBLE_VEHICLE_TYPE') {
+        return errorJson(409, 'Class does not match vehicle type', undefined, 'CLASS_INCOMPATIBLE_VEHICLE_TYPE');
       }
-      if (error instanceof Error && error.message === 'CLASS_VEHICLE_TYPE_MISMATCH') {
-        return errorJson(409, 'Class does not match vehicle type', undefined, 'CLASS_VEHICLE_TYPE_MISMATCH');
+      if (error instanceof Error && error.message === 'START_NUMBER_CONFLICT') {
+        return errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');
       }
-      if (error instanceof Error && error.message === 'BACKUP_VEHICLE_INVALID') {
-        return errorJson(409, 'Backup vehicle link is invalid', undefined, 'BACKUP_VEHICLE_INVALID');
-      }
-      if (error instanceof Error && error.message === 'BACKUP_LINK_REQUIRED') {
-        return errorJson(400, 'Backup link is required for backup vehicles', undefined, 'BACKUP_LINK_REQUIRED');
-      }
-      if (error instanceof Error && error.message === 'BACKUP_ENTRY_INVALID_LINK') {
-        return errorJson(409, 'Backup entry link is invalid', undefined, 'BACKUP_ENTRY_INVALID_LINK');
+      if (error instanceof Error && error.message === 'INVALID_STATE') {
+        return errorJson(409, 'Entry state does not allow class change', undefined, 'INVALID_STATE');
       }
       if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
         return errorJson(404, 'Event not found');
       }
       if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
-        return errorJson(409, 'Event is read-only');
+        return errorJson(409, 'Event is read-only', undefined, 'INVALID_STATE');
       }
-      return errorJson(500, 'Patch entry class failed');
+      return errorJson(500, 'Patch entry class failed', undefined, 'INVALID_STATE');
     }
   }
 

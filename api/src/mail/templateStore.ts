@@ -9,6 +9,7 @@ export type StoredTemplateVersion = {
   bodyTemplate: string;
   bodyHtmlTemplate: string;
   bodyTextTemplate: string;
+  status: 'draft' | 'published';
 };
 
 export const getTemplateVersion = async (
@@ -24,7 +25,8 @@ export const getTemplateVersion = async (
       subjectTemplate: emailTemplateVersion.subjectTemplate,
       bodyTemplate: emailTemplateVersion.bodyTemplate,
       bodyHtmlTemplate: emailTemplateVersion.bodyHtmlTemplate,
-      bodyTextTemplate: emailTemplateVersion.bodyTextTemplate
+      bodyTextTemplate: emailTemplateVersion.bodyTextTemplate,
+      status: emailTemplateVersion.status
     })
     .from(emailTemplate)
     .innerJoin(emailTemplateVersion, eq(emailTemplateVersion.templateId, emailTemplate.id))
@@ -47,6 +49,7 @@ export const getTemplateVersion = async (
   return {
     ...selected,
     bodyHtmlTemplate: selected.bodyHtmlTemplate ?? selected.bodyTemplate,
-    bodyTextTemplate: selected.bodyTextTemplate ?? selected.bodyTemplate
+    bodyTextTemplate: selected.bodyTextTemplate ?? selected.bodyTemplate,
+    status: selected.status as 'draft' | 'published'
   };
 };

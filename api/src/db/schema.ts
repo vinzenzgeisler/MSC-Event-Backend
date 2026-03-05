@@ -491,11 +491,15 @@ export const emailTemplateVersion = pgTable(
     bodyTemplate: text('body_template').notNull(),
     bodyHtmlTemplate: text('body_html_template'),
     bodyTextTemplate: text('body_text_template'),
+    status: text('status').notNull().default('published'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: text('updated_by'),
     createdBy: text('created_by'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
   },
   (table) => ({
-    templateVersionUnique: uniqueIndex('email_template_version_unique').on(table.templateId, table.version)
+    templateVersionUnique: uniqueIndex('email_template_version_unique').on(table.templateId, table.version),
+    statusCheck: check('email_template_version_status_check', sql`${table.status} in ('draft', 'published')`)
   })
 );
 

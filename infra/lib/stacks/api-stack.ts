@@ -410,7 +410,28 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
-      path: '/admin/mail/templates/{id}/preview',
+      path: '/admin/mail/templates/{id}/versions',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/templates/preview',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/templates/{id}/placeholders',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/broadcast/resolve-recipients',
       methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer

@@ -111,9 +111,11 @@ export const handler = async () => {
         throw new Error(`Template not found: ${row.template_id}@${row.template_version}`);
       }
 
+      const bodyTextOverride = typeof row.template_data?.bodyTextOverride === 'string' ? row.template_data.bodyTextOverride : null;
+      const bodyHtmlOverride = typeof row.template_data?.bodyHtmlOverride === 'string' ? row.template_data.bodyHtmlOverride : null;
       const subject = renderTemplateString(row.subject, row.template_data);
-      const bodyText = renderTemplateString(template.bodyTextTemplate, row.template_data);
-      const bodyHtml = renderTemplateString(template.bodyHtmlTemplate, row.template_data);
+      const bodyText = renderTemplateString(bodyTextOverride ?? template.bodyTextTemplate, row.template_data);
+      const bodyHtml = renderTemplateString(bodyHtmlOverride ?? template.bodyHtmlTemplate, row.template_data);
       const response = await sendEmail(row.to_email, subject, bodyText, bodyHtml);
       await markSent(row.id, response.MessageId ?? null, response);
     } catch (error) {

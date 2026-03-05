@@ -1,4 +1,4 @@
-import { and, asc, eq, ilike, or, sql, SQL } from 'drizzle-orm';
+import { and, asc, eq, ilike, inArray, or, sql, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
@@ -48,9 +48,7 @@ const techStatusPatchSchema = z.object({
 
 const entryClassPatchSchema = z.object({
   classId: z.string().uuid(),
-  isBackupVehicle: z.boolean().optional(),
-  backupOfEntryId: z.string().uuid().nullable().optional(),
-  backupVehicleId: z.string().uuid().nullable().optional()
+  applyToBackupVehicle: z.boolean().optional().default(false)
 });
 
 const entryNotesPatchSchema = z
@@ -650,143 +648,133 @@ export const patchEntryTechStatus = async (entryId: string, input: TechStatusPat
 
 export const patchEntryClass = async (entryId: string, input: EntryClassPatch, actorUserId: string | null) => {
   const db = await getDb();
-  const rows = await db
-    .select({
-      id: entry.id,
-      eventId: entry.eventId,
-      classId: entry.classId,
-      vehicleId: entry.vehicleId,
-      backupVehicleId: entry.backupVehicleId,
-      isBackupVehicle: entry.isBackupVehicle,
-      backupOfEntryId: entry.backupOfEntryId,
-      driverPersonId: entry.driverPersonId,
-      vehicleType: vehicle.vehicleType,
-      deletedAt: entry.deletedAt
-    })
-    .from(entry)
-    .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
-    .where(eq(entry.id, entryId))
-    .limit(1);
-
-  const existing = rows[0];
-  if (!existing) {
-    return null;
-  }
-  if (existing.deletedAt) {
-    throw new Error('ENTRY_DELETED');
-  }
-  await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
-
-  const classRows = await db
-    .select({
-      id: eventClass.id,
-      eventId: eventClass.eventId,
-      vehicleType: eventClass.vehicleType
-    })
-    .from(eventClass)
-    .where(eq(eventClass.id, input.classId))
-    .limit(1);
-  const targetClass = classRows[0];
-  if (!targetClass) {
-    throw new Error('CLASS_NOT_FOUND');
-  }
-  if (targetClass.eventId !== existing.eventId) {
-    throw new Error('CLASS_EVENT_MISMATCH');
-  }
-  if (targetClass.vehicleType !== existing.vehicleType) {
-    throw new Error('CLASS_VEHICLE_TYPE_MISMATCH');
-  }
-
-  let nextBackupVehicleId = input.backupVehicleId === undefined ? existing.backupVehicleId : input.backupVehicleId;
-  if (nextBackupVehicleId) {
-    if (nextBackupVehicleId === existing.vehicleId) {
-      throw new Error('BACKUP_VEHICLE_INVALID');
-    }
-    const backupVehicleRows = await db
-      .select({
-        id: vehicle.id,
-        vehicleType: vehicle.vehicleType
-      })
-      .from(vehicle)
-      .where(eq(vehicle.id, nextBackupVehicleId))
-      .limit(1);
-    const backupVehicleRow = backupVehicleRows[0];
-    if (!backupVehicleRow || backupVehicleRow.vehicleType !== targetClass.vehicleType) {
-      throw new Error('BACKUP_VEHICLE_INVALID');
-    }
-  }
-
-  const nextIsBackupVehicle = input.isBackupVehicle ?? existing.isBackupVehicle;
-  const requestedBackupOfEntryId = input.backupOfEntryId === undefined ? existing.backupOfEntryId : input.backupOfEntryId;
-  let nextBackupOfEntryId = nextIsBackupVehicle ? requestedBackupOfEntryId : null;
-
-  if (nextIsBackupVehicle && !nextBackupOfEntryId) {
-    throw new Error('BACKUP_LINK_REQUIRED');
-  }
-
-  if (nextBackupOfEntryId) {
-    if (nextBackupOfEntryId === entryId) {
-      throw new Error('BACKUP_ENTRY_INVALID_LINK');
-    }
-    const baseEntryRows = await db
+  const now = new Date();
+  return db.transaction(async (tx) => {
+    const rows = await tx
       .select({
         id: entry.id,
         eventId: entry.eventId,
         classId: entry.classId,
-        driverPersonId: entry.driverPersonId,
+        isBackupVehicle: entry.isBackupVehicle,
+        backupOfEntryId: entry.backupOfEntryId,
+        startNumberNorm: entry.startNumberNorm,
+        vehicleType: vehicle.vehicleType,
         deletedAt: entry.deletedAt
       })
       .from(entry)
-      .where(eq(entry.id, nextBackupOfEntryId))
+      .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+      .where(eq(entry.id, entryId))
       .limit(1);
-    const baseEntry = baseEntryRows[0];
-    if (
-      !baseEntry ||
-      baseEntry.deletedAt ||
-      baseEntry.eventId !== existing.eventId ||
-      baseEntry.driverPersonId !== existing.driverPersonId ||
-      baseEntry.classId !== input.classId
-    ) {
-      throw new Error('BACKUP_ENTRY_INVALID_LINK');
-    }
-  }
 
-  const [updated] = await db
-    .update(entry)
-    .set({
-      classId: input.classId,
-      isBackupVehicle: nextIsBackupVehicle,
-      backupOfEntryId: nextBackupOfEntryId,
-      backupVehicleId: nextBackupVehicleId,
-      updatedAt: new Date()
-    })
-    .where(eq(entry.id, entryId))
-    .returning({
-      id: entry.id,
-      eventId: entry.eventId,
-      classId: entry.classId,
-      isBackupVehicle: entry.isBackupVehicle,
-      backupOfEntryId: entry.backupOfEntryId,
-      backupVehicleId: entry.backupVehicleId,
-      updatedAt: entry.updatedAt
+    const existing = rows[0];
+    if (!existing) {
+      return null;
+    }
+    if (existing.deletedAt) {
+      throw new Error('INVALID_STATE');
+    }
+
+    await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
+
+    const classRows = await tx
+      .select({
+        id: eventClass.id,
+        eventId: eventClass.eventId,
+        vehicleType: eventClass.vehicleType
+      })
+      .from(eventClass)
+      .where(eq(eventClass.id, input.classId))
+      .limit(1);
+    const targetClass = classRows[0];
+    if (!targetClass || targetClass.eventId !== existing.eventId) {
+      throw new Error('CLASS_NOT_FOUND');
+    }
+    if (targetClass.vehicleType !== existing.vehicleType) {
+      throw new Error('CLASS_INCOMPATIBLE_VEHICLE_TYPE');
+    }
+
+    const targetEntryIds = new Set<string>([entryId]);
+    if (input.applyToBackupVehicle) {
+      if (existing.isBackupVehicle && existing.backupOfEntryId) {
+        targetEntryIds.add(existing.backupOfEntryId);
+      } else {
+        const linkedRows = await tx
+          .select({ id: entry.id })
+          .from(entry)
+          .where(and(eq(entry.backupOfEntryId, entryId), sql`${entry.deletedAt} is null`))
+          .limit(1);
+        if (linkedRows[0]) {
+          targetEntryIds.add(linkedRows[0].id);
+        }
+      }
+    }
+
+    const targetIds = Array.from(targetEntryIds);
+    const targetRows = await tx
+      .select({
+        id: entry.id,
+        eventId: entry.eventId,
+        classId: entry.classId,
+        startNumberNorm: entry.startNumberNorm,
+        deletedAt: entry.deletedAt,
+        vehicleType: vehicle.vehicleType
+      })
+      .from(entry)
+      .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+      .where(inArray(entry.id, targetIds));
+
+    for (const targetRow of targetRows) {
+      if (targetRow.deletedAt || targetRow.eventId !== existing.eventId || targetRow.vehicleType !== targetClass.vehicleType) {
+        throw new Error('INVALID_STATE');
+      }
+      if (!targetRow.startNumberNorm) {
+        continue;
+      }
+      const conflictRows = await tx
+        .select({ id: entry.id })
+        .from(entry)
+        .where(
+          and(
+            eq(entry.eventId, existing.eventId),
+            eq(entry.classId, input.classId),
+            eq(entry.startNumberNorm, targetRow.startNumberNorm),
+            sql`${entry.deletedAt} is null`
+          )
+        )
+        .limit(1);
+      const conflict = conflictRows[0];
+      if (conflict && !targetEntryIds.has(conflict.id)) {
+        throw new Error('START_NUMBER_CONFLICT');
+      }
+    }
+
+    const updatedRows = await tx
+      .update(entry)
+      .set({
+        classId: input.classId,
+        updatedAt: now
+      })
+      .where(inArray(entry.id, targetIds))
+      .returning({
+        id: entry.id,
+        classId: entry.classId
+      });
+
+    await writeAuditLog(tx as never, {
+      eventId: existing.eventId,
+      actorUserId,
+      action: 'entry_class_updated',
+      entityType: 'entry',
+      entityId: entryId,
+      payload: {
+        previousClassId: existing.classId,
+        classId: input.classId
+      }
     });
 
-  await writeAuditLog(db as never, {
-    eventId: existing.eventId,
-    actorUserId,
-    action: 'entry_class_updated',
-    entityType: 'entry',
-    entityId: entryId,
-    payload: {
-      previousClassId: existing.classId,
-      classId: input.classId,
-      isBackupVehicle: nextIsBackupVehicle,
-      backupOfEntryId: nextBackupOfEntryId,
-      backupVehicleId: nextBackupVehicleId
-    }
+    const updatedCurrent = updatedRows.find((row) => row.id === entryId);
+    return updatedCurrent ?? null;
   });
-
-  return updated ?? null;
 };
 
 export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, actorUserId: string | null) => {

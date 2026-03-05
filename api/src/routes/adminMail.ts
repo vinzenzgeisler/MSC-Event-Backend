@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { and, desc, eq, inArray, isNull, or, SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, sql, SQL } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import {
   emailOutbox,
@@ -24,12 +24,17 @@ import { renderTemplateString } from '../mail/templates';
 const queueMailSchema = z
   .object({
     eventId: z.string().uuid(),
-    templateId: z.string().min(1),
+    templateId: z.string().min(1).optional(),
+    templateKey: z.string().min(1).optional(),
     templateVersion: z.number().int().positive().optional(),
     subject: z.string().min(1).optional(),
+    subjectOverride: z.string().min(1).optional(),
+    bodyOverride: z.string().min(1).optional(),
+    bodyHtmlOverride: z.string().min(1).optional(),
     templateData: z.record(z.unknown()).optional(),
     sendAfter: z.string().datetime().optional(),
     recipientEmails: z.array(z.string().email()).optional(),
+    additionalEmails: z.array(z.string().email()).optional(),
     driverPersonIds: z.array(z.string().uuid()).optional(),
     entryIds: z.array(z.string().uuid()).optional(),
     filters: z
@@ -41,9 +46,11 @@ const queueMailSchema = z
       })
       .optional()
   })
+  .refine((value) => Boolean(value.templateId || value.templateKey), { message: 'Provide templateId or templateKey.' })
   .refine(
     (value) =>
       (value.recipientEmails && value.recipientEmails.length > 0) ||
+      (value.additionalEmails && value.additionalEmails.length > 0) ||
       (value.driverPersonIds && value.driverPersonIds.length > 0) ||
       (value.entryIds && value.entryIds.length > 0) ||
       value.filters,
@@ -100,42 +107,58 @@ const listOutboxSchema = z.object({
 });
 
 const templateCreateSchema = z.object({
-  templateKey: z.string().trim().min(1),
-  name: z.string().trim().min(1),
+  key: z.string().trim().min(1),
+  label: z.string().trim().min(1),
   isActive: z.boolean().optional().default(true),
   subject: z.string().min(1),
-  html: z.string().min(1),
-  text: z.string().min(1)
+  bodyText: z.string().min(1),
+  bodyHtml: z.string().min(1).optional(),
+  status: z.enum(['draft', 'published']).optional().default('draft')
 });
 
 const templatePatchSchema = z
   .object({
-    name: z.string().trim().min(1).optional(),
+    label: z.string().trim().min(1).optional(),
+    subject: z.string().min(1).optional(),
+    bodyText: z.string().min(1).optional(),
+    bodyHtml: z.string().min(1).optional(),
+    status: z.enum(['draft', 'published']).optional(),
     isActive: z.boolean().optional()
   })
-  .refine((value) => value.name !== undefined || value.isActive !== undefined, {
+  .refine(
+    (value) =>
+      value.label !== undefined ||
+      value.subject !== undefined ||
+      value.bodyText !== undefined ||
+      value.bodyHtml !== undefined ||
+      value.status !== undefined ||
+      value.isActive !== undefined,
+    {
     message: 'Provide at least one field to update'
   });
 
 const templateVersionCreateSchema = z.object({
   subject: z.string().min(1),
-  html: z.string().min(1),
-  text: z.string().min(1)
+  bodyText: z.string().min(1),
+  bodyHtml: z.string().min(1).optional(),
+  status: z.enum(['draft', 'published']).optional().default('draft')
 });
 
 const templatePreviewSchema = z.object({
-  version: z.number().int().positive().optional(),
-  subject: z.string().min(1).optional(),
-  html: z.string().min(1).optional(),
-  text: z.string().min(1).optional(),
-  templateData: z.record(z.unknown()).optional()
+  templateKey: z.string().min(1),
+  entryId: z.string().uuid().optional(),
+  sampleData: z.record(z.unknown()).optional()
 });
 
 const communicationSendSchema = z.object({
   eventId: z.string().uuid(),
-  templateId: z.string().min(1),
+  templateId: z.string().min(1).optional(),
+  templateKey: z.string().min(1).optional(),
   templateVersion: z.number().int().positive().optional(),
   subject: z.string().min(1).optional(),
+  subjectOverride: z.string().min(1).optional(),
+  bodyOverride: z.string().min(1).optional(),
+  bodyHtmlOverride: z.string().min(1).optional(),
   templateData: z.record(z.unknown()).optional(),
   sendAfter: z.string().datetime().optional(),
   additionalEmails: z.array(z.string().email()).optional(),
@@ -149,6 +172,18 @@ const communicationSendSchema = z.object({
       classId: z.string().uuid().optional()
     })
     .optional()
+}).refine((value) => Boolean(value.templateId || value.templateKey), { message: 'Provide templateId or templateKey.' });
+
+const listTemplateVersionsSchema = z.object({
+  key: z.string().trim().min(1)
+});
+
+const resolveRecipientsSchema = z.object({
+  eventId: z.string().uuid().optional(),
+  classId: z.string().uuid().optional(),
+  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+  paymentStatus: z.enum(['due', 'paid']).optional(),
+  additionalEmails: z.array(z.string().email()).optional()
 });
 
 type QueueMailInput = z.infer<typeof queueMailSchema>;
@@ -161,6 +196,7 @@ type TemplatePatchInput = z.infer<typeof templatePatchSchema>;
 type TemplateVersionCreateInput = z.infer<typeof templateVersionCreateSchema>;
 type TemplatePreviewInput = z.infer<typeof templatePreviewSchema>;
 type CommunicationSendInput = z.infer<typeof communicationSendSchema>;
+type ResolveRecipientsInput = z.infer<typeof resolveRecipientsSchema>;
 
 export class DuplicateRequestError extends Error {
   public readonly existingOutboxId: string | null;
@@ -436,9 +472,10 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
   const db = await getDb();
   const collected: RecipientTarget[] = [];
 
-  if (input.recipientEmails && input.recipientEmails.length > 0) {
+  const recipientEmails = [...(input.recipientEmails ?? []), ...(input.additionalEmails ?? [])];
+  if (recipientEmails.length > 0) {
     const candidates = dedupeTargets(
-      input.recipientEmails.map((email) => ({
+      recipientEmails.map((email) => ({
         email,
         driverPersonId: null,
         entryId: null
@@ -608,7 +645,11 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
     return { queued: 0 };
   }
 
-  const template = await resolveTemplate(input.templateId, input.templateVersion, input.subject);
+  const templateKey = input.templateKey ?? input.templateId;
+  if (!templateKey) {
+    throw new Error('TEMPLATE_NOT_FOUND');
+  }
+  const template = await resolveTemplate(templateKey, input.templateVersion, input.subjectOverride ?? input.subject);
   const sendAfter = toIsoDate(input.sendAfter);
 
   const outboxRows = await Promise.all(
@@ -616,7 +657,9 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
       let templateData: Record<string, unknown> = {
         ...(input.templateData ?? {}),
         driverPersonId: target.driverPersonId,
-        entryId: target.entryId
+        entryId: target.entryId,
+        bodyTextOverride: input.bodyOverride ?? null,
+        bodyHtmlOverride: input.bodyHtmlOverride ?? null
       };
 
       if (template.templateKey === 'registration_received') {
@@ -1211,50 +1254,94 @@ export const retryOutboxMail = async (outboxId: string, actorUserId: string | nu
   return updated ?? null;
 };
 
+type PlaceholderDefinition = {
+  name: string;
+  required: boolean;
+  description: string;
+};
+
+const PLACEHOLDER_CATALOG: PlaceholderDefinition[] = [
+  { name: 'eventName', required: false, description: 'Eventname' },
+  { name: 'firstName', required: false, description: 'Vorname Fahrer' },
+  { name: 'lastName', required: false, description: 'Nachname Fahrer' },
+  { name: 'driverName', required: false, description: 'Vollstaendiger Fahrername' },
+  { name: 'className', required: false, description: 'Klassenname' },
+  { name: 'startNumber', required: false, description: 'Startnummer' },
+  { name: 'amountOpen', required: false, description: 'Offener Betrag als Text' },
+  { name: 'verificationUrl', required: false, description: 'Verifizierungslink' }
+];
+
+const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
+  registration_received: ['eventName', 'driverName', 'verificationUrl'],
+  payment_reminder: ['eventName', 'driverName', 'amountOpen']
+};
+
+const extractPlaceholders = (template: string): string[] =>
+  Array.from(
+    new Set(
+      [...template.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)].map((match) => match[1]).filter((name) => name.length > 0)
+    )
+  );
+
+const isPresentValue = (value: unknown): boolean => !(value === undefined || value === null || String(value).trim().length === 0);
+
+const formatAmountOpen = (totalCents: number, paidAmountCents: number): string =>
+  `${((Math.max(0, totalCents - paidAmountCents)) / 100).toFixed(2).replace('.', ',')} EUR`;
+
+const getVersionRowsByTemplateId = async (templateId: string) => {
+  const db = await getDb();
+  return db
+    .select({
+      version: emailTemplateVersion.version,
+      subject: emailTemplateVersion.subjectTemplate,
+      bodyText: emailTemplateVersion.bodyTextTemplate,
+      bodyHtml: emailTemplateVersion.bodyHtmlTemplate,
+      status: emailTemplateVersion.status,
+      updatedAt: emailTemplateVersion.updatedAt,
+      updatedBy: emailTemplateVersion.updatedBy
+    })
+    .from(emailTemplateVersion)
+    .where(eq(emailTemplateVersion.templateId, templateId))
+    .orderBy(desc(emailTemplateVersion.version));
+};
+
+const getPublishedOrLatestTemplateVersion = async (templateId: string) => {
+  const rows = await getVersionRowsByTemplateId(templateId);
+  const published = rows.find((row) => row.status === 'published');
+  return published ?? rows[0] ?? null;
+};
+
 export const listMailTemplates = async () => {
   const db = await getDb();
   const templates = await db
     .select({
       id: emailTemplate.id,
-      templateKey: emailTemplate.templateKey,
-      name: emailTemplate.description,
-      isActive: emailTemplate.isActive,
-      createdAt: emailTemplate.createdAt,
-      updatedAt: emailTemplate.updatedAt
+      key: emailTemplate.templateKey,
+      label: emailTemplate.description,
+      isActive: emailTemplate.isActive
     })
     .from(emailTemplate)
     .orderBy(emailTemplate.templateKey);
 
-  if (templates.length === 0) {
-    return [];
-  }
-
-  const templateIds = templates.map((item) => item.id);
-  const versionRows = await db
-    .select({
-      templateId: emailTemplateVersion.templateId,
-      version: emailTemplateVersion.version,
-      createdAt: emailTemplateVersion.createdAt
+  const mapped = await Promise.all(
+    templates.map(async (item) => {
+      const selected = await getPublishedOrLatestTemplateVersion(item.id);
+      return {
+        key: item.key,
+        label: item.label ?? item.key,
+        subject: selected?.subject ?? '',
+        bodyText: selected?.bodyText ?? '',
+        bodyHtml: selected?.bodyHtml ?? null,
+        version: selected?.version ?? 0,
+        status: (selected?.status ?? 'draft') as 'draft' | 'published',
+        updatedAt: selected?.updatedAt ?? null,
+        updatedBy: selected?.updatedBy ?? null,
+        isActive: item.isActive
+      };
     })
-    .from(emailTemplateVersion)
-    .where(inArray(emailTemplateVersion.templateId, templateIds))
-    .orderBy(desc(emailTemplateVersion.version));
+  );
 
-  const latestByTemplateId = new Map<string, { version: number; createdAt: Date }>();
-  versionRows.forEach((row) => {
-    if (!latestByTemplateId.has(row.templateId)) {
-      latestByTemplateId.set(row.templateId, {
-        version: row.version,
-        createdAt: row.createdAt
-      });
-    }
-  });
-
-  return templates.map((item) => ({
-    ...item,
-    latestVersion: latestByTemplateId.get(item.id)?.version ?? null,
-    latestVersionCreatedAt: latestByTemplateId.get(item.id)?.createdAt ?? null
-  }));
+  return mapped;
 };
 
 const getTemplateByKey = async (templateKey: string) => {
@@ -1280,15 +1367,15 @@ export const createMailTemplate = async (input: TemplateCreateInput, actorUserId
       const [templateRow] = await tx
         .insert(emailTemplate)
         .values({
-          templateKey: input.templateKey,
-          description: input.name,
+          templateKey: input.key,
+          description: input.label,
           isActive: input.isActive,
           updatedAt: now
         })
         .returning({
           id: emailTemplate.id,
-          templateKey: emailTemplate.templateKey,
-          name: emailTemplate.description,
+          key: emailTemplate.templateKey,
+          label: emailTemplate.description,
           isActive: emailTemplate.isActive
         });
 
@@ -1298,18 +1385,35 @@ export const createMailTemplate = async (input: TemplateCreateInput, actorUserId
           templateId: templateRow.id,
           version: 1,
           subjectTemplate: input.subject,
-          bodyTemplate: input.text,
-          bodyHtmlTemplate: input.html,
-          bodyTextTemplate: input.text,
-          createdBy: actorUserId
+          bodyTemplate: input.bodyText,
+          bodyHtmlTemplate: input.bodyHtml ?? null,
+          bodyTextTemplate: input.bodyText,
+          status: input.status,
+          createdBy: actorUserId,
+          updatedBy: actorUserId,
+          updatedAt: now
         })
         .returning({
-          version: emailTemplateVersion.version
+          version: emailTemplateVersion.version,
+          subject: emailTemplateVersion.subjectTemplate,
+          bodyText: emailTemplateVersion.bodyTextTemplate,
+          bodyHtml: emailTemplateVersion.bodyHtmlTemplate,
+          status: emailTemplateVersion.status,
+          updatedAt: emailTemplateVersion.updatedAt,
+          updatedBy: emailTemplateVersion.updatedBy
         });
 
       return {
-        ...templateRow,
-        version: versionRow?.version ?? 1
+        key: templateRow.key,
+        label: templateRow.label ?? templateRow.key,
+        subject: versionRow?.subject ?? input.subject,
+        bodyText: versionRow?.bodyText ?? input.bodyText,
+        bodyHtml: versionRow?.bodyHtml ?? input.bodyHtml ?? null,
+        version: versionRow?.version ?? 1,
+        status: (versionRow?.status ?? input.status) as 'draft' | 'published',
+        updatedAt: versionRow?.updatedAt ?? now,
+        updatedBy: versionRow?.updatedBy ?? actorUserId,
+        isActive: templateRow.isActive
       };
     });
   } catch (error) {
@@ -1320,29 +1424,70 @@ export const createMailTemplate = async (input: TemplateCreateInput, actorUserId
   }
 };
 
-export const patchMailTemplate = async (templateKey: string, input: TemplatePatchInput) => {
+export const patchMailTemplate = async (templateKey: string, input: TemplatePatchInput, actorUserId: string | null) => {
   const db = await getDb();
   const existing = await getTemplateByKey(templateKey);
   if (!existing) {
     return null;
   }
-  const [updated] = await db
+
+  const now = new Date();
+  await db
     .update(emailTemplate)
     .set({
-      description: input.name ?? existing.description,
+      description: input.label ?? existing.description,
       isActive: input.isActive ?? existing.isActive,
-      updatedAt: new Date()
+      updatedAt: now
     })
-    .where(eq(emailTemplate.id, existing.id))
-    .returning({
-      id: emailTemplate.id,
-      templateKey: emailTemplate.templateKey,
-      name: emailTemplate.description,
-      isActive: emailTemplate.isActive,
-      updatedAt: emailTemplate.updatedAt
-    });
+    .where(eq(emailTemplate.id, existing.id));
 
-  return updated ?? null;
+  const shouldCreateVersion =
+    input.subject !== undefined || input.bodyText !== undefined || input.bodyHtml !== undefined || input.status !== undefined;
+
+  if (shouldCreateVersion) {
+    const latestRows = await db
+      .select({
+        version: emailTemplateVersion.version,
+        subject: emailTemplateVersion.subjectTemplate,
+        bodyText: emailTemplateVersion.bodyTextTemplate,
+        bodyHtml: emailTemplateVersion.bodyHtmlTemplate,
+        status: emailTemplateVersion.status
+      })
+      .from(emailTemplateVersion)
+      .where(eq(emailTemplateVersion.templateId, existing.id))
+      .orderBy(desc(emailTemplateVersion.version))
+      .limit(1);
+    const latest = latestRows[0];
+    if (!latest) {
+      throw new Error('INVALID_STATE');
+    }
+    await db.insert(emailTemplateVersion).values({
+      templateId: existing.id,
+      version: latest.version + 1,
+      subjectTemplate: input.subject ?? latest.subject,
+      bodyTemplate: input.bodyText ?? latest.bodyText ?? '',
+      bodyTextTemplate: input.bodyText ?? latest.bodyText ?? '',
+      bodyHtmlTemplate: input.bodyHtml ?? latest.bodyHtml ?? null,
+      status: input.status ?? (latest.status as 'draft' | 'published'),
+      createdBy: actorUserId,
+      updatedBy: actorUserId,
+      updatedAt: now
+    });
+  }
+
+  const selected = await getPublishedOrLatestTemplateVersion(existing.id);
+  return {
+    key: existing.templateKey,
+    label: input.label ?? existing.description ?? existing.templateKey,
+    subject: selected?.subject ?? '',
+    bodyText: selected?.bodyText ?? '',
+    bodyHtml: selected?.bodyHtml ?? null,
+    version: selected?.version ?? 0,
+    status: (selected?.status ?? 'draft') as 'draft' | 'published',
+    updatedAt: selected?.updatedAt ?? now,
+    updatedBy: selected?.updatedBy ?? actorUserId,
+    isActive: input.isActive ?? existing.isActive
+  };
 };
 
 export const createMailTemplateVersion = async (
@@ -1373,34 +1518,187 @@ export const createMailTemplateVersion = async (
       templateId: template.id,
       version: nextVersion,
       subjectTemplate: input.subject,
-      bodyTemplate: input.text,
-      bodyHtmlTemplate: input.html,
-      bodyTextTemplate: input.text,
-      createdBy: actorUserId
+      bodyTemplate: input.bodyText,
+      bodyHtmlTemplate: input.bodyHtml ?? null,
+      bodyTextTemplate: input.bodyText,
+      status: input.status,
+      createdBy: actorUserId,
+      updatedBy: actorUserId,
+      updatedAt: new Date()
     })
     .returning({
       version: emailTemplateVersion.version,
-      createdAt: emailTemplateVersion.createdAt
+      createdAt: emailTemplateVersion.createdAt,
+      status: emailTemplateVersion.status
     });
 
   return {
-    templateKey,
+    key: templateKey,
     version: created?.version ?? nextVersion,
+    status: (created?.status ?? input.status) as 'draft' | 'published',
     createdAt: created?.createdAt ?? new Date()
   };
 };
 
-export const previewMailTemplate = async (templateKey: string, input: TemplatePreviewInput) => {
-  const template = await resolveTemplate(templateKey, input.version, input.subject);
-  const data = input.templateData ?? {};
+export const listMailTemplateVersions = async (key: string) => {
+  const template = await getTemplateByKey(key);
+  if (!template) {
+    return null;
+  }
+  const rows = await getVersionRowsByTemplateId(template.id);
+  return rows.map((row) => ({
+    version: row.version,
+    subject: row.subject,
+    bodyText: row.bodyText ?? '',
+    bodyHtml: row.bodyHtml ?? null,
+    status: row.status as 'draft' | 'published',
+    updatedAt: row.updatedAt,
+    updatedBy: row.updatedBy
+  }));
+};
+
+export const getTemplatePlaceholders = async (key: string) => {
+  const template = await getTemplateByKey(key);
+  if (!template) {
+    return null;
+  }
+  const requiredSet = new Set(REQUIRED_PLACEHOLDERS_BY_TEMPLATE[key] ?? []);
+  return PLACEHOLDER_CATALOG.map((item) => ({
+    ...item,
+    required: requiredSet.has(item.name)
+  }));
+};
+
+const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string, unknown> | null> => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      entryId: entry.id,
+      eventName: event.name,
+      className: eventClass.name,
+      firstName: person.firstName,
+      lastName: person.lastName,
+      startNumber: entry.startNumberNorm,
+      registrationGroupId: entry.registrationGroupId,
+      totalCents: invoice.totalCents,
+      paidAmountCents: invoice.paidAmountCents
+    })
+    .from(entry)
+    .innerJoin(event, eq(entry.eventId, event.id))
+    .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+    .where(eq(entry.id, entryId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+  let verificationUrl: string | null = null;
+  if (row.registrationGroupId) {
+    const seed = `${row.entryId}:${row.firstName}:${row.lastName}`;
+    const token = await upsertRegistrationGroupVerificationToken(row.registrationGroupId, seed);
+    verificationUrl = buildPublicVerificationUrl(row.entryId, token);
+  }
   return {
-    templateKey,
-    version: template.templateVersion,
-    rendered: {
-      subject: renderTemplateString(template.subjectTemplate, data).trim(),
-      html: renderTemplateString(input.html ?? template.bodyHtmlTemplate, data).trim(),
-      text: renderTemplateString(input.text ?? template.bodyTextTemplate, data).trim()
+    eventName: row.eventName,
+    firstName: row.firstName,
+    lastName: row.lastName,
+    driverName: `${row.firstName} ${row.lastName}`.trim(),
+    className: row.className,
+    startNumber: row.startNumber,
+    amountOpen: formatAmountOpen(row.totalCents ?? 0, row.paidAmountCents ?? 0),
+    verificationUrl
+  };
+};
+
+export const previewMailTemplate = async (input: TemplatePreviewInput) => {
+  const template = await resolveTemplate(input.templateKey, undefined);
+  let data: Record<string, unknown> = {
+    ...(input.sampleData ?? {})
+  };
+  if (input.entryId) {
+    const entryData = await buildPreviewDataFromEntry(input.entryId);
+    if (!entryData) {
+      throw new Error('ENTRY_NOT_FOUND');
     }
+    data = { ...entryData, ...data };
+  }
+
+  const used = new Set<string>([
+    ...extractPlaceholders(template.subjectTemplate),
+    ...extractPlaceholders(template.bodyTextTemplate),
+    ...extractPlaceholders(template.bodyHtmlTemplate)
+  ]);
+  const required = REQUIRED_PLACEHOLDERS_BY_TEMPLATE[input.templateKey] ?? [];
+  const missing = required.filter((name) => !isPresentValue(data[name]));
+
+  if (input.templateKey === 'registration_received' && !isPresentValue(data.verificationUrl)) {
+    throw new Error('MISSING_VERIFICATION_URL');
+  }
+  if (missing.length > 0) {
+    throw new Error('TEMPLATE_RENDER_FAILED');
+  }
+
+  return {
+    templateKey: input.templateKey,
+    subjectRendered: renderTemplateString(template.subjectTemplate, data).trim(),
+    bodyTextRendered: renderTemplateString(template.bodyTextTemplate, data).trim(),
+    bodyHtmlRendered: renderTemplateString(template.bodyHtmlTemplate, data).trim(),
+    usedPlaceholders: Array.from(used.values()),
+    missingPlaceholders: missing
+  };
+};
+
+export const resolveBroadcastRecipients = async (input: ResolveRecipientsInput) => {
+  const db = await getDb();
+  let eventId = input.eventId;
+  if (!eventId) {
+    const eventRows = await db.select({ id: event.id }).from(event).where(eq(event.isCurrent, true)).limit(1);
+    eventId = eventRows[0]?.id;
+  }
+  if (!eventId) {
+    throw new Error('INVALID_STATE');
+  }
+
+  const conditions: SQL<unknown>[] = [eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`];
+  if (input.classId) {
+    conditions.push(eq(entry.classId, input.classId));
+  }
+  if (input.acceptanceStatus) {
+    conditions.push(eq(entry.acceptanceStatus, input.acceptanceStatus));
+  }
+  const baseRows = await db
+    .select({
+      email: person.email
+    })
+    .from(entry)
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+    .where(and(...conditions, input.paymentStatus ? eq(invoice.paymentStatus, input.paymentStatus) : sql`true`));
+
+  const invalidEmails: string[] = [];
+  const all = [...baseRows.map((row) => row.email).filter((email): email is string => Boolean(email)), ...(input.additionalEmails ?? [])];
+  const map = new Map<string, string>();
+  all.forEach((value) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    const key = trimmed.toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      invalidEmails.push(trimmed);
+      return;
+    }
+    map.set(key, trimmed);
+  });
+  const duplicatesRemoved = all.filter((email) => Boolean(email)).length - map.size - invalidEmails.length;
+  const resolvedRecipients = Array.from(map.values()).sort((a, b) => a.localeCompare(b));
+  return {
+    resolvedRecipients,
+    invalidEmails,
+    duplicatesRemoved: Math.max(0, duplicatesRemoved),
+    finalCount: resolvedRecipients.length
   };
 };
 
@@ -1409,8 +1707,12 @@ export const queueCommunicationSend = async (input: CommunicationSendInput, acto
     {
       eventId: input.eventId,
       templateId: input.templateId,
+      templateKey: input.templateKey,
       templateVersion: input.templateVersion,
       subject: input.subject,
+      subjectOverride: input.subjectOverride,
+      bodyOverride: input.bodyOverride,
+      bodyHtmlOverride: input.bodyHtmlOverride,
       templateData: input.templateData,
       sendAfter: input.sendAfter,
       recipientEmails: input.additionalEmails,
@@ -1439,3 +1741,8 @@ export const validateMailTemplatePatchInput = (payload: unknown) => templatePatc
 export const validateMailTemplateVersionCreateInput = (payload: unknown) => templateVersionCreateSchema.parse(payload);
 export const validateMailTemplatePreviewInput = (payload: unknown) => templatePreviewSchema.parse(payload);
 export const validateCommunicationSendInput = (payload: unknown) => communicationSendSchema.parse(payload);
+export const validateResolveRecipientsInput = (payload: unknown) => resolveRecipientsSchema.parse(payload);
+export const validateListTemplateVersionsInput = (params: Record<string, string | undefined>) =>
+  listTemplateVersionsSchema.parse({
+    key: params.key
+  });

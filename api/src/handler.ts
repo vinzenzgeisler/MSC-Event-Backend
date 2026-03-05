@@ -95,6 +95,7 @@ import {
   patchMailTemplate,
   previewMailTemplate,
   resolveBroadcastRecipients,
+  searchMailRecipients,
   retryOutboxMail,
   validateBroadcastInput,
   validateCommunicationSendInput,
@@ -105,6 +106,7 @@ import {
   validateMailTemplatePreviewInput,
   validateMailTemplateVersionCreateInput,
   validateResolveRecipientsInput,
+  validateSearchRecipientsInput,
   validateQueueMailInput,
   validateReminderInput
 } from './routes/adminMail';
@@ -998,6 +1000,23 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(404, 'Template not found', undefined, 'TEMPLATE_NOT_FOUND');
       }
       return errorJson(500, 'Template preview failed', undefined, 'TEMPLATE_RENDER_FAILED');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/mail/recipients/search') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
+    }
+    try {
+      const input = validateSearchRecipientsInput(event.queryStringParameters ?? {});
+      const recipients = await searchMailRecipients(input);
+      return json(200, { ok: true, recipients });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      return errorJson(500, 'Recipient search failed', undefined, 'TEMPLATE_RENDER_FAILED');
     }
   }
 

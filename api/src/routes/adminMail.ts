@@ -23,6 +23,16 @@ import { renderTemplateString } from '../mail/templates';
 import { PLACEHOLDER_CATALOG, REQUIRED_PLACEHOLDERS_BY_TEMPLATE } from '../mail/placeholders';
 import { renderMailContract } from '../mail/rendering';
 
+type RecipientFilter = {
+  acceptanceStatus?: 'pending' | 'shortlist' | 'accepted' | 'rejected';
+  registrationStatus?: 'submitted_unverified' | 'submitted_verified';
+  paymentStatus?: 'due' | 'paid';
+  classId?: string;
+};
+
+const hasRecipientFilter = (filters: RecipientFilter | undefined): boolean =>
+  Boolean(filters?.acceptanceStatus || filters?.registrationStatus || filters?.paymentStatus || filters?.classId);
+
 const queueMailSchema = z
   .object({
     eventId: z.string().uuid(),
@@ -55,7 +65,7 @@ const queueMailSchema = z
       (value.additionalEmails && value.additionalEmails.length > 0) ||
       (value.driverPersonIds && value.driverPersonIds.length > 0) ||
       (value.entryIds && value.entryIds.length > 0) ||
-      value.filters,
+      hasRecipientFilter(value.filters),
     { message: 'Provide recipientEmails, driverPersonIds, entryIds, or filters.' }
   );
 
@@ -156,29 +166,39 @@ const templatePreviewSchema = z.object({
   previewMode: z.enum(['stored', 'draft']).optional().default('stored')
 });
 
-const communicationSendSchema = z.object({
-  eventId: z.string().uuid(),
-  templateId: z.string().min(1).optional(),
-  templateKey: z.string().min(1).optional(),
-  templateVersion: z.number().int().positive().optional(),
-  subject: z.string().min(1).optional(),
-  subjectOverride: z.string().min(1).optional(),
-  bodyOverride: z.string().min(1).optional(),
-  bodyHtmlOverride: z.string().min(1).optional(),
-  templateData: z.record(z.unknown()).optional(),
-  sendAfter: z.string().datetime().optional(),
-  additionalEmails: z.array(z.string().email()).optional(),
-  driverPersonIds: z.array(z.string().uuid()).optional(),
-  entryIds: z.array(z.string().uuid()).optional(),
-  filters: z
-    .object({
-      acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
-      registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
-      paymentStatus: z.enum(['due', 'paid']).optional(),
-      classId: z.string().uuid().optional()
-    })
-    .optional()
-}).refine((value) => Boolean(value.templateId || value.templateKey), { message: 'Provide templateId or templateKey.' });
+const communicationSendSchema = z
+  .object({
+    eventId: z.string().uuid(),
+    templateId: z.string().min(1).optional(),
+    templateKey: z.string().min(1).optional(),
+    templateVersion: z.number().int().positive().optional(),
+    subject: z.string().min(1).optional(),
+    subjectOverride: z.string().min(1).optional(),
+    bodyOverride: z.string().min(1).optional(),
+    bodyHtmlOverride: z.string().min(1).optional(),
+    templateData: z.record(z.unknown()).optional(),
+    sendAfter: z.string().datetime().optional(),
+    additionalEmails: z.array(z.string().email()).optional(),
+    driverPersonIds: z.array(z.string().uuid()).optional(),
+    entryIds: z.array(z.string().uuid()).optional(),
+    filters: z
+      .object({
+        acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+        registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
+        paymentStatus: z.enum(['due', 'paid']).optional(),
+        classId: z.string().uuid().optional()
+      })
+      .optional()
+  })
+  .refine((value) => Boolean(value.templateId || value.templateKey), { message: 'Provide templateId or templateKey.' })
+  .refine(
+    (value) =>
+      (value.additionalEmails && value.additionalEmails.length > 0) ||
+      (value.driverPersonIds && value.driverPersonIds.length > 0) ||
+      (value.entryIds && value.entryIds.length > 0) ||
+      hasRecipientFilter(value.filters),
+    { message: 'Provide additionalEmails, driverPersonIds, entryIds, or filters.' }
+  );
 
 const listTemplateVersionsSchema = z.object({
   key: z.string().trim().min(1)
@@ -188,8 +208,20 @@ const resolveRecipientsSchema = z.object({
   eventId: z.string().uuid().optional(),
   classId: z.string().uuid().optional(),
   acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+  registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
   paymentStatus: z.enum(['due', 'paid']).optional(),
+  driverPersonIds: z.array(z.string().uuid()).optional(),
+  entryIds: z.array(z.string().uuid()).optional(),
   additionalEmails: z.array(z.string().email()).optional()
+});
+
+const searchRecipientsSchema = z.object({
+  eventId: z.string().uuid(),
+  q: z.string().trim().optional(),
+  classId: z.string().uuid().optional(),
+  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+  paymentStatus: z.enum(['due', 'paid']).optional(),
+  limit: z.number().int().min(1).max(100).optional().default(20)
 });
 
 type QueueMailInput = z.infer<typeof queueMailSchema>;
@@ -203,6 +235,7 @@ type TemplateVersionCreateInput = z.infer<typeof templateVersionCreateSchema>;
 type TemplatePreviewInput = z.infer<typeof templatePreviewSchema>;
 type CommunicationSendInput = z.infer<typeof communicationSendSchema>;
 type ResolveRecipientsInput = z.infer<typeof resolveRecipientsSchema>;
+type SearchRecipientsInput = z.infer<typeof searchRecipientsSchema>;
 
 export class DuplicateRequestError extends Error {
   public readonly existingOutboxId: string | null;
@@ -545,20 +578,21 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
     );
   }
 
-  if (input.filters) {
+  if (hasRecipientFilter(input.filters)) {
+    const filters = input.filters as NonNullable<QueueMailInput['filters']>;
     const conditions: SQL<unknown>[] = [
       eq(entry.eventId, input.eventId),
       eq(person.processingRestricted, false),
       eq(person.objectionFlag, false)
     ];
-    if (input.filters.acceptanceStatus) {
-      conditions.push(eq(entry.acceptanceStatus, input.filters.acceptanceStatus));
+    if (filters.acceptanceStatus) {
+      conditions.push(eq(entry.acceptanceStatus, filters.acceptanceStatus));
     }
-    if (input.filters.registrationStatus) {
-      conditions.push(eq(entry.registrationStatus, input.filters.registrationStatus));
+    if (filters.registrationStatus) {
+      conditions.push(eq(entry.registrationStatus, filters.registrationStatus));
     }
-    if (input.filters.classId) {
-      conditions.push(eq(entry.classId, input.filters.classId));
+    if (filters.classId) {
+      conditions.push(eq(entry.classId, filters.classId));
     }
 
     const query = db
@@ -570,10 +604,10 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
       .from(entry)
       .innerJoin(person, eq(entry.driverPersonId, person.id));
 
-    if (input.filters.paymentStatus) {
+    if (filters.paymentStatus) {
       const rows = await query
         .innerJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
-        .where(and(...conditions, eq(invoice.paymentStatus, input.filters.paymentStatus)));
+        .where(and(...conditions, eq(invoice.paymentStatus, filters.paymentStatus)));
 
       collected.push(
         ...
@@ -1588,7 +1622,8 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
     className: row.className,
     startNumber: row.startNumber,
     amountOpen: formatAmountOpen(row.totalCents ?? 0, row.paidAmountCents ?? 0),
-    verificationUrl
+    verificationUrl,
+    nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null
   };
 };
 
@@ -1637,24 +1672,78 @@ export const resolveBroadcastRecipients = async (input: ResolveRecipientsInput) 
     throw new Error('INVALID_STATE');
   }
 
-  const conditions: SQL<unknown>[] = [eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`];
-  if (input.classId) {
-    conditions.push(eq(entry.classId, input.classId));
-  }
-  if (input.acceptanceStatus) {
-    conditions.push(eq(entry.acceptanceStatus, input.acceptanceStatus));
-  }
-  const baseRows = await db
-    .select({
-      email: person.email
-    })
-    .from(entry)
-    .innerJoin(person, eq(entry.driverPersonId, person.id))
-    .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
-    .where(and(...conditions, input.paymentStatus ? eq(invoice.paymentStatus, input.paymentStatus) : sql`true`));
-
   const invalidEmails: string[] = [];
-  const all = [...baseRows.map((row) => row.email).filter((email): email is string => Boolean(email)), ...(input.additionalEmails ?? [])];
+  const collectedEmails: string[] = [];
+
+  const hasBroadcastFilter = Boolean(input.classId || input.acceptanceStatus || input.registrationStatus || input.paymentStatus);
+  if (hasBroadcastFilter) {
+    const conditions: SQL<unknown>[] = [
+      eq(entry.eventId, eventId),
+      sql`${entry.deletedAt} is null`,
+      eq(person.processingRestricted, false),
+      eq(person.objectionFlag, false)
+    ];
+    if (input.classId) {
+      conditions.push(eq(entry.classId, input.classId));
+    }
+    if (input.acceptanceStatus) {
+      conditions.push(eq(entry.acceptanceStatus, input.acceptanceStatus));
+    }
+    if (input.registrationStatus) {
+      conditions.push(eq(entry.registrationStatus, input.registrationStatus));
+    }
+    const filteredRows = await db
+      .select({
+        email: person.email
+      })
+      .from(entry)
+      .innerJoin(person, eq(entry.driverPersonId, person.id))
+      .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+      .where(and(...conditions, input.paymentStatus ? eq(invoice.paymentStatus, input.paymentStatus) : sql`true`));
+    collectedEmails.push(...filteredRows.map((row) => row.email).filter((email): email is string => Boolean(email)));
+  }
+
+  if (input.driverPersonIds && input.driverPersonIds.length > 0) {
+    const driverRows = await db
+      .select({ email: person.email })
+      .from(person)
+      .where(and(inArray(person.id, input.driverPersonIds), eq(person.processingRestricted, false), eq(person.objectionFlag, false)));
+    collectedEmails.push(...driverRows.map((row) => row.email).filter((email): email is string => Boolean(email)));
+  }
+
+  if (input.entryIds && input.entryIds.length > 0) {
+    const entryRows = await db
+      .select({ email: person.email })
+      .from(entry)
+      .innerJoin(person, eq(entry.driverPersonId, person.id))
+      .where(
+        and(
+          inArray(entry.id, input.entryIds),
+          eq(entry.eventId, eventId),
+          sql`${entry.deletedAt} is null`,
+          eq(person.processingRestricted, false),
+          eq(person.objectionFlag, false)
+        )
+      );
+    collectedEmails.push(...entryRows.map((row) => row.email).filter((email): email is string => Boolean(email)));
+  }
+
+  let additionalEmails = input.additionalEmails ?? [];
+  if (additionalEmails.length > 0) {
+    const blockedRows = await db
+      .select({ email: person.email })
+      .from(person)
+      .where(
+        and(
+          inArray(person.email, additionalEmails),
+          or(eq(person.processingRestricted, true), eq(person.objectionFlag, true))
+        )
+      );
+    const blocked = new Set(blockedRows.map((row) => (row.email ?? '').toLowerCase()).filter((email) => email.length > 0));
+    additionalEmails = additionalEmails.filter((email) => !blocked.has(email.toLowerCase()));
+  }
+
+  const all = [...collectedEmails, ...additionalEmails];
   const map = new Map<string, string>();
   all.forEach((value) => {
     const trimmed = value.trim();
@@ -1676,6 +1765,69 @@ export const resolveBroadcastRecipients = async (input: ResolveRecipientsInput) 
     duplicatesRemoved: Math.max(0, duplicatesRemoved),
     finalCount: resolvedRecipients.length
   };
+};
+
+export const searchMailRecipients = async (input: SearchRecipientsInput) => {
+  const db = await getDb();
+  const conditions: SQL<unknown>[] = [eq(entry.eventId, input.eventId), sql`${entry.deletedAt} is null`];
+  if (input.classId) {
+    conditions.push(eq(entry.classId, input.classId));
+  }
+  if (input.acceptanceStatus) {
+    conditions.push(eq(entry.acceptanceStatus, input.acceptanceStatus));
+  }
+  if (input.q && input.q.trim().length > 0) {
+    const like = `%${input.q.trim().toLowerCase()}%`;
+    conditions.push(
+      sql`(
+        lower(${person.firstName}) like ${like}
+        or lower(${person.lastName}) like ${like}
+        or lower(${person.email}) like ${like}
+        or lower(${entry.startNumberNorm}) like ${like}
+      )`
+    );
+  }
+
+  const query = db
+    .select({
+      driverPersonId: person.id,
+      driverName: sql<string>`trim(coalesce(${person.firstName}, '') || ' ' || coalesce(${person.lastName}, ''))`,
+      driverEmail: person.email,
+      entryId: entry.id,
+      className: eventClass.name,
+      startNumber: entry.startNumberNorm
+    })
+    .from(entry)
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)));
+
+  const rows = await query
+    .where(and(...conditions, input.paymentStatus ? eq(invoice.paymentStatus, input.paymentStatus) : sql`true`))
+    .orderBy(desc(entry.updatedAt))
+    .limit(Math.max(10, input.limit * 5));
+
+  const deduped = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) {
+    if (!row.driverEmail) {
+      continue;
+    }
+    if (!deduped.has(row.driverPersonId)) {
+      deduped.set(row.driverPersonId, row);
+    }
+    if (deduped.size >= input.limit) {
+      break;
+    }
+  }
+
+  return Array.from(deduped.values()).map((row) => ({
+    driverPersonId: row.driverPersonId,
+    driverName: row.driverName,
+    driverEmail: row.driverEmail as string,
+    entryId: row.entryId,
+    className: row.className,
+    startNumber: row.startNumber
+  }));
 };
 
 export const queueCommunicationSend = async (input: CommunicationSendInput, actorUserId: string | null) =>
@@ -1718,6 +1870,15 @@ export const validateMailTemplateVersionCreateInput = (payload: unknown) => temp
 export const validateMailTemplatePreviewInput = (payload: unknown) => templatePreviewSchema.parse(payload);
 export const validateCommunicationSendInput = (payload: unknown) => communicationSendSchema.parse(payload);
 export const validateResolveRecipientsInput = (payload: unknown) => resolveRecipientsSchema.parse(payload);
+export const validateSearchRecipientsInput = (query: Record<string, string | undefined>) =>
+  searchRecipientsSchema.parse({
+    eventId: query.eventId,
+    q: query.q,
+    classId: query.classId,
+    acceptanceStatus: query.acceptanceStatus,
+    paymentStatus: query.paymentStatus,
+    limit: query.limit === undefined ? undefined : Number(query.limit)
+  });
 export const validateListTemplateVersionsInput = (params: Record<string, string | undefined>) =>
   listTemplateVersionsSchema.parse({
     key: params.key

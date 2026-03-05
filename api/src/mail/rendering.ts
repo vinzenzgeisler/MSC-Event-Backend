@@ -73,6 +73,14 @@ const normalizePublicUrl = (value: unknown): string | null => {
   }
 };
 
+const normalizeBaseUrl = (value: unknown): string | null => {
+  const normalized = normalizePublicUrl(value);
+  if (!normalized) {
+    return null;
+  }
+  return normalized.replace(/\/+$/, '');
+};
+
 const sanitizeHtmlFragment = (value: string): string =>
   value
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
@@ -111,6 +119,7 @@ const buildInfoBoxes = (data: TemplateData): string => {
 };
 
 const buildHtmlDocument = (input: {
+  templateKey: string;
   subjectRendered: string;
   bodyHtmlRendered: string;
   verificationUrl: string | null;
@@ -122,7 +131,17 @@ const buildHtmlDocument = (input: {
   const logoText = process.env.MAIL_BRAND_LOGO_TEXT ?? eventName;
   const contactHint = process.env.MAIL_CONTACT_HINT ?? 'Bei Rueckfragen bitte auf diese E-Mail antworten.';
   const imprintHint = process.env.MAIL_IMPRINT_HINT ?? 'Impressum und Datenschutz finden Sie auf der offiziellen Event-Webseite.';
-  const ctaBlock = input.verificationUrl
+  const baseUrl =
+    normalizeBaseUrl(input.data.nennungstoolUrl) ??
+    normalizeBaseUrl(input.data.url) ??
+    normalizeBaseUrl(process.env.MAIL_PUBLIC_BASE_URL) ??
+    normalizeBaseUrl(process.env.NENNUNGSTOOL_URL);
+  const impressumUrl = baseUrl ? `${baseUrl}/anmeldung/rechtliches/impressum` : null;
+  const datenschutzUrl = baseUrl ? `${baseUrl}/anmeldung/rechtliches/datenschutz` : null;
+  const legalLinks = impressumUrl && datenschutzUrl
+    ? `<div style="font-size:12px;line-height:1.5;color:#94a3b8;margin-top:6px;"><a href="${escapeHtml(impressumUrl)}" style="color:#64748b;text-decoration:underline;">Impressum</a> · <a href="${escapeHtml(datenschutzUrl)}" style="color:#64748b;text-decoration:underline;">Datenschutz</a></div>`
+    : `<div style="font-size:12px;line-height:1.5;color:#94a3b8;margin-top:6px;">${escapeHtml(imprintHint)}</div>`;
+  const ctaBlock = input.templateKey === 'registration_received' && input.verificationUrl
     ? `<tr><td style="padding:0 32px 28px 32px;"><a href="${escapeHtml(input.verificationUrl)}" style="display:inline-block;padding:12px 20px;background:#0f172a;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">E-Mail bestaetigen</a></td></tr>`
     : '';
 
@@ -142,7 +161,7 @@ const buildHtmlDocument = (input: {
     `<tr><td style="padding:28px 32px 8px 32px;font-family:Segoe UI,Arial,sans-serif;font-size:22px;line-height:1.3;color:#0f172a;font-weight:700;">${escapeHtml(input.subjectRendered)}</td></tr>`,
     `<tr><td style="padding:0 32px 0 32px;font-family:Segoe UI,Arial,sans-serif;">${buildInfoBoxes(input.data)}${input.bodyHtmlRendered}</td></tr>`,
     ctaBlock,
-    `<tr><td style="padding:20px 32px 24px 32px;border-top:1px solid #e2e8f0;background:#f8fafc;font-family:Segoe UI,Arial,sans-serif;"><div style="font-size:12px;line-height:1.5;color:#64748b;">${escapeHtml(contactHint)}</div><div style="font-size:12px;line-height:1.5;color:#94a3b8;margin-top:6px;">${escapeHtml(imprintHint)}</div></td></tr>`,
+    `<tr><td style="padding:20px 32px 24px 32px;border-top:1px solid #e2e8f0;background:#f8fafc;font-family:Segoe UI,Arial,sans-serif;"><div style="font-size:12px;line-height:1.5;color:#64748b;">${escapeHtml(contactHint)}</div>${legalLinks}</td></tr>`,
     '</table>',
     '</td></tr>',
     '</table>',
@@ -202,6 +221,7 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
   const usedPlaceholders = Array.from(usedSet.values()).sort((a, b) => a.localeCompare(b));
   const unknownPlaceholders = usedPlaceholders.filter((item) => !KNOWN_PLACEHOLDER_NAMES.has(item));
   const htmlDocument = buildHtmlDocument({
+    templateKey: input.templateKey,
     subjectRendered: subject.rendered.trim(),
     bodyHtmlRendered,
     verificationUrl,

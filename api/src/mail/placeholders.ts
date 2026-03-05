@@ -21,7 +21,10 @@ export const PLACEHOLDER_CATALOG: PlaceholderCatalogItem[] = [
 
 export const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
   registration_received: ['eventName', 'driverName', 'verificationUrl'],
-  payment_reminder: ['eventName', 'driverName', 'amountOpen']
+  payment_reminder: ['eventName', 'driverName', 'amountOpen'],
+  newsletter: ['eventName'],
+  event_update: ['eventName'],
+  free_form: []
 };
 
 export const KNOWN_PLACEHOLDER_NAMES = new Set(PLACEHOLDER_CATALOG.map((item) => item.name));

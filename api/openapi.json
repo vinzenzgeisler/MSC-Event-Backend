@@ -6736,6 +6736,135 @@
         }
       }
     },
+    "/admin/mail/recipients/search": {
+      "get": {
+        "operationId": "get_admin_mail_recipients_search",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "classId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "acceptanceStatus",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "shortlist",
+                "accepted",
+                "rejected"
+              ]
+            }
+          },
+          {
+            "name": "paymentStatus",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "due",
+                "paid"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailRecipientSearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/mail/templates/{key}/placeholders": {
       "get": {
         "operationId": "get_admin_mail_templates_key_placeholders",
@@ -6857,6 +6986,7 @@
         "tags": [
           "admin"
         ],
+        "description": "Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates.",
         "security": [
           {
             "bearerAuth": []
@@ -6868,6 +6998,25 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ResolveRecipientsRequest"
+              },
+              "examples": {
+                "union_all_sources": {
+                  "value": {
+                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
+                    "classId": "7d949dae-d3c4-4534-a8e5-67015c6fb734",
+                    "acceptanceStatus": "accepted",
+                    "paymentStatus": "due",
+                    "driverPersonIds": [
+                      "96da7e10-4277-4e59-96e8-f2c112624486"
+                    ],
+                    "entryIds": [
+                      "07b62666-6e91-4899-98f6-b97535809522"
+                    ],
+                    "additionalEmails": [
+                      "extra@example.com"
+                    ]
+                  }
+                }
               }
             }
           }
@@ -6957,6 +7106,7 @@
             "bearerAuth": []
           }
         ],
+        "description": "Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates.",
         "requestBody": {
           "required": true,
           "content": {
@@ -7053,6 +7203,28 @@
                         "format": "uuid"
                       }
                     }
+                  }
+                }
+              },
+              "examples": {
+                "union_all_sources": {
+                  "value": {
+                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
+                    "templateKey": "newsletter",
+                    "filters": {
+                      "classId": "7d949dae-d3c4-4534-a8e5-67015c6fb734",
+                      "acceptanceStatus": "accepted",
+                      "paymentStatus": "due"
+                    },
+                    "driverPersonIds": [
+                      "96da7e10-4277-4e59-96e8-f2c112624486"
+                    ],
+                    "entryIds": [
+                      "07b62666-6e91-4899-98f6-b97535809522"
+                    ],
+                    "additionalEmails": [
+                      "extra@example.com"
+                    ]
                   }
                 }
               }
@@ -7969,7 +8141,33 @@
           "isActive": {
             "type": "boolean"
           }
-        }
+        },
+        "examples": [
+          {
+            "key": "newsletter",
+            "label": "Newsletter",
+            "subject": "Newsletter - {{eventName}}",
+            "bodyText": "Hallo {{driverName}}, hier sind Neuigkeiten.",
+            "status": "published",
+            "isActive": true
+          },
+          {
+            "key": "event_update",
+            "label": "Event Update",
+            "subject": "Update zu {{eventName}}",
+            "bodyText": "Hallo {{driverName}}, hier ist ein Update.",
+            "status": "published",
+            "isActive": true
+          },
+          {
+            "key": "free_form",
+            "label": "Freies Mailing",
+            "subject": "Mitteilung - {{eventName}}",
+            "bodyText": "Freitextinhalt",
+            "status": "published",
+            "isActive": true
+          }
+        ]
       },
       "MailTemplatePatchRequest": {
         "type": "object",
@@ -8202,6 +8400,59 @@
           }
         }
       },
+      "MailRecipientSearchItem": {
+        "type": "object",
+        "required": [
+          "driverPersonId",
+          "driverName",
+          "driverEmail",
+          "entryId",
+          "className",
+          "startNumber"
+        ],
+        "properties": {
+          "driverPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "driverName": {
+            "type": "string"
+          },
+          "driverEmail": {
+            "type": "string",
+            "format": "email"
+          },
+          "entryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "className": {
+            "type": "string"
+          },
+          "startNumber": {
+            "type": "string"
+          }
+        }
+      },
+      "MailRecipientSearchResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "recipients"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "recipients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailRecipientSearchItem"
+            }
+          }
+        }
+      },
       "ResolveRecipientsRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -8223,12 +8474,33 @@
               "rejected"
             ]
           },
+          "registrationStatus": {
+            "type": "string",
+            "enum": [
+              "submitted_unverified",
+              "submitted_verified"
+            ]
+          },
           "paymentStatus": {
             "type": "string",
             "enum": [
               "due",
               "paid"
             ]
+          },
+          "driverPersonIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "entryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           "additionalEmails": {
             "type": "array",

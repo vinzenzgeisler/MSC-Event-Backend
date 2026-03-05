@@ -1045,6 +1045,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
         return errorJson(404, 'Template not found', undefined, 'TEMPLATE_NOT_FOUND');
       }
+      if (error instanceof Error && error.message === 'MISSING_VERIFICATION_URL') {
+        return errorJson(409, 'Verification URL is required', undefined, 'MISSING_VERIFICATION_URL');
+      }
       if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
         return errorJson(409, 'Duplicate request', undefined, 'DUPLICATE_REQUEST');
       }

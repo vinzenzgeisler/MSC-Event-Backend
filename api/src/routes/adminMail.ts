@@ -20,6 +20,8 @@ import { buildPublicVerificationUrl } from '../mail/verificationUrl';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 import { renderTemplateString } from '../mail/templates';
+import { PLACEHOLDER_CATALOG, REQUIRED_PLACEHOLDERS_BY_TEMPLATE } from '../mail/placeholders';
+import { renderMailContract } from '../mail/rendering';
 
 const queueMailSchema = z
   .object({
@@ -147,7 +149,11 @@ const templateVersionCreateSchema = z.object({
 const templatePreviewSchema = z.object({
   templateKey: z.string().min(1),
   entryId: z.string().uuid().optional(),
-  sampleData: z.record(z.unknown()).optional()
+  sampleData: z.record(z.unknown()).optional(),
+  subjectOverride: z.string().min(1).optional(),
+  bodyOverride: z.string().min(1).optional(),
+  bodyHtmlOverride: z.string().min(1).optional(),
+  previewMode: z.enum(['stored', 'draft']).optional().default('stored')
 });
 
 const communicationSendSchema = z.object({
@@ -678,6 +684,9 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
             verificationToken: token,
             verificationUrl: generatedVerificationUrl ?? existingVerificationUrl
           };
+        }
+        if (!isNonEmptyString(templateData.verificationUrl)) {
+          throw new Error('MISSING_VERIFICATION_URL');
         }
       }
 
@@ -1254,37 +1263,6 @@ export const retryOutboxMail = async (outboxId: string, actorUserId: string | nu
   return updated ?? null;
 };
 
-type PlaceholderDefinition = {
-  name: string;
-  required: boolean;
-  description: string;
-};
-
-const PLACEHOLDER_CATALOG: PlaceholderDefinition[] = [
-  { name: 'eventName', required: false, description: 'Eventname' },
-  { name: 'firstName', required: false, description: 'Vorname Fahrer' },
-  { name: 'lastName', required: false, description: 'Nachname Fahrer' },
-  { name: 'driverName', required: false, description: 'Vollstaendiger Fahrername' },
-  { name: 'className', required: false, description: 'Klassenname' },
-  { name: 'startNumber', required: false, description: 'Startnummer' },
-  { name: 'amountOpen', required: false, description: 'Offener Betrag als Text' },
-  { name: 'verificationUrl', required: false, description: 'Verifizierungslink' }
-];
-
-const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
-  registration_received: ['eventName', 'driverName', 'verificationUrl'],
-  payment_reminder: ['eventName', 'driverName', 'amountOpen']
-};
-
-const extractPlaceholders = (template: string): string[] =>
-  Array.from(
-    new Set(
-      [...template.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)].map((match) => match[1]).filter((name) => name.length > 0)
-    )
-  );
-
-const isPresentValue = (value: unknown): boolean => !(value === undefined || value === null || String(value).trim().length === 0);
-
 const formatAmountOpen = (totalCents: number, paidAmountCents: number): string =>
   `${((Math.max(0, totalCents - paidAmountCents)) / 100).toFixed(2).replace('.', ',')} EUR`;
 
@@ -1564,7 +1542,9 @@ export const getTemplatePlaceholders = async (key: string) => {
   }
   const requiredSet = new Set(REQUIRED_PLACEHOLDERS_BY_TEMPLATE[key] ?? []);
   return PLACEHOLDER_CATALOG.map((item) => ({
-    ...item,
+    name: item.name,
+    description: item.description,
+    example: item.example,
     required: requiredSet.has(item.name)
   }));
 };
@@ -1625,28 +1605,24 @@ export const previewMailTemplate = async (input: TemplatePreviewInput) => {
     data = { ...entryData, ...data };
   }
 
-  const used = new Set<string>([
-    ...extractPlaceholders(template.subjectTemplate),
-    ...extractPlaceholders(template.bodyTextTemplate),
-    ...extractPlaceholders(template.bodyHtmlTemplate)
-  ]);
-  const required = REQUIRED_PLACEHOLDERS_BY_TEMPLATE[input.templateKey] ?? [];
-  const missing = required.filter((name) => !isPresentValue(data[name]));
+  const useDraftMode = input.previewMode === 'draft';
+  const subjectTemplate = useDraftMode ? input.subjectOverride ?? template.subjectTemplate : template.subjectTemplate;
+  const bodyTextTemplate = useDraftMode ? input.bodyOverride ?? template.bodyTextTemplate : template.bodyTextTemplate;
+  const bodyHtmlTemplate = useDraftMode
+    ? input.bodyHtmlOverride ?? template.bodyHtmlTemplate
+    : template.bodyHtmlTemplate;
 
-  if (input.templateKey === 'registration_received' && !isPresentValue(data.verificationUrl)) {
-    throw new Error('MISSING_VERIFICATION_URL');
-  }
-  if (missing.length > 0) {
-    throw new Error('TEMPLATE_RENDER_FAILED');
-  }
+  const rendered = renderMailContract({
+    templateKey: input.templateKey,
+    subjectTemplate,
+    bodyTextTemplate,
+    bodyHtmlTemplate,
+    data
+  });
 
   return {
     templateKey: input.templateKey,
-    subjectRendered: renderTemplateString(template.subjectTemplate, data).trim(),
-    bodyTextRendered: renderTemplateString(template.bodyTextTemplate, data).trim(),
-    bodyHtmlRendered: renderTemplateString(template.bodyHtmlTemplate, data).trim(),
-    usedPlaceholders: Array.from(used.values()),
-    missingPlaceholders: missing
+    ...rendered
   };
 };
 

@@ -6637,6 +6637,27 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/MailTemplatePreviewRequest"
+              },
+              "examples": {
+                "stored": {
+                  "value": {
+                    "templateKey": "registration_received",
+                    "entryId": "11111111-1111-1111-1111-111111111111",
+                    "previewMode": "stored"
+                  }
+                },
+                "draft": {
+                  "value": {
+                    "templateKey": "registration_received",
+                    "sampleData": {
+                      "firstName": "Max",
+                      "driverName": "Max Mustermann"
+                    },
+                    "subjectOverride": "Hallo {{firstName}}, bitte bestaetigen",
+                    "bodyOverride": "Bitte bestaetigen: {{verificationUrl}}",
+                    "previewMode": "draft"
+                  }
+                }
               }
             }
           }
@@ -8021,23 +8042,66 @@
           "sampleData": {
             "type": "object",
             "additionalProperties": true
+          },
+          "subjectOverride": {
+            "type": "string"
+          },
+          "bodyOverride": {
+            "type": "string"
+          },
+          "bodyHtmlOverride": {
+            "type": "string"
+          },
+          "previewMode": {
+            "type": "string",
+            "enum": [
+              "stored",
+              "draft"
+            ],
+            "default": "stored"
           }
-        }
+        },
+        "examples": [
+          {
+            "templateKey": "registration_received",
+            "entryId": "11111111-1111-1111-1111-111111111111",
+            "previewMode": "stored"
+          },
+          {
+            "templateKey": "registration_received",
+            "sampleData": {
+              "firstName": "Max",
+              "lastName": "Mustermann",
+              "driverName": "Max Mustermann"
+            },
+            "subjectOverride": "Hallo {{firstName}}, bitte E-Mail bestaetigen",
+            "bodyOverride": "Hi {{firstName}}, bitte bestaetige hier: {{verificationUrl}}",
+            "bodyHtmlOverride": "<p>Hi {{firstName}}</p><p>Bitte bestaetigen: <a href=\"{{verificationUrl}}\">Link</a></p>",
+            "previewMode": "draft"
+          }
+        ]
       },
       "MailTemplatePreviewResponse": {
         "type": "object",
         "required": [
           "ok",
+          "templateKey",
           "subjectRendered",
           "bodyTextRendered",
           "bodyHtmlRendered",
+          "htmlDocument",
           "usedPlaceholders",
-          "missingPlaceholders"
+          "missingPlaceholders",
+          "unknownPlaceholders",
+          "warnings"
         ],
         "properties": {
           "ok": {
             "type": "boolean",
             "const": true
+          },
+          "templateKey": {
+            "type": "string"
           },
           "subjectRendered": {
             "type": "string"
@@ -8047,6 +8111,10 @@
           },
           "bodyHtmlRendered": {
             "type": "string"
+          },
+          "htmlDocument": {
+            "type": "string",
+            "description": "Complete send-ready HTML document."
           },
           "usedPlaceholders": {
             "type": "array",
@@ -8059,15 +8127,65 @@
             "items": {
               "type": "string"
             }
+          },
+          "unknownPlaceholders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
-        }
+        },
+        "examples": [
+          {
+            "ok": true,
+            "templateKey": "registration_received",
+            "subjectRendered": "Anmeldung erhalten - MSC Dreiecksrennen 2026",
+            "bodyTextRendered": "Hallo Max Mustermann\n\nwir haben deine Anmeldung erhalten.\n\nVerifizierung: https://example.org/verify?token=abc123",
+            "bodyHtmlRendered": "<p style=\"margin:0 0 16px 0;color:#0f172a;font-size:15px;line-height:1.6;\">Hallo Max Mustermann</p>",
+            "htmlDocument": "<html>...</html>",
+            "usedPlaceholders": [
+              "driverName",
+              "eventName",
+              "verificationUrl"
+            ],
+            "missingPlaceholders": [],
+            "unknownPlaceholders": [],
+            "warnings": []
+          },
+          {
+            "ok": true,
+            "templateKey": "registration_received",
+            "subjectRendered": "Hallo Max",
+            "bodyTextRendered": "Hi Max, bitte bestaetige hier:",
+            "bodyHtmlRendered": "<p>Hi Max</p>",
+            "htmlDocument": "<html>...</html>",
+            "usedPlaceholders": [
+              "firstName",
+              "verificationUrl"
+            ],
+            "missingPlaceholders": [
+              "verificationUrl"
+            ],
+            "unknownPlaceholders": [],
+            "warnings": [
+              "verificationUrl fehlt; CTA und Verifizierungslink koennen nicht gerendert werden."
+            ]
+          }
+        ]
       },
       "MailTemplatePlaceholder": {
         "type": "object",
         "required": [
           "name",
           "required",
-          "description"
+          "description",
+          "example"
         ],
         "properties": {
           "name": {
@@ -8077,6 +8195,9 @@
             "type": "boolean"
           },
           "description": {
+            "type": "string"
+          },
+          "example": {
             "type": "string"
           }
         }

@@ -1,7 +1,7 @@
 import { getPool } from '../db/client';
-import { renderTemplateString } from '../mail/templates';
 import { sendEmail } from '../mail/ses';
 import { getTemplateVersion } from '../mail/templateStore';
+import { renderMailContract } from '../mail/rendering';
 
 type OutboxRow = {
   id: string;
@@ -113,10 +113,20 @@ export const handler = async () => {
 
       const bodyTextOverride = typeof row.template_data?.bodyTextOverride === 'string' ? row.template_data.bodyTextOverride : null;
       const bodyHtmlOverride = typeof row.template_data?.bodyHtmlOverride === 'string' ? row.template_data.bodyHtmlOverride : null;
-      const subject = renderTemplateString(row.subject, row.template_data);
-      const bodyText = renderTemplateString(bodyTextOverride ?? template.bodyTextTemplate, row.template_data);
-      const bodyHtml = renderTemplateString(bodyHtmlOverride ?? template.bodyHtmlTemplate, row.template_data);
-      const response = await sendEmail(row.to_email, subject, bodyText, bodyHtml);
+      const rendered = renderMailContract({
+        templateKey: row.template_id,
+        subjectTemplate: row.subject,
+        bodyTextTemplate: bodyTextOverride ?? template.bodyTextTemplate,
+        bodyHtmlTemplate: bodyHtmlOverride ?? template.bodyHtmlTemplate,
+        data: row.template_data ?? {}
+      });
+      if (rendered.missingPlaceholders.length > 0) {
+        throw new Error(`TEMPLATE_RENDER_FAILED:missing_placeholders:${rendered.missingPlaceholders.join(',')}`);
+      }
+      if (row.template_id === 'registration_received' && rendered.warnings.some((item) => item.includes('verificationUrl'))) {
+        throw new Error('MISSING_VERIFICATION_URL');
+      }
+      const response = await sendEmail(row.to_email, rendered.subjectRendered, rendered.bodyTextRendered, rendered.htmlDocument);
       await markSent(row.id, response.MessageId ?? null, response);
     } catch (error) {
       await markFailed(row.id, row.attempt_count, row.max_attempts, error);

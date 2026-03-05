@@ -16,7 +16,12 @@ export const PLACEHOLDER_CATALOG: PlaceholderCatalogItem[] = [
     name: 'verificationUrl',
     description: 'Verifizierungslink',
     example: 'https://example.org/verify?token=abc123'
-  }
+  },
+  { name: 'introText', description: 'Einleitender Kampagnentext', example: 'Wichtige Neuigkeiten fuer alle Teilnehmenden.' },
+  { name: 'detailsText', description: 'Weiterer Detailabschnitt', example: 'Zeitplan und Anreise wurden aktualisiert.' },
+  { name: 'ctaText', description: 'Button-Beschriftung fuer Kampagneninhalt', example: 'Alle Infos ansehen' },
+  { name: 'ctaUrl', description: 'Button-Link fuer Kampagneninhalt', example: 'https://nennungstool.example.org/news' },
+  { name: 'closingText', description: 'Abschlusstext', example: 'Viele Gruesse, euer Orga-Team' }
 ];
 
 export const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {

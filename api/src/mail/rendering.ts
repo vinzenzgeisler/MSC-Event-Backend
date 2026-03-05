@@ -136,18 +136,21 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
     heroSubtitle: 'Update zu deiner Anmeldung.'
   },
   newsletter: {
-    mailLabel: 'Kampagne',
+    mailLabel: '',
     heroSubtitle: 'Neuigkeiten rund um das Event.'
   },
   event_update: {
-    mailLabel: 'Kampagne',
+    mailLabel: '',
     heroSubtitle: 'Wichtige organisatorische Infos.'
   },
   free_form: {
-    mailLabel: 'Kampagne',
+    mailLabel: '',
     heroSubtitle: 'Mitteilung vom Orga-Team.'
   }
 };
+
+const isCampaignTemplate = (templateKey: string): boolean =>
+  templateKey === 'newsletter' || templateKey === 'event_update' || templateKey === 'free_form';
 
 const buildHtmlDocument = (input: {
   templateKey: string;
@@ -187,9 +190,14 @@ const buildHtmlDocument = (input: {
     ? `<div style="margin-top:8px;"><a href="${escapeHtml(impressumUrl)}" target="_blank" rel="noopener noreferrer">Impressum</a> · <a href="${escapeHtml(datenschutzUrl)}" target="_blank" rel="noopener noreferrer">Datenschutz</a></div>`
     : '';
   const dateHtml = eventDateText ? `<div>${escapeHtml(eventName)} · ${escapeHtml(eventDateText)}</div>` : `<div>${escapeHtml(eventName)}</div>`;
-  const ctaBlock = input.templateKey === 'registration_received' && input.verificationUrl
-    ? `<p style="margin-top:18px;"><a class="btn" href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer">Anmeldung bestaetigen</a></p><p class="muted">Falls der Button nicht funktioniert: ${escapeHtml(input.verificationUrl)}</p>`
-    : '';
+  const campaignCtaUrl = normalizePublicUrl(input.data.ctaUrl);
+  const campaignCtaText = isPresentValue(input.data.ctaText) ? toStringValue(input.data.ctaText) : 'Mehr erfahren';
+  const ctaBlock =
+    input.templateKey === 'registration_received' && input.verificationUrl
+      ? `<p style="margin-top:18px;"><a class="btn" href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer">Anmeldung bestaetigen</a></p><p class="muted">Falls der Button nicht funktioniert: ${escapeHtml(input.verificationUrl)}</p>`
+      : isCampaignTemplate(input.templateKey) && campaignCtaUrl
+        ? `<p style="margin-top:18px;"><a class="btn" href="${escapeHtml(campaignCtaUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(campaignCtaText)}</a></p><p class="muted">Falls der Button nicht funktioniert: ${escapeHtml(campaignCtaUrl)}</p>`
+        : '';
 
   return [
     '<!doctype html>',
@@ -204,7 +212,9 @@ const buildHtmlDocument = (input: {
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="wrapper">',
     '<tr><td align="center">',
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="container">',
-    `<tr><td class="hero"><span class="badge">${escapeHtml(mailLabel)}</span><h1 class="title">${escapeHtml(eventName)}</h1><p class="subtitle">${escapeHtml(heroSubtitle)}</p></td></tr>`,
+    `<tr><td class="hero">${
+      mailLabel ? `<span class="badge">${escapeHtml(mailLabel)}</span>` : ''
+    }<h1 class="title">${escapeHtml(eventName)}</h1><p class="subtitle">${escapeHtml(heroSubtitle)}</p></td></tr>`,
     `<tr><td class="content">${buildInfoBoxes(input.data)}${input.bodyHtmlRendered}${ctaBlock}</td></tr>`,
     `<tr><td class="footer">${dateHtml}${contactHtml}${legalLinks}</td></tr>`,
     '</table>',

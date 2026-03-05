@@ -33,6 +33,23 @@ type RecipientFilter = {
 const hasRecipientFilter = (filters: RecipientFilter | undefined): boolean =>
   Boolean(filters?.acceptanceStatus || filters?.registrationStatus || filters?.paymentStatus || filters?.classId);
 
+type TemplateScope = 'process' | 'campaign';
+
+const CAMPAIGN_TEMPLATE_KEYS = new Set(['newsletter', 'event_update', 'free_form']);
+const DISABLED_LIFECYCLE_EVENTS = new Set<LifecycleInput['eventType']>(['preselection']);
+
+const getTemplateScope = (templateKey: string): TemplateScope =>
+  CAMPAIGN_TEMPLATE_KEYS.has(templateKey) ? 'campaign' : 'process';
+
+const getTemplateChannels = (templateKey: string): string[] =>
+  getTemplateScope(templateKey) === 'campaign' ? ['campaign'] : ['detail', 'quick_action'];
+
+const assertCampaignTemplateAllowed = (templateKey: string) => {
+  if (!CAMPAIGN_TEMPLATE_KEYS.has(templateKey)) {
+    throw new Error('TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN');
+  }
+};
+
 const queueMailSchema = z
   .object({
     eventId: z.string().uuid(),
@@ -909,7 +926,13 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
 export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: string | null) => {
   const db = await getDb();
   await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
+  if (DISABLED_LIFECYCLE_EVENTS.has(input.eventType)) {
+    throw new Error('TEMPLATE_NOT_ALLOWED_IN_PROCESS');
+  }
   const templateKey = templateKeyFromEventType(input.eventType);
+  if (getTemplateScope(templateKey) !== 'process') {
+    throw new Error('TEMPLATE_NOT_ALLOWED_IN_PROCESS');
+  }
   let template: Awaited<ReturnType<typeof resolveTemplate>>;
   try {
     template = await resolveTemplate(templateKey, input.templateVersion);
@@ -1341,6 +1364,8 @@ export const listMailTemplates = async () => {
       return {
         key: item.key,
         label: item.label ?? item.key,
+        scope: getTemplateScope(item.key),
+        channels: getTemplateChannels(item.key),
         subject: selected?.subject ?? '',
         bodyText: selected?.bodyText ?? '',
         bodyHtml: selected?.bodyHtml ?? null,
@@ -1418,6 +1443,8 @@ export const createMailTemplate = async (input: TemplateCreateInput, actorUserId
       return {
         key: templateRow.key,
         label: templateRow.label ?? templateRow.key,
+        scope: getTemplateScope(templateRow.key),
+        channels: getTemplateChannels(templateRow.key),
         subject: versionRow?.subject ?? input.subject,
         bodyText: versionRow?.bodyText ?? input.bodyText,
         bodyHtml: versionRow?.bodyHtml ?? input.bodyHtml ?? null,
@@ -1491,6 +1518,8 @@ export const patchMailTemplate = async (templateKey: string, input: TemplatePatc
   return {
     key: existing.templateKey,
     label: input.label ?? existing.description ?? existing.templateKey,
+    scope: getTemplateScope(existing.templateKey),
+    channels: getTemplateChannels(existing.templateKey),
     subject: selected?.subject ?? '',
     bodyText: selected?.bodyText ?? '',
     bodyHtml: selected?.bodyHtml ?? null,
@@ -1831,25 +1860,32 @@ export const searchMailRecipients = async (input: SearchRecipientsInput) => {
 };
 
 export const queueCommunicationSend = async (input: CommunicationSendInput, actorUserId: string | null) =>
-  queueMail(
-    {
-      eventId: input.eventId,
-      templateId: input.templateId,
-      templateKey: input.templateKey,
-      templateVersion: input.templateVersion,
-      subject: input.subject,
-      subjectOverride: input.subjectOverride,
-      bodyOverride: input.bodyOverride,
-      bodyHtmlOverride: input.bodyHtmlOverride,
-      templateData: input.templateData,
-      sendAfter: input.sendAfter,
-      recipientEmails: input.additionalEmails,
-      driverPersonIds: input.driverPersonIds,
-      entryIds: input.entryIds,
-      filters: input.filters
-    },
-    actorUserId
-  );
+  (async () => {
+    const templateKey = input.templateKey ?? input.templateId;
+    if (!templateKey) {
+      throw new Error('TEMPLATE_NOT_FOUND');
+    }
+    assertCampaignTemplateAllowed(templateKey);
+    return queueMail(
+      {
+        eventId: input.eventId,
+        templateId: input.templateId,
+        templateKey: input.templateKey,
+        templateVersion: input.templateVersion,
+        subject: input.subject,
+        subjectOverride: input.subjectOverride,
+        bodyOverride: input.bodyOverride,
+        bodyHtmlOverride: input.bodyHtmlOverride,
+        templateData: input.templateData,
+        sendAfter: input.sendAfter,
+        recipientEmails: input.additionalEmails,
+        driverPersonIds: input.driverPersonIds,
+        entryIds: input.entryIds,
+        filters: input.filters
+      },
+      actorUserId
+    );
+  })();
 
 export const validateQueueMailInput = (payload: unknown) => queueMailSchema.parse(payload);
 export const validateReminderInput = (payload: unknown) => reminderSchema.parse(payload);

@@ -2176,6 +2176,7 @@
         "tags": [
           "admin"
         ],
+        "description": "Process-only endpoint. Campaign templates are not allowed. preselection is intentionally blocked and returns TEMPLATE_NOT_ALLOWED_IN_PROCESS.",
         "responses": {
           "200": {
             "description": "OK"
@@ -2230,6 +2231,25 @@
               }
             }
           },
+          "422": {
+            "description": "Unprocessable Entity (code: TEMPLATE_NOT_ALLOWED_IN_PROCESS)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                },
+                "examples": {
+                  "preselection_blocked": {
+                    "value": {
+                      "ok": false,
+                      "code": "TEMPLATE_NOT_ALLOWED_IN_PROCESS",
+                      "message": "Template is not allowed in process endpoint"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Error",
             "content": {
@@ -2263,6 +2283,7 @@
                   },
                   "eventType": {
                     "type": "string",
+                    "description": "Lifecycle process event. preselection is currently blocked and returns TEMPLATE_NOT_ALLOWED_IN_PROCESS.",
                     "enum": [
                       "registration_received",
                       "preselection",
@@ -6053,6 +6074,7 @@
         "tags": [
           "admin"
         ],
+        "description": "Lists templates with delivery scope metadata. Frontend should use scope=campaign for campaign composer filtering.",
         "security": [
           {
             "bearerAuth": []
@@ -6986,7 +7008,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates.",
+        "description": "Campaign endpoint only. Allowed template keys: newsletter, event_update, free_form. Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates.",
         "security": [
           {
             "bearerAuth": []
@@ -7000,11 +7022,35 @@
                 "$ref": "#/components/schemas/ResolveRecipientsRequest"
               },
               "examples": {
+                "filter_only": {
+                  "value": {
+                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
+                    "classId": "7d949dae-d3c4-4534-a8e5-67015c6fb734",
+                    "acceptanceStatus": "accepted",
+                    "registrationStatus": "submitted_verified",
+                    "paymentStatus": "due"
+                  }
+                },
+                "ids_only": {
+                  "value": {
+                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
+                    "driverPersonIds": [
+                      "96da7e10-4277-4e59-96e8-f2c112624486"
+                    ],
+                    "entryIds": [
+                      "07b62666-6e91-4899-98f6-b97535809522"
+                    ],
+                    "additionalEmails": [
+                      "extra@example.com"
+                    ]
+                  }
+                },
                 "union_all_sources": {
                   "value": {
                     "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
                     "classId": "7d949dae-d3c4-4534-a8e5-67015c6fb734",
                     "acceptanceStatus": "accepted",
+                    "registrationStatus": "submitted_verified",
                     "paymentStatus": "due",
                     "driverPersonIds": [
                       "96da7e10-4277-4e59-96e8-f2c112624486"
@@ -7207,6 +7253,33 @@
                 }
               },
               "examples": {
+                "filter_only": {
+                  "value": {
+                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
+                    "templateKey": "newsletter",
+                    "filters": {
+                      "classId": "7d949dae-d3c4-4534-a8e5-67015c6fb734",
+                      "acceptanceStatus": "accepted",
+                      "registrationStatus": "submitted_verified",
+                      "paymentStatus": "due"
+                    }
+                  }
+                },
+                "ids_only": {
+                  "value": {
+                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
+                    "templateKey": "event_update",
+                    "driverPersonIds": [
+                      "96da7e10-4277-4e59-96e8-f2c112624486"
+                    ],
+                    "entryIds": [
+                      "07b62666-6e91-4899-98f6-b97535809522"
+                    ],
+                    "additionalEmails": [
+                      "extra@example.com"
+                    ]
+                  }
+                },
                 "union_all_sources": {
                   "value": {
                     "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
@@ -7214,6 +7287,7 @@
                     "filters": {
                       "classId": "7d949dae-d3c4-4534-a8e5-67015c6fb734",
                       "acceptanceStatus": "accepted",
+                      "registrationStatus": "submitted_verified",
                       "paymentStatus": "due"
                     },
                     "driverPersonIds": [
@@ -7297,6 +7371,25 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity (code: TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                },
+                "examples": {
+                  "template_not_allowed": {
+                    "value": {
+                      "ok": false,
+                      "code": "TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN",
+                      "message": "Template is not allowed in campaign endpoint"
+                    }
+                  }
                 }
               }
             }
@@ -8054,6 +8147,7 @@
         "required": [
           "key",
           "label",
+          "scope",
           "subject",
           "bodyText",
           "version",
@@ -8065,6 +8159,19 @@
           },
           "label": {
             "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "process",
+              "campaign"
+            ]
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "subject": {
             "type": "string"

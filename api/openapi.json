@@ -5968,7 +5968,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Changes the class for one entry. Optionally mirrors class change to the directly linked backup entry.",
+        "description": "Changes the class for one entry based on classId. Vehicle type mismatch is not a hard blocker; vehicle type can be aligned to target class type and optionally mirrored to a linked backup entry.",
         "parameters": [
           {
             "name": "id",
@@ -8125,6 +8125,10 @@
           "applyToBackupVehicle": {
             "type": "boolean",
             "default": false
+          },
+          "allowVehicleTypeChange": {
+            "type": "boolean",
+            "default": true
           }
         }
       },
@@ -8133,7 +8137,11 @@
         "required": [
           "ok",
           "entryId",
-          "classId"
+          "classId",
+          "vehicleTypeBefore",
+          "vehicleTypeAfter",
+          "backupVehicleUpdated",
+          "warnings"
         ],
         "properties": {
           "ok": {
@@ -8147,6 +8155,29 @@
           "classId": {
             "type": "string",
             "format": "uuid"
+          },
+          "vehicleTypeBefore": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "moto"
+            ]
+          },
+          "vehicleTypeAfter": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "moto"
+            ]
+          },
+          "backupVehicleUpdated": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

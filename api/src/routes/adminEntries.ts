@@ -48,7 +48,8 @@ const techStatusPatchSchema = z.object({
 
 const entryClassPatchSchema = z.object({
   classId: z.string().uuid(),
-  applyToBackupVehicle: z.boolean().optional().default(false)
+  applyToBackupVehicle: z.boolean().optional().default(false),
+  allowVehicleTypeChange: z.boolean().optional().default(true)
 });
 
 const entryNotesPatchSchema = z
@@ -689,32 +690,37 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
     if (!targetClass || targetClass.eventId !== existing.eventId) {
       throw new Error('CLASS_NOT_FOUND');
     }
-    if (targetClass.vehicleType !== existing.vehicleType) {
-      throw new Error('CLASS_INCOMPATIBLE_VEHICLE_TYPE');
-    }
+    const warnings: string[] = [];
+    const updateEntryIds = new Set<string>([entryId]);
+    let backupEntryId: string | null = null;
 
-    const targetEntryIds = new Set<string>([entryId]);
     if (input.applyToBackupVehicle) {
       if (existing.isBackupVehicle && existing.backupOfEntryId) {
-        targetEntryIds.add(existing.backupOfEntryId);
+        backupEntryId = existing.backupOfEntryId;
       } else {
         const linkedRows = await tx
           .select({ id: entry.id })
           .from(entry)
           .where(and(eq(entry.backupOfEntryId, entryId), sql`${entry.deletedAt} is null`))
           .limit(1);
-        if (linkedRows[0]) {
-          targetEntryIds.add(linkedRows[0].id);
+        if (linkedRows[0]?.id) {
+          backupEntryId = linkedRows[0].id;
         }
+      }
+      if (!backupEntryId) {
+        warnings.push('No linked backup entry found to update.');
+      } else {
+        updateEntryIds.add(backupEntryId);
       }
     }
 
-    const targetIds = Array.from(targetEntryIds);
+    const targetIds = Array.from(updateEntryIds);
     const targetRows = await tx
       .select({
         id: entry.id,
         eventId: entry.eventId,
         classId: entry.classId,
+        vehicleId: entry.vehicleId,
         startNumberNorm: entry.startNumberNorm,
         deletedAt: entry.deletedAt,
         vehicleType: vehicle.vehicleType
@@ -723,9 +729,27 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
       .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
       .where(inArray(entry.id, targetIds));
 
+    const updateRows = targetRows.filter((row) => {
+      if (row.deletedAt || row.eventId !== existing.eventId) {
+        if (row.id === entryId) {
+          throw new Error('INVALID_STATE');
+        }
+        warnings.push('Linked backup entry was skipped because it is not active.');
+        updateEntryIds.delete(row.id);
+        return false;
+      }
+      return true;
+    });
+
+    if (!updateRows.some((row) => row.id === entryId)) {
+      throw new Error('INVALID_STATE');
+    }
+
+    const updateIds = updateRows.map((row) => row.id);
+
     for (const targetRow of targetRows) {
-      if (targetRow.deletedAt || targetRow.eventId !== existing.eventId || targetRow.vehicleType !== targetClass.vehicleType) {
-        throw new Error('INVALID_STATE');
+      if (!updateEntryIds.has(targetRow.id)) {
+        continue;
       }
       if (!targetRow.startNumberNorm) {
         continue;
@@ -743,7 +767,7 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
         )
         .limit(1);
       const conflict = conflictRows[0];
-      if (conflict && !targetEntryIds.has(conflict.id)) {
+      if (conflict && !updateEntryIds.has(conflict.id)) {
         throw new Error('START_NUMBER_CONFLICT');
       }
     }
@@ -754,11 +778,28 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
         classId: input.classId,
         updatedAt: now
       })
-      .where(inArray(entry.id, targetIds))
+      .where(inArray(entry.id, updateIds))
       .returning({
         id: entry.id,
         classId: entry.classId
       });
+
+    let vehicleTypeAfter = existing.vehicleType;
+    if (input.allowVehicleTypeChange) {
+      const vehicleIds = updateRows.map((row) => row.vehicleId);
+      if (vehicleIds.length > 0) {
+        await tx
+          .update(vehicle)
+          .set({
+            vehicleType: targetClass.vehicleType,
+            updatedAt: now
+          })
+          .where(inArray(vehicle.id, vehicleIds));
+      }
+      vehicleTypeAfter = targetClass.vehicleType;
+    } else if (existing.vehicleType !== targetClass.vehicleType) {
+      warnings.push('Vehicle type change skipped by request; class and vehicle type now differ.');
+    }
 
     await writeAuditLog(tx as never, {
       eventId: existing.eventId,
@@ -773,7 +814,17 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
     });
 
     const updatedCurrent = updatedRows.find((row) => row.id === entryId);
-    return updatedCurrent ?? null;
+    if (!updatedCurrent) {
+      throw new Error('INVALID_STATE');
+    }
+    return {
+      id: updatedCurrent.id,
+      classId: updatedCurrent.classId,
+      vehicleTypeBefore: existing.vehicleType,
+      vehicleTypeAfter,
+      backupVehicleUpdated: Boolean(backupEntryId && updateEntryIds.has(backupEntryId)),
+      warnings
+    };
   });
 };
 

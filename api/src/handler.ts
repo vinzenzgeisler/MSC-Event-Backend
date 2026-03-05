@@ -1703,7 +1703,15 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!result) {
         return errorJson(404, 'Entry not found', undefined, 'ENTRY_NOT_FOUND');
       }
-      return json(200, { ok: true, entryId: result.id, classId: result.classId });
+      return json(200, {
+        ok: true,
+        entryId: result.id,
+        classId: result.classId,
+        vehicleTypeBefore: result.vehicleTypeBefore,
+        vehicleTypeAfter: result.vehicleTypeAfter,
+        backupVehicleUpdated: result.backupVehicleUpdated,
+        warnings: result.warnings
+      });
     } catch (error) {
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
@@ -1713,9 +1721,6 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') {
         return errorJson(404, 'Class not found', undefined, 'CLASS_NOT_FOUND');
-      }
-      if (error instanceof Error && error.message === 'CLASS_INCOMPATIBLE_VEHICLE_TYPE') {
-        return errorJson(409, 'Class does not match vehicle type', undefined, 'CLASS_INCOMPATIBLE_VEHICLE_TYPE');
       }
       if (error instanceof Error && error.message === 'START_NUMBER_CONFLICT') {
         return errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');

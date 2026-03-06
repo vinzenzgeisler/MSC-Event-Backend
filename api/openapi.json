@@ -37,6 +37,15 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiError"
+                },
+                "examples": {
+                  "validation_error": {
+                    "value": {
+                      "ok": false,
+                      "code": "VALIDATION_ERROR",
+                      "message": "Validation failed"
+                    }
+                  }
                 }
               }
             }
@@ -67,6 +76,15 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiError"
+                },
+                "examples": {
+                  "internal_error": {
+                    "value": {
+                      "ok": false,
+                      "code": "INTERNAL_ERROR",
+                      "message": "Patch entry class failed"
+                    }
+                  }
                 }
               }
             }
@@ -107,6 +125,15 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiError"
+                },
+                "examples": {
+                  "validation_error": {
+                    "value": {
+                      "ok": false,
+                      "code": "VALIDATION_ERROR",
+                      "message": "Validation failed"
+                    }
+                  }
                 }
               }
             }
@@ -137,6 +164,15 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiError"
+                },
+                "examples": {
+                  "internal_error": {
+                    "value": {
+                      "ok": false,
+                      "code": "TEMPLATE_RENDER_FAILED",
+                      "message": "Recipient search failed"
+                    }
+                  }
                 }
               }
             }

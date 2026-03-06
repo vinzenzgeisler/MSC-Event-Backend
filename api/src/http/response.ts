@@ -16,8 +16,10 @@ export const json = (
     headers: {
       'content-type': 'application/json',
       'access-control-allow-origin': origin,
-      'access-control-allow-headers': 'content-type,authorization',
-      'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS'
+      'access-control-allow-headers':
+        'Content-Type,content-type,Authorization,authorization,X-Requested-With,x-requested-with,X-Amz-Date,x-amz-date,X-Amz-Security-Token,x-amz-security-token,X-Api-Key,x-api-key',
+      'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
+      'access-control-expose-headers': 'content-type'
     },
     body: JSON.stringify(body)
   };

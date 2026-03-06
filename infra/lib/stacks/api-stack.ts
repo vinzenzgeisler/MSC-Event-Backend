@@ -271,7 +271,14 @@ export class ApiStack extends Stack {
                 apigwv2.CorsHttpMethod.DELETE,
                 apigwv2.CorsHttpMethod.OPTIONS
               ],
-              allowHeaders: ['content-type', 'authorization'],
+              allowHeaders: [
+                'content-type',
+                'authorization',
+                'x-requested-with',
+                'x-amz-date',
+                'x-amz-security-token',
+                'x-api-key'
+              ],
               maxAge: cdk.Duration.hours(1)
             }
           }

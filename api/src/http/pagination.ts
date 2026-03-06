@@ -55,6 +55,16 @@ const compareValues = (a: unknown, b: unknown, sortDir: 'asc' | 'desc') => {
   if (typeof a === 'number' && typeof b === 'number') {
     return (a - b) * direction;
   }
+  if (a instanceof Date && b instanceof Date) {
+    return (a.getTime() - b.getTime()) * direction;
+  }
+  if (typeof a === 'string' && typeof b === 'string') {
+    const aTime = Date.parse(a);
+    const bTime = Date.parse(b);
+    if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) {
+      return (aTime - bTime) * direction;
+    }
+  }
   return String(a).localeCompare(String(b)) * direction;
 };
 

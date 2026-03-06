@@ -3697,10 +3697,36 @@
         "tags": [
           "admin"
         ],
-        "description": "Lists active (non-deleted) entries. q supports multi-token AND search across firstName, lastName, full name, email and startNumber.",
+        "description": "Lists active (non-deleted) entries. createdAt is immutable (creation timestamp), updatedAt is last modification timestamp. q supports multi-token AND search across firstName, lastName, full name, email and startNumber. For sortBy=createdAt, sortDir=desc this endpoint is deterministic; ties are resolved by id with the same sort direction.",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "Active entries list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdminEntry"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ListMeta"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "entries",
+                    "meta"
+                  ]
+                }
+              }
+            }
           },
           "400": {
             "description": "Bad Request",
@@ -3763,6 +3789,113 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "classId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "acceptanceStatus",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registrationStatus",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "paymentStatus",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "checkinIdVerified",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "techStatus",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            }
+          },
+          {
+            "name": "sortBy",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "className",
+                "driverLastName",
+                "driverFirstName",
+                "createdAt",
+                "updatedAt",
+                "startNumberNorm",
+                "deletedAt"
+              ],
+              "default": "className"
+            }
+          },
+          {
+            "name": "sortDir",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "asc"
+            }
+          }
+        ],
         "security": [
           {
             "bearerAuth": []
@@ -8208,6 +8341,16 @@
                 "type": "null"
               }
             ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Immutable creation timestamp in ISO-8601 with timezone (UTC)."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last modification timestamp in ISO-8601 with timezone (UTC)."
           }
         }
       },

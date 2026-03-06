@@ -82,7 +82,17 @@ export const parseListQuery = (
 export const paginateAndSortRows = <T extends Record<string, unknown>>(rows: T[], query: ListQueryInput) => {
   const sorted = [...rows];
   if (query.sortBy) {
-    sorted.sort((left, right) => compareValues(left[query.sortBy!], right[query.sortBy!], query.sortDir));
+    sorted.sort((left, right) => {
+      const primary = compareValues(left[query.sortBy!], right[query.sortBy!], query.sortDir);
+      if (primary !== 0) {
+        return primary;
+      }
+      // Stable deterministic tiebreaker for cursor pagination (important for createdAt duplicates).
+      if (typeof left.id === 'string' && typeof right.id === 'string') {
+        return compareValues(left.id, right.id, query.sortDir);
+      }
+      return 0;
+    });
   }
 
   const total = sorted.length;
@@ -103,4 +113,3 @@ export const paginateAndSortRows = <T extends Record<string, unknown>>(rows: T[]
 
   return { items, meta };
 };
-

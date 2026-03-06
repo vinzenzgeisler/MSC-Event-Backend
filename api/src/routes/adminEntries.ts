@@ -169,14 +169,24 @@ const listEntriesByDeleteState = async (
     conditions.push(eq(entry.techStatus, query.techStatus));
   }
   if (query.q) {
-    const pattern = `%${query.q}%`;
-    conditions.push(
-      or(
+    const tokens = query.q
+      .trim()
+      .split(/\s+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    const tokenConditions = tokens.map((token) => {
+      const pattern = `%${token}%`;
+      return or(
         ilike(person.firstName, pattern),
         ilike(person.lastName, pattern),
-        ilike(entry.startNumberNorm, pattern)
-      ) as SQL<unknown>
-    );
+        ilike(person.email, pattern),
+        ilike(entry.startNumberNorm, pattern),
+        sql`lower(trim(coalesce(${person.firstName}, '') || ' ' || coalesce(${person.lastName}, ''))) like lower(${pattern})`
+      ) as SQL<unknown>;
+    });
+    if (tokenConditions.length > 0) {
+      conditions.push(and(...tokenConditions) as SQL<unknown>);
+    }
   }
 
   const rows = await db

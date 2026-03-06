@@ -49,7 +49,7 @@ export const getDashboardSummary = async (eventId: string) => {
     db
       .select({ value: sql<number>`count(*)::int` })
       .from(entry)
-      .where(eq(entry.eventId, eventId)),
+      .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`)),
     db
       .select({ value: sql<number>`count(*)::int` })
       .from(invoice)
@@ -57,7 +57,7 @@ export const getDashboardSummary = async (eventId: string) => {
     db
       .select({ value: sql<number>`count(*)::int` })
       .from(entry)
-      .where(and(eq(entry.eventId, eventId), eq(entry.checkinIdVerified, false))),
+      .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`, eq(entry.checkinIdVerified, false))),
     db
       .select({ value: sql<number>`count(*)::int` })
       .from(emailOutbox)
@@ -81,7 +81,7 @@ export const getDashboardSummary = async (eventId: string) => {
         count: sql<number>`count(${entry.id})::int`
       })
       .from(eventClass)
-      .leftJoin(entry, and(eq(entry.classId, eventClass.id), eq(entry.eventId, eventId)))
+      .leftJoin(entry, and(eq(entry.classId, eventClass.id), eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`))
       .where(eq(eventClass.eventId, eventId))
       .groupBy(eventClass.id, eventClass.name)
       .orderBy(asc(eventClass.name)),
@@ -96,7 +96,7 @@ export const getDashboardSummary = async (eventId: string) => {
       .from(entry)
       .innerJoin(person, eq(entry.driverPersonId, person.id))
       .innerJoin(eventClass, eq(entry.classId, eventClass.id))
-      .where(eq(entry.eventId, eventId))
+      .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`))
       .orderBy(desc(entry.createdAt))
       .limit(RECENT_ENTRIES_LIMIT),
     db
@@ -109,7 +109,7 @@ export const getDashboardSummary = async (eventId: string) => {
       .from(entry)
       .innerJoin(person, eq(entry.driverPersonId, person.id))
       .innerJoin(eventClass, eq(entry.classId, eventClass.id))
-      .where(eq(entry.eventId, eventId))
+      .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`))
   ]);
 
   const now = new Date();

@@ -717,6 +717,7 @@
         "tags": [
           "admin"
         ],
+        "description": "Dashboard counters are based on active (non-deleted) entries for the selected event.",
         "responses": {
           "200": {
             "description": "Dashboard summary",
@@ -3696,6 +3697,7 @@
         "tags": [
           "admin"
         ],
+        "description": "Lists active (non-deleted) entries. q supports multi-token AND search across firstName, lastName, full name, email and startNumber.",
         "responses": {
           "200": {
             "description": "OK"

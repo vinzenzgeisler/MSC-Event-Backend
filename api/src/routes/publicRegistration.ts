@@ -371,8 +371,11 @@ const assertRegistrationOpen = async (eventId: string) => {
   if (ev.status !== 'open') {
     throw new Error('EVENT_NOT_OPEN');
   }
+  if (!ev.registrationOpenAt) {
+    throw new Error('REGISTRATION_NOT_OPEN');
+  }
   const now = new Date();
-  if (ev.registrationOpenAt && now < ev.registrationOpenAt) {
+  if (now < ev.registrationOpenAt) {
     throw new Error('REGISTRATION_NOT_OPEN');
   }
   if (ev.registrationCloseAt && now > ev.registrationCloseAt) {
@@ -951,7 +954,7 @@ export const getPublicCurrentEventWithClasses = async () => {
   let reason: 'event_not_open' | 'before_window' | 'after_window' | null = null;
   if (current.status !== 'open') {
     reason = 'event_not_open';
-  } else if (current.registrationOpenAt && now < current.registrationOpenAt) {
+  } else if (!current.registrationOpenAt || now < current.registrationOpenAt) {
     reason = 'before_window';
   } else if (current.registrationCloseAt && now > current.registrationCloseAt) {
     reason = 'after_window';

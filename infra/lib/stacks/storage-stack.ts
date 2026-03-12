@@ -25,14 +25,7 @@ export class StorageStack extends Stack {
       enforceSSL: true,
       removalPolicy,
       autoDeleteObjects: props.config.removalPolicy === 'destroy',
-      lifecycleRules: [
-        {
-          id: 'expire-upload-objects',
-          enabled: true,
-          prefix: 'uploads/',
-          expiration: props.config.stage === 'prod' ? Duration.days(30) : Duration.days(7)
-        }
-      ],
+      lifecycleRules: [],
       ...(assetsCorsOrigins.length > 0
         ? {
             cors: [

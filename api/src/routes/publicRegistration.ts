@@ -20,8 +20,7 @@ import {
 import { getPresignedAssetsUploadUrl, doesAssetObjectExist } from '../docs/storage';
 import { normalizeStartNumber } from '../domain/startNumber';
 import { isPgUniqueViolation } from '../http/dbErrors';
-import { buildPublicVerificationUrl } from '../mail/verificationUrl';
-import { queueMail } from './adminMail';
+import { DuplicateRequestError, queueLifecycleMail } from './adminMail';
 
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const nonEmptySchema = z.string().trim().min(1);
@@ -796,62 +795,57 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       };
     });
 
-    if (created.replay) {
+    if (created.replay && created.response.confirmationMailSent) {
       return created.response;
     }
 
-    let confirmationMailSent = false;
     const primaryEntryId = created.response.entryIds[0];
-    const verificationUrl = buildPublicVerificationUrl(primaryEntryId, created.response.verificationToken);
+    if (!primaryEntryId) {
+      throw new Error('REGISTRATION_CONFIRMATION_QUEUE_FAILED');
+    }
+
     try {
-      const queued = await queueMail(
+      await queueLifecycleMail(
         {
           eventId: input.eventId,
-          templateId: 'registration_received',
-          recipientEmails: [input.driver.email],
-          templateData: {
-            eventName: created.eventName,
-            driverName: `${input.driver.firstName} ${input.driver.lastName}`.trim(),
-            entryId: primaryEntryId,
-            groupId: created.response.groupId,
-            entryCount: created.response.entryCount,
-            verificationToken: created.response.verificationToken,
-            verificationUrl
-          }
+          entryId: primaryEntryId,
+          eventType: 'registration_received',
+          includeDriverNote: false,
+          allowDuplicate: false
         },
         null
       );
-      if (queued.queued > 0) {
-        confirmationMailSent = true;
-        await db.transaction(async (tx) => {
-          await tx
-            .update(entry)
-            .set({
-              confirmationMailSentAt: now,
-              updatedAt: now
-            })
-            .where(eq(entry.registrationGroupId, created.response.groupId));
-          if ('clientSubmissionKey' in input) {
-            await tx
-              .update(publicEntrySubmission)
-              .set({
-                responsePayload: {
-                  ...created.response,
-                  confirmationMailSent: true
-                },
-                updatedAt: now
-              })
-              .where(and(eq(publicEntrySubmission.eventId, input.eventId), eq(publicEntrySubmission.clientSubmissionKey, input.clientSubmissionKey)));
-          }
-        });
+    } catch (error) {
+      if (!(error instanceof DuplicateRequestError)) {
+        throw new Error('REGISTRATION_CONFIRMATION_QUEUE_FAILED');
       }
-    } catch {
-      confirmationMailSent = false;
     }
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(entry)
+        .set({
+          confirmationMailSentAt: now,
+          updatedAt: now
+        })
+        .where(eq(entry.registrationGroupId, created.response.groupId));
+      if ('clientSubmissionKey' in input) {
+        await tx
+          .update(publicEntrySubmission)
+          .set({
+            responsePayload: {
+              ...created.response,
+              confirmationMailSent: true
+            },
+            updatedAt: now
+          })
+          .where(and(eq(publicEntrySubmission.eventId, input.eventId), eq(publicEntrySubmission.clientSubmissionKey, input.clientSubmissionKey)));
+      }
+    });
 
     return {
       ...created.response,
-      confirmationMailSent
+      confirmationMailSent: true
     };
   } catch (error) {
     if (

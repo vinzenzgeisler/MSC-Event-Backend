@@ -249,6 +249,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'
         );
       }
+      if (error instanceof Error && error.message === 'REGISTRATION_CONFIRMATION_QUEUE_FAILED') {
+        return errorJson(500, 'Registration created but confirmation mail queue failed', undefined, 'REGISTRATION_CONFIRMATION_QUEUE_FAILED');
+      }
       return errorJson(500, 'Public registration failed');
     }
   }
@@ -334,6 +337,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           },
           'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'
         );
+      }
+      if (error instanceof Error && error.message === 'REGISTRATION_CONFIRMATION_QUEUE_FAILED') {
+        return errorJson(500, 'Registration created but confirmation mail queue failed', undefined, 'REGISTRATION_CONFIRMATION_QUEUE_FAILED');
       }
       if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
         return errorJson(

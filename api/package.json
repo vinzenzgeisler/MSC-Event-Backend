@@ -11,7 +11,8 @@
     "db:migrate": "node scripts/run-sql-migrations.js",
     "db:migrate:drizzle": "drizzle-kit migrate",
     "seed:dev-current-event": "node scripts/seed-dev-current-event.js",
-    "media:repair-vehicle-image-keys": "node scripts/repair-vehicle-image-keys.js"
+    "media:repair-vehicle-image-keys": "node scripts/repair-vehicle-image-keys.js",
+    "media:restore-vehicle-image-keys": "node scripts/restore-vehicle-image-keys.js"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.933.0",

@@ -216,10 +216,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'IMAGE_UPLOAD_INVALID') {
         return errorJson(
-          400,
-          'Validation failed',
+          422,
+          'Image upload invalid or not finalized',
           undefined,
-          'VALIDATION_ERROR',
+          'IMAGE_UPLOAD_INVALID',
           [{
             field: 'vehicle.imageUploadId|backupVehicle.imageUploadId',
             code: 'invalid_or_not_finalized',
@@ -311,10 +311,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'IMAGE_UPLOAD_INVALID') {
         return errorJson(
-          400,
-          'Validation failed',
+          422,
+          'Image upload invalid or not finalized',
           undefined,
-          'VALIDATION_ERROR',
+          'IMAGE_UPLOAD_INVALID',
           [{
             field: 'entries[].vehicle.imageUploadId|entries[].backupVehicle.imageUploadId',
             code: 'invalid_or_not_finalized',

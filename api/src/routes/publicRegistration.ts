@@ -189,24 +189,35 @@ const driverInputSchema = z.object({
   }
 });
 
-const vehicleInputSchema = z.object({
-  vehicleType: z.enum(['moto', 'auto']).optional(),
-  make: nonEmptySchema,
-  model: nonEmptySchema,
-  year: z
-    .preprocess(parseNumericDigits, z.number().int().min(1900).max(new Date().getUTCFullYear() + 1))
-    .optional(),
-  displacementCcm: z
-    .preprocess(parseNumericDigits, z.number().int().min(10).max(99999)),
-  engineType: nonEmptySchema,
-  cylinders: z.preprocess(parseCylinders, z.number().int().min(1).max(99)),
-  brakes: nonEmptySchema,
-  vehicleHistory: nonEmptySchema,
-  ownerName: nonEmptySchema.optional(),
-  startNumberRaw: z.string().regex(/^[a-zA-Z0-9]{1,6}$/).optional(),
-  imageS3Key: z.string().optional(),
-  imageUploadId: z.string().uuid().optional()
-});
+const vehicleInputSchema = z
+  .object({
+    vehicleType: z.enum(['moto', 'auto']).optional(),
+    make: nonEmptySchema,
+    model: nonEmptySchema,
+    year: z
+      .preprocess(parseNumericDigits, z.number().int().min(1900).max(new Date().getUTCFullYear() + 1))
+      .optional(),
+    displacementCcm: z
+      .preprocess(parseNumericDigits, z.number().int().min(10).max(99999)),
+    engineType: nonEmptySchema,
+    cylinders: z.preprocess(parseCylinders, z.number().int().min(1).max(99)),
+    brakes: nonEmptySchema,
+    vehicleHistory: nonEmptySchema,
+    ownerName: nonEmptySchema.optional(),
+    startNumberRaw: z.string().regex(/^[a-zA-Z0-9]{1,6}$/).optional(),
+    imageS3Key: z.string().optional(),
+    imageUploadId: z.string().uuid().optional()
+  })
+  .superRefine((value, ctx) => {
+    // Public clients must reference finalized uploads by id; direct S3 keys are not accepted.
+    if (value.imageS3Key !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['imageS3Key'],
+        message: 'imageS3Key is not allowed; use imageUploadId from /public/uploads/vehicle-image/finalize'
+      });
+    }
+  });
 
 const consentInputSchema = z.object({
   termsAccepted: z.literal(true),
@@ -592,9 +603,8 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         }
 
         const resolveVehicleImageS3Key = async (vehicleInput: VehicleInput): Promise<string | null> => {
-          let imageS3Key: string | null = vehicleInput.imageS3Key ?? null;
           if (!vehicleInput.imageUploadId) {
-            return imageS3Key;
+            return null;
           }
           const uploadRows = await tx
             .select({
@@ -610,8 +620,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
           if (!upload || upload.eventId !== input.eventId || upload.status !== 'finalized') {
             throw new Error('IMAGE_UPLOAD_INVALID');
           }
-          imageS3Key = upload.s3Key;
-          return imageS3Key;
+          return upload.s3Key;
         };
 
         const createVehicleRecord = async (vehicleInput: VehicleInput, resolvedStartNumberRaw: string | null) => {

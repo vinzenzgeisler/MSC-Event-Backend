@@ -22,7 +22,13 @@ export const PLACEHOLDER_CATALOG: PlaceholderCatalogItem[] = [
   { name: 'ctaText', description: 'Button-Beschriftung fuer Kampagneninhalt', example: 'Alle Infos ansehen' },
   { name: 'ctaUrl', description: 'Button-Link fuer Kampagneninhalt', example: 'https://nennungstool.example.org/news' },
   { name: 'closingText', description: 'Abschlusstext', example: 'Viele Gruesse, euer Orga-Team' },
-  { name: 'paymentDeadline', description: 'Frist fuer Zahlung', example: '15.04.2026' }
+  { name: 'paymentDeadline', description: 'Frist fuer Zahlung', example: '15.04.2026' },
+  { name: 'heroImageUrl', description: 'Bild-URL fuer den Hero-Bereich', example: 'https://nennungstool.example.org/assets/hero.jpg' },
+  { name: 'heroEyebrow', description: 'Kleiner Titel ueber der Headline', example: 'MSC OBERLAUSITZ' },
+  { name: 'heroSubtitle', description: 'Untertitel im Header', example: 'Wichtige Updates fuer deine Teilnahme' },
+  { name: 'highlights', description: 'Mehrzeilige Highlights-Liste', example: 'Zeitplan aktualisiert\\nFahrerlager oeffnet 07:00' },
+  { name: 'logoUrl', description: 'Logo-URL im Header', example: 'https://nennungstool.example.org/assets/logo.png' },
+  { name: 'vehicleLabel', description: 'Zusammengefasste Fahrzeugbezeichnung', example: 'moto · KTM EXC 250' }
 ];
 
 export const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
@@ -33,8 +39,8 @@ export const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
   newsletter: ['eventName'],
   event_update: ['eventName'],
   free_form: [],
-  payment_reminder_followup: ['eventName', 'driverName', 'amountOpen', 'paymentDeadline'],
-  email_confirmation: ['eventName', 'driverName', 'verificationUrl']
+  payment_reminder_followup: [],
+  email_confirmation: ['driverName', 'verificationUrl']
 };
 
 export const KNOWN_PLACEHOLDER_NAMES = new Set(PLACEHOLDER_CATALOG.map((item) => item.name));

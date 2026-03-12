@@ -9,9 +9,11 @@ import {
   entry,
   event,
   eventClass,
+  eventPricingRule,
   invoice,
   person,
-  registrationGroupEmailVerification
+  registrationGroupEmailVerification,
+  vehicle
 } from '../db/schema';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { writeAuditLog } from '../audit/log';
@@ -45,7 +47,8 @@ const assertCampaignTemplateAllowed = (templateKey: string) => {
 const renderOptionsSchema = z
   .object({
     showBadge: z.boolean().optional(),
-    mailLabel: z.string().nullable().optional()
+    mailLabel: z.string().nullable().optional(),
+    includeEntryContext: z.boolean().optional()
   })
   .optional();
 
@@ -304,7 +307,8 @@ const normalizeRenderOptions = (templateKey: string, input?: MailRenderOptions):
           : null;
   return {
     showBadge: input?.showBadge ?? contract.renderOptions.showBadgeDefault,
-    mailLabel
+    mailLabel,
+    includeEntryContext: input?.includeEntryContext ?? contract.renderOptions.includeEntryContextDefault
   };
 };
 
@@ -363,6 +367,8 @@ type RegistrationContext = {
   entryId: string | null;
   registrationGroupId: string | null;
   eventName: string | null;
+  firstName: string | null;
+  lastName: string | null;
   driverName: string | null;
 };
 
@@ -418,6 +424,22 @@ const formatEventDateText = (startsAt: string | Date | null, endsAt: string | Da
   return format((from ?? to) as Date);
 };
 
+const formatDateOnlyText = (value: string | Date | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return new Intl.DateTimeFormat('de-DE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: 'Europe/Berlin'
+  }).format(date);
+};
+
 const getEventMailDefaults = async (eventId: string) => {
   const db = await getDb();
   const rows = await db
@@ -444,6 +466,67 @@ const getEventMailDefaults = async (eventId: string) => {
     eventDateText: formatEventDateText(row.startsAt, row.endsAt),
     contactEmail: row.contactEmail ?? process.env.MAIL_CONTACT_EMAIL ?? null,
     nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null
+  };
+};
+
+const resolvePaymentDeadlineDefault = async (eventId: string): Promise<string | null> => {
+  const db = await getDb();
+  const rows = await db
+    .select({ earlyDeadline: eventPricingRule.earlyDeadline })
+    .from(eventPricingRule)
+    .where(eq(eventPricingRule.eventId, eventId))
+    .limit(1);
+  return formatDateOnlyText(rows[0]?.earlyDeadline ?? null);
+};
+
+const enrichEntryContextTemplateData = async (
+  eventId: string,
+  currentData: Record<string, unknown>,
+  target: RecipientTarget
+): Promise<Record<string, unknown>> => {
+  const db = await getDb();
+  const byEntryId = target.entryId || (isNonEmptyString(currentData.entryId) ? currentData.entryId : null);
+  const rows = await db
+    .select({
+      className: eventClass.name,
+      startNumber: entry.startNumberNorm,
+      vehicleType: vehicle.vehicleType,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model,
+      totalCents: invoice.totalCents,
+      paidAmountCents: invoice.paidAmountCents
+    })
+    .from(entry)
+    .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .leftJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+    .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+    .where(
+      byEntryId
+        ? and(eq(entry.eventId, eventId), eq(entry.id, byEntryId), sql`${entry.deletedAt} is null`)
+        : and(eq(entry.eventId, eventId), eq(entry.driverPersonId, target.driverPersonId ?? ''), sql`${entry.deletedAt} is null`)
+    )
+    .orderBy(desc(entry.createdAt))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) {
+    return currentData;
+  }
+
+  const vehicleLabel = [row.vehicleType, row.vehicleMake, row.vehicleModel]
+    .filter((item): item is string => Boolean(item && item.trim().length > 0))
+    .join(' · ');
+  const amountOpen = formatAmountOpen(row.totalCents ?? 0, row.paidAmountCents ?? 0);
+
+  return {
+    ...currentData,
+    className: currentData.className ?? row.className,
+    startNumber: currentData.startNumber ?? row.startNumber,
+    vehicleType: currentData.vehicleType ?? row.vehicleType,
+    vehicleMake: currentData.vehicleMake ?? row.vehicleMake,
+    vehicleModel: currentData.vehicleModel ?? row.vehicleModel,
+    vehicleLabel: (currentData.vehicleLabel ?? vehicleLabel) || null,
+    amountOpen: currentData.amountOpen ?? amountOpen
   };
 };
 
@@ -537,15 +620,19 @@ const resolveRegistrationContext = async (
       .from(entry)
       .innerJoin(event, eq(entry.eventId, event.id))
       .innerJoin(person, eq(entry.driverPersonId, person.id))
-      .where(and(eq(entry.id, candidateEntryId), eq(entry.eventId, eventId)))
+      .where(and(eq(entry.id, candidateEntryId), eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`))
       .limit(1);
     const row = rows[0];
     if (row) {
+      const firstName = row.driverFirstName?.trim() ?? null;
+      const lastName = row.driverLastName?.trim() ?? null;
       return {
         entryId: row.entryId,
         registrationGroupId: row.registrationGroupId,
         eventName: row.eventName,
-        driverName: `${row.driverFirstName} ${row.driverLastName}`.trim()
+        firstName,
+        lastName,
+        driverName: [firstName, lastName].filter((item): item is string => Boolean(item && item.length > 0)).join(' ').trim() || null
       };
     }
   }
@@ -561,7 +648,8 @@ const resolveRegistrationContext = async (
     .from(entry)
     .innerJoin(event, eq(entry.eventId, event.id))
     .innerJoin(person, eq(entry.driverPersonId, person.id))
-    .where(and(eq(entry.eventId, eventId), eq(person.email, target.email)))
+    .where(and(eq(entry.eventId, eventId), eq(person.email, target.email), sql`${entry.deletedAt} is null`))
+    .orderBy(desc(entry.createdAt))
     .limit(1);
   const row = rows[0];
   if (!row) {
@@ -569,14 +657,20 @@ const resolveRegistrationContext = async (
       entryId: candidateEntryId,
       registrationGroupId: null,
       eventName: isNonEmptyString(templateData?.eventName) ? templateData.eventName : null,
+      firstName: isNonEmptyString(templateData?.firstName) ? templateData.firstName : null,
+      lastName: isNonEmptyString(templateData?.lastName) ? templateData.lastName : null,
       driverName: isNonEmptyString(templateData?.driverName) ? templateData.driverName : null
     };
   }
+  const firstName = row.driverFirstName?.trim() ?? null;
+  const lastName = row.driverLastName?.trim() ?? null;
   return {
     entryId: row.entryId,
     registrationGroupId: row.registrationGroupId,
     eventName: row.eventName,
-    driverName: `${row.driverFirstName} ${row.driverLastName}`.trim()
+    firstName,
+    lastName,
+    driverName: [firstName, lastName].filter((item): item is string => Boolean(item && item.length > 0)).join(' ').trim() || null
   };
 };
 
@@ -796,13 +890,19 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
   const template = await resolveTemplate(templateKey, input.templateVersion, input.subjectOverride ?? input.subject);
   const sendAfter = toIsoDate(input.sendAfter);
   const eventMailDefaults = await getEventMailDefaults(input.eventId);
+  const paymentDeadlineDefault =
+    template.templateKey === 'payment_reminder_followup' ? await resolvePaymentDeadlineDefault(input.eventId) : null;
   const renderOptions = normalizeRenderOptions(template.templateKey, input.renderOptions);
+  const hasContentOverride = Boolean(input.bodyOverride || input.bodyHtmlOverride);
 
   const outboxRows = await Promise.all(
     targets.map(async (target) => {
       let templateData: Record<string, unknown> = {
         ...eventMailDefaults,
         ...(input.templateData ?? {}),
+        ...(paymentDeadlineDefault && !isNonEmptyString(input.templateData?.paymentDeadline)
+          ? { paymentDeadline: paymentDeadlineDefault }
+          : {}),
         renderOptions,
         driverPersonId: target.driverPersonId,
         entryId: target.entryId,
@@ -810,21 +910,37 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         bodyHtmlOverride: input.bodyHtmlOverride ?? null
       };
 
-      if (template.templateKey === 'registration_received') {
+      templateData = await enrichEntryContextTemplateData(input.eventId, templateData, target);
+
+      if (template.templateKey === 'registration_received' || template.templateKey === 'email_confirmation') {
         const context = await resolveRegistrationContext(input.eventId, target, input.templateData);
+        let generatedVerificationUrl: string | null = null;
         if (context.entryId && context.registrationGroupId) {
           const token = await upsertRegistrationGroupVerificationToken(context.registrationGroupId, target.email);
-          const existingVerificationUrl = isNonEmptyString(templateData.verificationUrl)
-            ? templateData.verificationUrl
-            : null;
-          const generatedVerificationUrl = buildPublicVerificationUrl(context.entryId, token);
+          generatedVerificationUrl = buildPublicVerificationUrl(context.entryId, token);
           templateData = {
             ...templateData,
             entryId: context.entryId,
-            eventName: context.eventName,
-            driverName: context.driverName,
+            eventName: isNonEmptyString(templateData.eventName) ? templateData.eventName : context.eventName,
+            firstName: isNonEmptyString(templateData.firstName) ? templateData.firstName : context.firstName,
+            lastName: isNonEmptyString(templateData.lastName) ? templateData.lastName : context.lastName,
+            driverName: isNonEmptyString(templateData.driverName) ? templateData.driverName : context.driverName,
             verificationToken: token,
-            verificationUrl: generatedVerificationUrl ?? existingVerificationUrl
+            verificationUrl: generatedVerificationUrl ?? (isNonEmptyString(templateData.verificationUrl) ? templateData.verificationUrl : null)
+          };
+        } else {
+          templateData = {
+            ...templateData,
+            eventName: isNonEmptyString(templateData.eventName) ? templateData.eventName : context.eventName,
+            firstName: isNonEmptyString(templateData.firstName) ? templateData.firstName : context.firstName,
+            lastName: isNonEmptyString(templateData.lastName) ? templateData.lastName : context.lastName,
+            driverName: isNonEmptyString(templateData.driverName) ? templateData.driverName : context.driverName
+          };
+        }
+        if (!isNonEmptyString(templateData.verificationUrl) && generatedVerificationUrl) {
+          templateData = {
+            ...templateData,
+            verificationUrl: generatedVerificationUrl
           };
         }
         if (!isNonEmptyString(templateData.verificationUrl)) {
@@ -838,7 +954,8 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         bodyTextTemplate: input.bodyOverride ?? template.bodyTextTemplate,
         bodyHtmlTemplate: input.bodyHtmlOverride ?? template.bodyHtmlTemplate,
         data: templateData,
-        renderOptions
+        renderOptions,
+        hasContentOverride
       });
       if (renderValidation.missingPlaceholders.length > 0) {
         throw new MissingRequiredPlaceholdersError(renderValidation.missingPlaceholders, target.email, template.templateKey);
@@ -1740,6 +1857,7 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
   const rows = await db
     .select({
       entryId: entry.id,
+      eventId: entry.eventId,
       eventName: event.name,
       eventStartsAt: event.startsAt,
       eventEndsAt: event.endsAt,
@@ -1748,6 +1866,9 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
       firstName: person.firstName,
       lastName: person.lastName,
       startNumber: entry.startNumberNorm,
+      vehicleType: vehicle.vehicleType,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model,
       registrationGroupId: entry.registrationGroupId,
       totalCents: invoice.totalCents,
       paidAmountCents: invoice.paidAmountCents
@@ -1756,6 +1877,7 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
     .innerJoin(event, eq(entry.eventId, event.id))
     .innerJoin(eventClass, eq(entry.classId, eventClass.id))
     .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .leftJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
     .where(eq(entry.id, entryId))
     .limit(1);
@@ -1770,6 +1892,7 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
     verificationUrl = buildPublicVerificationUrl(row.entryId, token);
   }
   return {
+    eventId: row.eventId,
     eventName: row.eventName,
     eventDateText: formatEventDateText(row.eventStartsAt ?? null, row.eventEndsAt ?? null),
     firstName: row.firstName,
@@ -1777,6 +1900,12 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
     driverName: `${row.firstName} ${row.lastName}`.trim(),
     className: row.className,
     startNumber: row.startNumber,
+    vehicleType: row.vehicleType,
+    vehicleMake: row.vehicleMake,
+    vehicleModel: row.vehicleModel,
+    vehicleLabel: [row.vehicleType, row.vehicleMake, row.vehicleModel]
+      .filter((item): item is string => Boolean(item && item.trim().length > 0))
+      .join(' · '),
     amountOpen: formatAmountOpen(row.totalCents ?? 0, row.paidAmountCents ?? 0),
     verificationUrl,
     contactEmail: row.eventContactEmail ?? process.env.MAIL_CONTACT_EMAIL ?? null,
@@ -1797,6 +1926,15 @@ export const previewMailTemplate = async (input: TemplatePreviewInput) => {
     }
     data = { ...entryData, ...data };
   }
+  if (input.templateKey === 'payment_reminder_followup' && !isNonEmptyString(data.paymentDeadline)) {
+    const resolvedEventId = isNonEmptyString(data.eventId) ? data.eventId : null;
+    if (resolvedEventId) {
+      const fallbackDeadline = await resolvePaymentDeadlineDefault(resolvedEventId);
+      if (fallbackDeadline) {
+        data = { ...data, paymentDeadline: fallbackDeadline };
+      }
+    }
+  }
 
   const useDraftMode = input.previewMode === 'draft';
   const subjectTemplate = useDraftMode ? input.subjectOverride ?? template.subjectTemplate : template.subjectTemplate;
@@ -1805,6 +1943,7 @@ export const previewMailTemplate = async (input: TemplatePreviewInput) => {
     ? input.bodyHtmlOverride ?? template.bodyHtmlTemplate
     : template.bodyHtmlTemplate;
   const renderOptions = normalizeRenderOptions(input.templateKey, input.renderOptions);
+  const hasContentOverride = useDraftMode && Boolean(input.bodyOverride || input.bodyHtmlOverride);
 
   const rendered = renderMailContract({
     templateKey: input.templateKey,
@@ -1815,7 +1954,8 @@ export const previewMailTemplate = async (input: TemplatePreviewInput) => {
       ...data,
       renderOptions
     },
-    renderOptions
+    renderOptions,
+    hasContentOverride
   });
 
   return {

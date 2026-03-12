@@ -82,6 +82,25 @@ const normalizeBaseUrl = (value: unknown): string | null => {
   return normalized.replace(/\/+$/, '');
 };
 
+const normalizeHttpsUrl = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
 const sanitizeHtmlFragment = (value: string): string =>
   value
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
@@ -91,10 +110,40 @@ const sanitizeHtmlFragment = (value: string): string =>
 const textToHtml = (text: string): string =>
   text
     .split(/\r?\n\r?\n/)
-    .map((block) => `<p style="margin:0 0 16px 0;color:#0f172a;font-size:15px;line-height:1.6;">${escapeHtml(block).replace(/\r?\n/g, '<br />')}</p>`)
+    .map((block) => `<p style="margin:0 0 14px 0;color:#0F1729;font-size:15px;line-height:1.6;">${escapeHtml(block).replace(/\r?\n/g, '<br />')}</p>`)
     .join('');
 
-const buildInfoBoxes = (data: TemplateData): string => {
+const parseMultiline = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((item) => toStringValue(item).trim()).filter((item) => item.length > 0);
+  }
+  if (!isPresentValue(value)) {
+    return [];
+  }
+  return toStringValue(value)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+};
+
+const resolveVehicleLabel = (data: TemplateData): string => {
+  if (isPresentValue(data.vehicleLabel)) {
+    return toStringValue(data.vehicleLabel);
+  }
+  const parts: string[] = [];
+  if (isPresentValue(data.vehicleType)) {
+    parts.push(toStringValue(data.vehicleType));
+  }
+  if (isPresentValue(data.vehicleMake)) {
+    parts.push(toStringValue(data.vehicleMake));
+  }
+  if (isPresentValue(data.vehicleModel)) {
+    parts.push(toStringValue(data.vehicleModel));
+  }
+  return parts.join(' · ');
+};
+
+const buildEntryContextCard = (data: TemplateData, compact: boolean): string => {
   const rows: Array<{ label: string; value: string }> = [];
   if (isPresentValue(data.className)) {
     rows.push({ label: 'Klasse', value: toStringValue(data.className) });
@@ -102,59 +151,121 @@ const buildInfoBoxes = (data: TemplateData): string => {
   if (isPresentValue(data.startNumber)) {
     rows.push({ label: 'Startnummer', value: toStringValue(data.startNumber) });
   }
+  const vehicleLabel = resolveVehicleLabel(data);
+  if (vehicleLabel) {
+    rows.push({ label: 'Fahrzeug', value: vehicleLabel });
+  }
   if (isPresentValue(data.amountOpen)) {
-    rows.push({ label: 'Offener Betrag', value: toStringValue(data.amountOpen) });
+    rows.push({ label: 'Nenngeld offen', value: toStringValue(data.amountOpen) });
   }
   if (rows.length === 0) {
     return '';
   }
 
-  const items = rows
+  const rowHtml = rows
     .map(
       (row) =>
-        `<tr><td style="padding:8px 0;color:#475569;font-size:13px;line-height:1.4;">${escapeHtml(row.label)}</td><td style="padding:8px 0;color:#0f172a;font-size:14px;font-weight:600;line-height:1.4;text-align:right;">${escapeHtml(row.value)}</td></tr>`
+        `<tr><td style="padding:${compact ? '5px 0' : '7px 0'};font-size:${compact ? '12px' : '13px'};line-height:1.4;color:#475569;">${escapeHtml(row.label)}</td><td style="padding:${compact ? '5px 0' : '7px 0'};font-size:${compact ? '12px' : '13px'};line-height:1.4;color:#0F1729;font-weight:600;text-align:right;">${escapeHtml(row.value)}</td></tr>`
     )
     .join('');
 
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;padding:0 16px;margin:0 0 20px 0;"><tbody>${items}</tbody></table>`;
+  return [
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 18px 0;border:1px solid #DDE4EE;border-left:4px solid #F4C406;border-radius:10px;background:#FFFFFF;">',
+    `<tr><td style="padding:${compact ? '10px 12px' : '12px 14px'};">`,
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tbody>${rowHtml}</tbody></table>`,
+    '</td></tr>',
+    '</table>'
+  ].join('');
+};
+
+const buildSectionCard = (title: string, bodyHtml: string): string =>
+  [
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px 0;border:1px solid #DDE4EE;border-radius:10px;background:#FFFFFF;">',
+    '<tr><td style="padding:12px 14px;">',
+    `<div style="margin:0 0 8px 0;color:#254CA2;font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">${escapeHtml(title)}</div>`,
+    `<div style="color:#0F1729;font-size:14px;line-height:1.55;">${bodyHtml}</div>`,
+    '</td></tr>',
+    '</table>'
+  ].join('');
+
+const buildStructuredSections = (data: TemplateData): { html: string; text: string } => {
+  const introText = isPresentValue(data.introText) ? toStringValue(data.introText).trim() : '';
+  const detailsText = isPresentValue(data.detailsText) ? toStringValue(data.detailsText).trim() : '';
+  const closingText = isPresentValue(data.closingText) ? toStringValue(data.closingText).trim() : '';
+  const highlightLines = parseMultiline(data.highlights);
+  const paymentDeadline = isPresentValue(data.paymentDeadline) ? toStringValue(data.paymentDeadline).trim() : '';
+
+  const htmlParts: string[] = [];
+  const textParts: string[] = [];
+
+  if (highlightLines.length > 0) {
+    const listHtml = `<ul style="margin:0;padding-left:18px;">${highlightLines
+      .map((line) => `<li style="margin:0 0 6px 0;">${escapeHtml(line)}</li>`)
+      .join('')}</ul>`;
+    htmlParts.push(buildSectionCard('Highlights', listHtml));
+    textParts.push(`Highlights:\n${highlightLines.map((line) => `- ${line}`).join('\n')}`);
+  }
+
+  const detailsChunks = [introText, detailsText].filter((chunk) => chunk.length > 0);
+  if (detailsChunks.length > 0) {
+    htmlParts.push(buildSectionCard('Details', detailsChunks.map((chunk) => escapeHtml(chunk).replace(/\r?\n/g, '<br />')).join('<br /><br />')));
+    textParts.push(`Details:\n${detailsChunks.join('\n\n')}`);
+  }
+
+  const nextStepsLines: string[] = [];
+  if (paymentDeadline) {
+    nextStepsLines.push(`Zahlungsfrist: ${paymentDeadline}`);
+  }
+  if (closingText) {
+    nextStepsLines.push(closingText);
+  }
+  if (nextStepsLines.length > 0) {
+    htmlParts.push(buildSectionCard('Naechste Schritte', nextStepsLines.map((line) => escapeHtml(line).replace(/\r?\n/g, '<br />')).join('<br />')));
+    textParts.push(`Naechste Schritte:\n${nextStepsLines.join('\n')}`);
+  }
+
+  return {
+    html: htmlParts.join(''),
+    text: textParts.join('\n\n').trim()
+  };
 };
 
 const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: string }> = {
   registration_received: {
-    mailLabel: 'Prozessmail',
+    mailLabel: '',
     heroSubtitle: 'Bitte bestaetige deine E-Mail-Adresse, um die Anmeldung abzuschliessen.'
   },
   accepted_open_payment: {
     mailLabel: 'Prozessmail',
-    heroSubtitle: 'Dein Startplatz ist bestaetigt.'
+    heroSubtitle: 'Startplatz fixiert. Jetzt fehlt nur noch der Zahlungsschritt.'
   },
   payment_reminder: {
     mailLabel: 'Prozessmail',
-    heroSubtitle: 'Offener Betrag fuer deine Nennung.'
+    heroSubtitle: 'Deine Nennung ist fast komplett.'
   },
   rejected: {
     mailLabel: 'Prozessmail',
-    heroSubtitle: 'Update zu deiner Anmeldung.'
+    heroSubtitle: 'Statusupdate zu deiner Anmeldung.'
   },
   newsletter: {
     mailLabel: '',
-    heroSubtitle: 'Neuigkeiten rund um das Event.'
+    heroSubtitle: 'Frische News. Klare Kante. Volle Vorfreude aufs Event.'
   },
   event_update: {
     mailLabel: '',
-    heroSubtitle: 'Wichtige organisatorische Infos.'
+    heroSubtitle: 'Wichtige Updates fuer deinen Renntag.'
   },
   free_form: {
     mailLabel: '',
-    heroSubtitle: 'Mitteilung vom Orga-Team.'
+    heroSubtitle: 'Kurze Mitteilung vom Orga-Team.'
   },
   payment_reminder_followup: {
     mailLabel: '',
-    heroSubtitle: 'Erinnerung zu offenem Betrag.'
+    heroSubtitle: 'Letzte Runde vor dem Start: Bitte Zahlung abschliessen.'
   },
   email_confirmation: {
     mailLabel: '',
-    heroSubtitle: 'Bitte bestaetige deine E-Mail-Adresse.'
+    heroSubtitle: 'Ein Klick trennt dich noch vom finalen Go.'
   }
 };
 
@@ -165,13 +276,48 @@ const isCampaignTemplate = (templateKey: string): boolean =>
   templateKey === 'payment_reminder_followup' ||
   templateKey === 'email_confirmation';
 
+const isCompactEntryContextTemplate = (templateKey: string): boolean =>
+  templateKey === 'newsletter' || templateKey === 'event_update' || templateKey === 'payment_reminder_followup';
+
+const resolveLogoUrl = (data: TemplateData): { logoUrl: string | null; warning: string | null } => {
+  const candidate = data.logoUrl ?? process.env.MAIL_LOGO_URL;
+  if (!isPresentValue(candidate)) {
+    return { logoUrl: null, warning: null };
+  }
+  const httpsUrl = normalizeHttpsUrl(candidate);
+  if (!httpsUrl) {
+    return { logoUrl: null, warning: 'logoUrl verworfen (ungueltig oder nicht https).' };
+  }
+
+  const url = new URL(httpsUrl);
+  const allowedHosts = new Set<string>();
+  const baseUrl = normalizeBaseUrl(process.env.MAIL_PUBLIC_BASE_URL);
+  if (baseUrl) {
+    allowedHosts.add(new URL(baseUrl).hostname.toLowerCase());
+  }
+  const allowlist = (process.env.MAIL_LOGO_HOST_ALLOWLIST ?? '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0);
+  allowlist.forEach((host) => allowedHosts.add(host));
+
+  if (allowedHosts.size > 0 && !allowedHosts.has(url.hostname.toLowerCase())) {
+    return { logoUrl: null, warning: 'logoUrl verworfen (Host nicht erlaubt).' };
+  }
+
+  return { logoUrl: httpsUrl, warning: null };
+};
+
 const buildHtmlDocument = (input: {
   templateKey: string;
   subjectRendered: string;
   bodyHtmlRendered: string;
+  structuredSectionsHtml: string;
+  entryContextHtml: string;
   verificationUrl: string | null;
   data: TemplateData;
   renderOptions?: MailRenderOptions;
+  hasContentOverride: boolean;
 }): string => {
   const eventName = isPresentValue(input.data.eventName)
     ? toStringValue(input.data.eventName)
@@ -187,15 +333,23 @@ const buildHtmlDocument = (input: {
       : undefined;
   const showBadge =
     input.renderOptions?.showBadge ?? payloadRenderOptions?.showBadge ?? contract.renderOptions.showBadgeDefault;
+  const includeEntryContext =
+    input.renderOptions?.includeEntryContext ??
+    payloadRenderOptions?.includeEntryContext ??
+    contract.renderOptions.includeEntryContextDefault;
   const mailLabelValue =
     input.renderOptions?.mailLabel ??
     payloadRenderOptions?.mailLabel ??
     contract.renderOptions.defaultMailLabel ??
     templatePresentation.mailLabel;
   const mailLabel = isPresentValue(mailLabelValue) ? toStringValue(mailLabelValue) : '';
+
+  const heroEyebrow = isPresentValue(input.data.heroEyebrow) ? toStringValue(input.data.heroEyebrow) : '';
   const heroSubtitle = isPresentValue(input.data.heroSubtitle)
     ? toStringValue(input.data.heroSubtitle)
     : templatePresentation.heroSubtitle;
+  const heroImageUrl = normalizeHttpsUrl(input.data.heroImageUrl);
+
   const eventDateText = isPresentValue(input.data.eventDateText)
     ? toStringValue(input.data.eventDateText)
     : (process.env.MAIL_EVENT_DATE_TEXT ?? '');
@@ -209,22 +363,36 @@ const buildHtmlDocument = (input: {
     normalizeBaseUrl(process.env.NENNUNGSTOOL_URL);
   const impressumUrl = baseUrl ? `${baseUrl}/anmeldung/rechtliches/impressum` : null;
   const datenschutzUrl = baseUrl ? `${baseUrl}/anmeldung/rechtliches/datenschutz` : null;
+
+  const { logoUrl } = resolveLogoUrl(input.data);
+
   const contactHtml = contactEmail
-    ? `<div style="margin-top:6px;">Kontakt: <a href="mailto:${escapeHtml(contactEmail)}">${escapeHtml(contactEmail)}</a></div>`
+    ? `<div style="margin-top:6px;">Kontakt: <a href="mailto:${escapeHtml(contactEmail)}" style="color:#254CA2;text-decoration:underline;">${escapeHtml(contactEmail)}</a></div>`
     : '';
   const legalLinks = impressumUrl && datenschutzUrl
-    ? `<div style="margin-top:8px;"><a href="${escapeHtml(impressumUrl)}" target="_blank" rel="noopener noreferrer">Impressum</a> · <a href="${escapeHtml(datenschutzUrl)}" target="_blank" rel="noopener noreferrer">Datenschutz</a></div>`
+    ? `<div style="margin-top:8px;"><a href="${escapeHtml(impressumUrl)}" target="_blank" rel="noopener noreferrer" style="color:#254CA2;text-decoration:underline;">Impressum</a> · <a href="${escapeHtml(datenschutzUrl)}" target="_blank" rel="noopener noreferrer" style="color:#254CA2;text-decoration:underline;">Datenschutz</a></div>`
     : '';
   const dateHtml = eventDateText ? `<div>${escapeHtml(eventName)} · ${escapeHtml(eventDateText)}</div>` : `<div>${escapeHtml(eventName)}</div>`;
+
   const campaignCtaUrl = normalizePublicUrl(input.data.ctaUrl);
   const campaignCtaText = isPresentValue(input.data.ctaText) ? toStringValue(input.data.ctaText) : 'Mehr erfahren';
   const verificationCtaLabel = input.templateKey === 'email_confirmation' ? 'E-Mail bestaetigen' : 'Anmeldung bestaetigen';
   const ctaBlock =
     (input.templateKey === 'registration_received' || input.templateKey === 'email_confirmation') && input.verificationUrl
-      ? `<p style="margin-top:18px;"><a class="btn" href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer">${verificationCtaLabel}</a></p><p class="muted">Falls der Button nicht funktioniert: ${escapeHtml(input.verificationUrl)}</p>`
+      ? `<p style="margin:18px 0 0 0;"><a href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#254CA2;color:#FFFFFF;text-decoration:none;font-size:14px;font-weight:700;line-height:1;padding:12px 18px;border-radius:10px;">${verificationCtaLabel}</a></p><p style="margin:8px 0 0 0;color:#64748B;font-size:12px;line-height:1.5;">Falls der Button nicht funktioniert: ${escapeHtml(input.verificationUrl)}</p>`
       : isCampaignTemplate(input.templateKey) && campaignCtaUrl
-        ? `<p style="margin-top:18px;"><a class="btn" href="${escapeHtml(campaignCtaUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(campaignCtaText)}</a></p><p class="muted">Falls der Button nicht funktioniert: ${escapeHtml(campaignCtaUrl)}</p>`
+        ? `<p style="margin:18px 0 0 0;"><a href="${escapeHtml(campaignCtaUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#254CA2;color:#FFFFFF;text-decoration:none;font-size:14px;font-weight:700;line-height:1;padding:12px 18px;border-radius:10px;">${escapeHtml(campaignCtaText)}</a></p><p style="margin:8px 0 0 0;color:#64748B;font-size:12px;line-height:1.5;">Falls der Button nicht funktioniert: ${escapeHtml(campaignCtaUrl)}</p>`
         : '';
+
+  const sectionsHtml = !input.hasContentOverride && isCampaignTemplate(input.templateKey) ? input.structuredSectionsHtml : '';
+  const entryContextHtml = includeEntryContext ? input.entryContextHtml : '';
+
+  const logoHtml = logoUrl
+    ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" width="124" style="display:block;width:124px;max-width:124px;height:auto;border:0;outline:none;text-decoration:none;" />`
+    : '';
+  const badgeHtml = showBadge && mailLabel
+    ? `<div style="display:inline-block;background:#F4C406;color:#0F1729;padding:4px 10px;border-radius:8px;font-size:11px;font-weight:700;line-height:1;letter-spacing:0.06em;text-transform:uppercase;">${escapeHtml(mailLabel)}</div>`
+    : '';
 
   return [
     '<!doctype html>',
@@ -233,17 +401,40 @@ const buildHtmlDocument = (input: {
     '<meta charset="utf-8" />',
     '<meta name="viewport" content="width=device-width, initial-scale=1" />',
     `<title>${escapeHtml(input.subjectRendered)}</title>`,
-    '<style>:root{color-scheme:light;}body{margin:0;padding:0;background:#F9FAFB;color:#0F1729;font-family:"IBM Plex Sans","Segoe UI",Arial,sans-serif;}table{border-collapse:separate;} .wrapper{width:100%;background:#F9FAFB;padding:24px 12px;} .container{max-width:640px;margin:0 auto;background:#FFFFFF;border:1px solid #DDE4EE;border-radius:12px;overflow:hidden;} .hero{background:#254CA2;color:#FFFFFF;padding:20px 24px;} .badge{display:inline-block;background:#F4C406;color:#0F1729;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:8px;} .title{margin:14px 0 0;font-family:"Barlow Condensed","IBM Plex Sans","Segoe UI",Arial,sans-serif;font-size:34px;line-height:1.1;font-weight:600;} .subtitle{margin:8px 0 0;color:rgba(255,255,255,.9);font-size:15px;line-height:1.5;} .content{padding:24px;} .content p{margin:0 0 14px;font-size:15px;line-height:1.6;color:#0F1729;} .btn{display:inline-block;background:#F4C406;color:#0F1729 !important;text-decoration:none;font-weight:700;font-size:14px;line-height:1;padding:12px 16px;border-radius:10px;} .muted{color:#637288;font-size:13px;} .footer{border-top:1px solid #DDE4EE;padding:16px 24px 20px;color:#637288;font-size:12px;line-height:1.5;} .footer a{color:#254CA2;text-decoration:underline;} @media only screen and (max-width:600px){ .wrapper{padding:16px 8px;} .hero,.content,.footer{padding:16px;} .title{font-size:28px;} .content p{font-size:16px;} }</style>',
     '</head>',
-    '<body>',
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="wrapper">',
+    '<body style="margin:0;padding:0;background:#F3F5F8;color:#0F1729;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;background:#F3F5F8;padding:22px 10px;">',
     '<tr><td align="center">',
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="container">',
-    `<tr><td class="hero">${
-      showBadge && mailLabel ? `<span class="badge">${escapeHtml(mailLabel)}</span>` : ''
-    }<h1 class="title">${escapeHtml(eventName)}</h1><p class="subtitle">${escapeHtml(heroSubtitle)}</p></td></tr>`,
-    `<tr><td class="content">${buildInfoBoxes(input.data)}${input.bodyHtmlRendered}${ctaBlock}</td></tr>`,
-    `<tr><td class="footer">${dateHtml}${contactHtml}${legalLinks}</td></tr>`,
+    '<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#FFFFFF;border:1px solid #DDE4EE;border-radius:12px;">',
+    '<tr>',
+    '<td style="padding:16px 18px 10px 18px;border-bottom:1px solid #DDE4EE;">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">',
+    '<tr>',
+    `<td valign="middle" align="left">${logoHtml}</td>`,
+    `<td valign="middle" align="right">${badgeHtml}</td>`,
+    '</tr>',
+    '</table>',
+    '</td>',
+    '</tr>',
+    '<tr>',
+    '<td style="padding:16px 18px 14px 18px;background:#254CA2;color:#FFFFFF;">',
+    heroEyebrow
+      ? `<div style="margin:0 0 6px 0;font-size:11px;line-height:1.2;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#F4C406;">${escapeHtml(heroEyebrow)}</div>`
+      : '',
+    `<div style="margin:0;font-size:30px;line-height:1.1;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;">${escapeHtml(eventName)}</div>`,
+    `<div style="margin:8px 0 0 0;font-size:14px;line-height:1.5;color:#DCE7FF;">${escapeHtml(heroSubtitle)}</div>`,
+    '</td>',
+    '</tr>',
+    heroImageUrl
+      ? `<tr><td style="padding:0;"><img src="${escapeHtml(heroImageUrl)}" alt="Hero" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;outline:none;text-decoration:none;" /></td></tr>`
+      : '',
+    '<tr><td style="padding:18px;">',
+    entryContextHtml,
+    sectionsHtml,
+    input.bodyHtmlRendered,
+    ctaBlock,
+    '</td></tr>',
+    `<tr><td style="padding:14px 18px 18px 18px;border-top:1px solid #DDE4EE;background:#FFFFFF;color:#64748B;font-size:12px;line-height:1.5;">${dateHtml}${contactHtml}${legalLinks}</td></tr>`,
     '</table>',
     '</td></tr>',
     '</table>',
@@ -259,6 +450,7 @@ export type RenderMailContractInput = {
   bodyHtmlTemplate?: string | null;
   data: TemplateData;
   renderOptions?: MailRenderOptions;
+  hasContentOverride?: boolean;
 };
 
 export type RenderMailContractResult = {
@@ -288,8 +480,18 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
   const htmlTemplatePlaceholders = htmlSource.length > 0 ? renderString(htmlSource, input.data, true).placeholders : [];
   htmlTemplatePlaceholders.forEach((item) => usedSet.add(item));
 
+  const structuredSections = buildStructuredSections(input.data);
+  const contract = getTemplateContract(input.templateKey);
+  const includeEntryContext = input.renderOptions?.includeEntryContext ?? contract.renderOptions.includeEntryContextDefault;
+  const entryContextHtml = includeEntryContext ? buildEntryContextCard(input.data, isCompactEntryContextTemplate(input.templateKey)) : '';
+
   const verificationUrl = normalizePublicUrl(input.data.verificationUrl);
   let bodyTextRendered = bodyText.rendered.trim();
+
+  if (!input.hasContentOverride && isCampaignTemplate(input.templateKey) && structuredSections.text.length > 0) {
+    bodyTextRendered = `${bodyTextRendered}\n\n${structuredSections.text}`.trim();
+  }
+
   if (input.templateKey === 'registration_received' || input.templateKey === 'email_confirmation') {
     if (!verificationUrl) {
       warnings.push('verificationUrl fehlt; CTA und Verifizierungslink koennen nicht gerendert werden.');
@@ -297,6 +499,12 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
       bodyTextRendered = `${bodyTextRendered}\n\nVerifizierung: ${verificationUrl}`.trim();
     }
   }
+
+  const logoWarning = resolveLogoUrl(input.data).warning;
+  if (logoWarning) {
+    warnings.push(logoWarning);
+  }
+
   if (!subject.rendered.trim() || !bodyTextRendered) {
     warnings.push('Gerenderter Betreff oder Text ist leer.');
   }
@@ -307,9 +515,12 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
     templateKey: input.templateKey,
     subjectRendered: subject.rendered.trim(),
     bodyHtmlRendered,
+    structuredSectionsHtml: structuredSections.html,
+    entryContextHtml,
     verificationUrl,
     data: input.data,
-    renderOptions: input.renderOptions
+    renderOptions: input.renderOptions,
+    hasContentOverride: input.hasContentOverride ?? false
   });
 
   return {

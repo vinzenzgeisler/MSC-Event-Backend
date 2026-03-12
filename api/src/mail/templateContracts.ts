@@ -3,6 +3,7 @@ import { PLACEHOLDER_CATALOG, REQUIRED_PLACEHOLDERS_BY_TEMPLATE } from './placeh
 export type MailRenderOptions = {
   showBadge?: boolean;
   mailLabel?: string | null;
+  includeEntryContext?: boolean;
 };
 
 export type ComposerFieldType = 'text' | 'url';
@@ -32,10 +33,11 @@ export type TemplateContract = {
   renderOptions: {
     showBadgeDefault: boolean;
     defaultMailLabel: string | null;
+    includeEntryContextDefault: boolean;
   };
 };
 
-const CAMPAIGN_FIELDS_BASE: ComposerField[] = [
+const CAMPAIGN_TEXT_BASE_FIELDS: ComposerField[] = [
   {
     key: 'introText',
     label: 'Einleitung',
@@ -62,7 +64,10 @@ const CAMPAIGN_FIELDS_BASE: ComposerField[] = [
     multiline: true,
     placeholder: 'Viele Gruesse, euer Team',
     helpText: 'Wird als Abschluss unterhalb der Details gerendert.'
-  },
+  }
+];
+
+const CAMPAIGN_CTA_FIELDS: ComposerField[] = [
   {
     key: 'ctaText',
     label: 'CTA Text',
@@ -97,29 +102,64 @@ const CAMPAIGN_ALLOWED_PLACEHOLDERS = [
   'closingText',
   'ctaText',
   'ctaUrl',
-  'paymentDeadline'
+  'paymentDeadline',
+  'heroImageUrl',
+  'heroEyebrow',
+  'heroSubtitle',
+  'highlights',
+  'logoUrl',
+  'vehicleLabel'
 ];
 
 const makeCampaignContract = (overrides?: {
   requiredPlaceholders?: string[];
   additionalFields?: ComposerField[];
+  includeCtaFields?: boolean;
+  includeEntryContextDefault?: boolean;
 }): TemplateContract => {
   const requiredPlaceholders = overrides?.requiredPlaceholders ?? [];
+  const includeCtaFields = overrides?.includeCtaFields ?? true;
   return {
     scope: 'campaign',
     channels: ['campaign'],
     composer: {
       enabled: true,
-      fields: [...CAMPAIGN_FIELDS_BASE, ...(overrides?.additionalFields ?? [])],
+      fields: [
+        ...CAMPAIGN_TEXT_BASE_FIELDS,
+        ...(includeCtaFields ? CAMPAIGN_CTA_FIELDS : []),
+        ...(overrides?.additionalFields ?? [])
+      ],
       allowedPlaceholders: CAMPAIGN_ALLOWED_PLACEHOLDERS,
       requiredPlaceholders
     },
     renderOptions: {
       showBadgeDefault: false,
-      defaultMailLabel: null
+      defaultMailLabel: null,
+      includeEntryContextDefault: overrides?.includeEntryContextDefault ?? false
     }
   };
 };
+
+const makeProcessContract = (overrides?: {
+  requiredPlaceholders?: string[];
+  includeEntryContextDefault?: boolean;
+  showBadgeDefault?: boolean;
+  defaultMailLabel?: string | null;
+}): TemplateContract => ({
+  scope: 'process',
+  channels: ['detail', 'quick_action'],
+  composer: {
+    enabled: false,
+    fields: [],
+    allowedPlaceholders: PLACEHOLDER_CATALOG.map((item) => item.name),
+    requiredPlaceholders: overrides?.requiredPlaceholders ?? []
+  },
+  renderOptions: {
+    showBadgeDefault: overrides?.showBadgeDefault ?? true,
+    defaultMailLabel: overrides?.defaultMailLabel ?? 'Prozessmail',
+    includeEntryContextDefault: overrides?.includeEntryContextDefault ?? false
+  }
+});
 
 const PROCESS_DEFAULT_CONTRACT: TemplateContract = {
   scope: 'process',
@@ -132,19 +172,81 @@ const PROCESS_DEFAULT_CONTRACT: TemplateContract = {
   },
   renderOptions: {
     showBadgeDefault: true,
-    defaultMailLabel: 'Prozessmail'
+    defaultMailLabel: 'Prozessmail',
+    includeEntryContextDefault: false
   }
 };
 
 const CONTRACTS: Record<string, TemplateContract> = {
   newsletter: makeCampaignContract({
-    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.newsletter ?? []
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.newsletter ?? [],
+    additionalFields: [
+      {
+        key: 'heroImageUrl',
+        label: 'Hero Bild URL',
+        type: 'url',
+        required: true,
+        multiline: false,
+        placeholder: 'https://...',
+        helpText: 'Headerbild fuer den Newsletter.'
+      },
+      {
+        key: 'highlights',
+        label: 'Highlights',
+        type: 'text',
+        required: false,
+        multiline: true,
+        placeholder: 'Punkt 1\\nPunkt 2',
+        helpText: 'Je Zeile ein Highlight.'
+      },
+      {
+        key: 'heroEyebrow',
+        label: 'Hero Eyebrow',
+        type: 'text',
+        required: false,
+        multiline: false,
+        placeholder: 'MSC OBERLAUSITZ',
+        helpText: 'Kleine Ueberschrift ueber dem Eventnamen.'
+      },
+      {
+        key: 'heroSubtitle',
+        label: 'Hero Untertitel',
+        type: 'text',
+        required: false,
+        multiline: false,
+        placeholder: 'Aktuelles rund um dein Rennen',
+        helpText: 'Untertitel im Header.'
+      }
+    ],
+    includeEntryContextDefault: true
   }),
   event_update: makeCampaignContract({
-    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.event_update ?? []
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.event_update ?? [],
+    additionalFields: [
+      {
+        key: 'heroImageUrl',
+        label: 'Hero Bild URL',
+        type: 'url',
+        required: false,
+        multiline: false,
+        placeholder: 'https://...',
+        helpText: 'Optionales Headerbild.'
+      },
+      {
+        key: 'highlights',
+        label: 'Highlights',
+        type: 'text',
+        required: false,
+        multiline: true,
+        placeholder: 'Punkt 1\\nPunkt 2',
+        helpText: 'Je Zeile ein Highlight.'
+      }
+    ],
+    includeEntryContextDefault: true
   }),
   free_form: makeCampaignContract({
-    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.free_form ?? []
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.free_form ?? [],
+    includeEntryContextDefault: false
   }),
   payment_reminder_followup: makeCampaignContract({
     requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.payment_reminder_followup ?? [],
@@ -153,26 +255,36 @@ const CONTRACTS: Record<string, TemplateContract> = {
         key: 'paymentDeadline',
         label: 'Zahlungsfrist',
         type: 'text',
-        required: true,
+        required: false,
         multiline: false,
         placeholder: '15.04.2026',
         helpText: 'Frist der erneuten Zahlungsaufforderung.'
       }
-    ]
+    ],
+    includeEntryContextDefault: true
   }),
   email_confirmation: makeCampaignContract({
     requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.email_confirmation ?? [],
-    additionalFields: [
-      {
-        key: 'verificationUrl',
-        label: 'Verifizierungslink',
-        type: 'url',
-        required: true,
-        multiline: false,
-        placeholder: 'https://...',
-        helpText: 'Link zur E-Mail-Bestaetigung.'
-      }
-    ]
+    includeCtaFields: false,
+    includeEntryContextDefault: false
+  }),
+  accepted_open_payment: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.accepted_open_payment ?? [],
+    includeEntryContextDefault: true
+  }),
+  payment_reminder: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.payment_reminder ?? [],
+    includeEntryContextDefault: true
+  }),
+  rejected: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.rejected ?? [],
+    includeEntryContextDefault: false
+  }),
+  registration_received: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.registration_received ?? [],
+    includeEntryContextDefault: false,
+    showBadgeDefault: false,
+    defaultMailLabel: null
   })
 };
 
@@ -196,4 +308,3 @@ export const getTemplateContract = (templateKey: string): TemplateContract => {
   }
   return contract;
 };
-

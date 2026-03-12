@@ -6,6 +6,7 @@ export type PlaceholderCatalogItem = {
 
 export const PLACEHOLDER_CATALOG: PlaceholderCatalogItem[] = [
   { name: 'eventName', description: 'Eventname', example: 'MSC Dreiecksrennen 2026' },
+  { name: 'codriverName', description: 'Name des Beifahrers', example: 'Erika Musterfrau' },
   { name: 'firstName', description: 'Vorname Fahrer', example: 'Max' },
   { name: 'lastName', description: 'Nachname Fahrer', example: 'Mustermann' },
   { name: 'driverName', description: 'Vollständiger Fahrername', example: 'Max Mustermann' },
@@ -40,7 +41,8 @@ export const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
   event_update: ['eventName'],
   free_form: [],
   payment_reminder_followup: [],
-  email_confirmation: ['driverName', 'verificationUrl']
+  email_confirmation: ['driverName', 'verificationUrl'],
+  codriver_info: ['eventName', 'driverName', 'codriverName']
 };
 
 export const KNOWN_PLACEHOLDER_NAMES = new Set(PLACEHOLDER_CATALOG.map((item) => item.name));

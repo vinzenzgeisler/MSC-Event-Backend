@@ -266,6 +266,10 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   email_confirmation: {
     mailLabel: '',
     heroSubtitle: 'Ein Klick trennt dich noch vom finalen Go.'
+  },
+  codriver_info: {
+    mailLabel: '',
+    heroSubtitle: 'Du wurdest als Beifahrer eingetragen.'
   }
 };
 

@@ -285,6 +285,12 @@ const CONTRACTS: Record<string, TemplateContract> = {
     includeEntryContextDefault: false,
     showBadgeDefault: false,
     defaultMailLabel: null
+  }),
+  codriver_info: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.codriver_info ?? [],
+    includeEntryContextDefault: false,
+    showBadgeDefault: false,
+    defaultMailLabel: null
   })
 };
 

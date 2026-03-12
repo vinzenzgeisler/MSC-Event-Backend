@@ -8987,6 +8987,14 @@
             "bodyText": "Hallo {{driverName}}, bestätige hier: {{verificationUrl}}",
             "status": "published",
             "isActive": true
+          },
+          {
+            "key": "codriver_info",
+            "label": "Beifahrer-Information",
+            "subject": "Info: Du wurdest als Beifahrer eingetragen - {{eventName}}",
+            "bodyText": "Hallo {{codriverName}}, {{driverName}} hat dich als Beifahrer eingetragen.",
+            "status": "published",
+            "isActive": true
           }
         ]
       },

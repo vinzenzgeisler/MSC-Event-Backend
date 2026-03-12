@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
@@ -20,7 +20,7 @@ import {
 import { getPresignedAssetsUploadUrl, doesAssetObjectExist } from '../docs/storage';
 import { normalizeStartNumber } from '../domain/startNumber';
 import { isPgUniqueViolation } from '../http/dbErrors';
-import { DuplicateRequestError, queueLifecycleMail } from './adminMail';
+import { DuplicateRequestError, queueLifecycleMail, queueMail } from './adminMail';
 
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const nonEmptySchema = z.string().trim().min(1);
@@ -795,7 +795,14 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       };
     });
 
+    const driverName = `${input.driver.firstName} ${input.driver.lastName}`.trim();
+
     if (created.replay && created.response.confirmationMailSent) {
+      try {
+        await queueCodriverInfoMails(input.eventId, created.response.groupId, driverName, input.driver.email);
+      } catch {
+        // Do not fail replay responses because codriver info mail is optional.
+      }
       return created.response;
     }
 
@@ -843,6 +850,12 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       }
     });
 
+    try {
+      await queueCodriverInfoMails(input.eventId, created.response.groupId, driverName, input.driver.email);
+    } catch {
+      // Codriver mail is informational only and must not block registration completion.
+    }
+
     return {
       ...created.response,
       confirmationMailSent: true
@@ -861,6 +874,123 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       throw new Error('UNIQUE_VIOLATION');
     }
     throw error;
+  }
+};
+
+const queueCodriverInfoMails = async (
+  eventId: string,
+  groupId: string,
+  driverName: string,
+  driverEmail: string
+) => {
+  const db = await getDb();
+  const codriverEntryRows = await db
+    .select({
+      codriverPersonId: entry.codriverPersonId,
+      className: eventClass.name,
+      startNumber: entry.startNumberNorm,
+      eventName: event.name,
+      contactEmail: event.contactEmail
+    })
+    .from(entry)
+    .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .innerJoin(event, eq(entry.eventId, event.id))
+    .where(and(eq(entry.eventId, eventId), eq(entry.registrationGroupId, groupId), sql`${entry.deletedAt} is null`, sql`${entry.codriverPersonId} is not null`));
+
+  const codriverIds = Array.from(
+    new Set(
+      codriverEntryRows
+        .map((row) => row.codriverPersonId)
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    )
+  );
+  if (codriverIds.length === 0) {
+    return;
+  }
+
+  const codriverRows = await db
+    .select({
+      id: person.id,
+      email: person.email,
+      firstName: person.firstName,
+      lastName: person.lastName
+    })
+    .from(person)
+    .where(inArray(person.id, codriverIds));
+
+  const codriverById = new Map(
+    codriverRows.map((row) => [
+      row.id,
+      {
+        email: row.email,
+        codriverName: `${row.firstName ?? ''} ${row.lastName ?? ''}`.trim() || 'Beifahrer'
+      }
+    ])
+  );
+
+  const recipients = new Map<
+    string,
+    {
+      email: string;
+      codriverName: string;
+      eventName: string | null;
+      contactEmail: string | null;
+      className: string | null;
+      startNumber: string | null;
+      entryCount: number;
+    }
+  >();
+
+  for (const row of codriverEntryRows) {
+    if (!row.codriverPersonId) {
+      continue;
+    }
+    const codriver = codriverById.get(row.codriverPersonId);
+    if (!codriver?.email) {
+      continue;
+    }
+    if (codriver.email.toLowerCase() === driverEmail.toLowerCase()) {
+      continue;
+    }
+    const key = codriver.email.toLowerCase();
+    const existing = recipients.get(key);
+    if (existing) {
+      existing.entryCount += 1;
+      continue;
+    }
+    recipients.set(key, {
+      email: codriver.email,
+      codriverName: codriver.codriverName,
+      eventName: row.eventName ?? null,
+      contactEmail: row.contactEmail ?? null,
+      className: row.className ?? null,
+      startNumber: row.startNumber ?? null,
+      entryCount: 1
+    });
+  }
+
+  for (const recipient of recipients.values()) {
+    try {
+      await queueMail(
+        {
+          eventId,
+          templateId: 'codriver_info',
+          recipientEmails: [recipient.email],
+          templateData: {
+            eventName: recipient.eventName,
+            codriverName: recipient.codriverName,
+            driverName,
+            className: recipient.className,
+            startNumber: recipient.startNumber,
+            contactEmail: recipient.contactEmail,
+            entryCount: recipient.entryCount
+          }
+        },
+        null
+      );
+    } catch {
+      // Keep processing other codriver recipients.
+    }
   }
 };
 

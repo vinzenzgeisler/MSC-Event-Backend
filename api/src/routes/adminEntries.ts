@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { auditLog, document, entry, eventClass, invoice, invoicePayment, person, registrationGroup, vehicle } from '../db/schema';
-import { getPresignedAssetsDownloadUrl } from '../docs/storage';
+import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
@@ -109,17 +109,6 @@ const toVehicleLabel = (make: string | null, model: string | null, startNumberNo
   return startNumberNorm ? `#${startNumberNorm}` : 'Unknown vehicle';
 };
 
-const getVehicleThumbUrl = async (imageS3Key: string | null): Promise<string | null> => {
-  if (!imageS3Key) {
-    return null;
-  }
-  try {
-    return await getPresignedAssetsDownloadUrl(imageS3Key, 300);
-  } catch {
-    return null;
-  }
-};
-
 const assertAcceptanceTransitionAllowed = (from: EntryStatusPatch['acceptanceStatus'], to: EntryStatusPatch['acceptanceStatus']) => {
   const allowed: Record<EntryStatusPatch['acceptanceStatus'], EntryStatusPatch['acceptanceStatus'][]> = {
     pending: ['shortlist', 'accepted', 'rejected'],
@@ -140,11 +129,21 @@ export const listDeletedEntries = async (query: ListEntriesQuery, redactSensitiv
   return listEntriesByDeleteState(query, redactSensitiveFields, true);
 };
 
-const listEntriesByDeleteState = async (
-  query: ListEntriesQuery,
-  redactSensitiveFields: boolean,
-  deleted: boolean
-) => {
+const getVehicleThumbUrl = async (s3Key: string | null): Promise<string | null> => {
+  if (!s3Key) {
+    return null;
+  }
+  const candidates = [s3Key, `${s3Key}.jpg`, `${s3Key}.jpeg`, `${s3Key}.png`, `${s3Key}.webp`];
+  for (const candidate of candidates) {
+    const exists = await doesAssetObjectExist(candidate);
+    if (exists) {
+      return getPresignedAssetsDownloadUrl(candidate, 900);
+    }
+  }
+  return null;
+};
+
+const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitiveFields: boolean, deleted: boolean) => {
   const db = await getDb();
   const conditions: SQL<unknown>[] = [
     eq(entry.eventId, query.eventId),
@@ -434,8 +433,10 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .orderBy(asc(auditLog.createdAt));
 
   const vehicleLabel = toVehicleLabel(current.vehicleMake, current.vehicleModel, current.startNumberNorm);
-  const vehicleThumbUrl = await getVehicleThumbUrl(current.vehicleImageS3Key);
-  const backupVehicleThumbUrl = await getVehicleThumbUrl(backupVehicle?.imageS3Key ?? null);
+  const [vehicleThumbUrl, backupVehicleThumbUrl] = await Promise.all([
+    getVehicleThumbUrl(current.vehicleImageS3Key),
+    getVehicleThumbUrl(backupVehicle?.imageS3Key ?? null)
+  ]);
 
   return {
     entry: {

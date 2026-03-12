@@ -220,8 +220,8 @@ const buildStructuredSections = (data: TemplateData): { html: string; text: stri
     nextStepsLines.push(closingText);
   }
   if (nextStepsLines.length > 0) {
-    htmlParts.push(buildSectionCard('Naechste Schritte', nextStepsLines.map((line) => escapeHtml(line).replace(/\r?\n/g, '<br />')).join('<br />')));
-    textParts.push(`Naechste Schritte:\n${nextStepsLines.join('\n')}`);
+    htmlParts.push(buildSectionCard('Nächste Schritte', nextStepsLines.map((line) => escapeHtml(line).replace(/\r?\n/g, '<br />')).join('<br />')));
+    textParts.push(`Nächste Schritte:\n${nextStepsLines.join('\n')}`);
   }
 
   return {
@@ -233,7 +233,7 @@ const buildStructuredSections = (data: TemplateData): { html: string; text: stri
 const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: string }> = {
   registration_received: {
     mailLabel: '',
-    heroSubtitle: 'Bitte bestaetige deine E-Mail-Adresse, um die Anmeldung abzuschliessen.'
+    heroSubtitle: 'Bitte bestätige deine E-Mail-Adresse, um die Anmeldung abzuschließen.'
   },
   accepted_open_payment: {
     mailLabel: 'Prozessmail',
@@ -253,7 +253,7 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   },
   event_update: {
     mailLabel: '',
-    heroSubtitle: 'Wichtige Updates fuer deinen Renntag.'
+    heroSubtitle: 'Wichtige Updates für deinen Renntag.'
   },
   free_form: {
     mailLabel: '',
@@ -261,7 +261,7 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   },
   payment_reminder_followup: {
     mailLabel: '',
-    heroSubtitle: 'Letzte Runde vor dem Start: Bitte Zahlung abschliessen.'
+    heroSubtitle: 'Letzte Runde vor dem Start: Bitte Zahlung abschließen.'
   },
   email_confirmation: {
     mailLabel: '',
@@ -286,7 +286,7 @@ const resolveLogoUrl = (data: TemplateData): { logoUrl: string | null; warning: 
   }
   const httpsUrl = normalizeHttpsUrl(candidate);
   if (!httpsUrl) {
-    return { logoUrl: null, warning: 'logoUrl verworfen (ungueltig oder nicht https).' };
+    return { logoUrl: null, warning: 'logoUrl verworfen (ungültig oder nicht https).' };
   }
 
   const url = new URL(httpsUrl);
@@ -376,7 +376,7 @@ const buildHtmlDocument = (input: {
 
   const campaignCtaUrl = normalizePublicUrl(input.data.ctaUrl);
   const campaignCtaText = isPresentValue(input.data.ctaText) ? toStringValue(input.data.ctaText) : 'Mehr erfahren';
-  const verificationCtaLabel = input.templateKey === 'email_confirmation' ? 'E-Mail bestaetigen' : 'Anmeldung bestaetigen';
+  const verificationCtaLabel = input.templateKey === 'email_confirmation' ? 'E-Mail bestätigen' : 'Anmeldung bestätigen';
   const ctaBlock =
     (input.templateKey === 'registration_received' || input.templateKey === 'email_confirmation') && input.verificationUrl
       ? `<p style="margin:18px 0 0 0;"><a href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#254CA2;color:#FFFFFF;text-decoration:none;font-size:14px;font-weight:700;line-height:1;padding:12px 18px;border-radius:10px;">${verificationCtaLabel}</a></p><p style="margin:8px 0 0 0;color:#64748B;font-size:12px;line-height:1.5;">Falls der Button nicht funktioniert: ${escapeHtml(input.verificationUrl)}</p>`
@@ -494,7 +494,7 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
 
   if (input.templateKey === 'registration_received' || input.templateKey === 'email_confirmation') {
     if (!verificationUrl) {
-      warnings.push('verificationUrl fehlt; CTA und Verifizierungslink koennen nicht gerendert werden.');
+      warnings.push('verificationUrl fehlt; CTA und Verifizierungslink können nicht gerendert werden.');
     } else if (!bodyTextRendered.includes(verificationUrl)) {
       bodyTextRendered = `${bodyTextRendered}\n\nVerifizierung: ${verificationUrl}`.trim();
     }

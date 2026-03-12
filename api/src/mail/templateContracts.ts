@@ -62,7 +62,7 @@ const CAMPAIGN_TEXT_BASE_FIELDS: ComposerField[] = [
     type: 'text',
     required: false,
     multiline: true,
-    placeholder: 'Viele Gruesse, euer Team',
+    placeholder: 'Viele Grüße, euer Team',
     helpText: 'Wird als Abschluss unterhalb der Details gerendert.'
   }
 ];
@@ -188,7 +188,7 @@ const CONTRACTS: Record<string, TemplateContract> = {
         required: true,
         multiline: false,
         placeholder: 'https://...',
-        helpText: 'Headerbild fuer den Newsletter.'
+        helpText: 'Headerbild für den Newsletter.'
       },
       {
         key: 'highlights',
@@ -206,7 +206,7 @@ const CONTRACTS: Record<string, TemplateContract> = {
         required: false,
         multiline: false,
         placeholder: 'MSC OBERLAUSITZ',
-        helpText: 'Kleine Ueberschrift ueber dem Eventnamen.'
+        helpText: 'Kleine Überschrift über dem Eventnamen.'
       },
       {
         key: 'heroSubtitle',

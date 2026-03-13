@@ -1437,6 +1437,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     locale,
     fallbackGreeting: chromeCopy.fallbackGreeting,
     headerTitle: processTemplateCopy?.headerTitle ?? null,
+    preheader: processTemplateCopy?.preheader ?? null,
     ctaText:
       template.templateKey === 'email_confirmation_reminder'
         ? chromeCopy.confirmationReminderCta

@@ -495,7 +495,7 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   },
   accepted_open_payment: {
     mailLabel: '',
-    heroSubtitle: 'Startplatz fixiert. Jetzt fehlt nur noch der Zahlungsschritt.'
+    heroSubtitle: 'Deine Nennung ist zugelassen. Jetzt fehlt nur noch der Zahlungsschritt.'
   },
   accepted_paid_completed: {
     mailLabel: '',
@@ -511,11 +511,11 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   },
   newsletter: {
     mailLabel: '',
-    heroSubtitle: 'Frische News. Klare Kante. Volle Vorfreude aufs Event.'
+    heroSubtitle: 'Aktuelle Informationen rund um die Veranstaltung.'
   },
   event_update: {
     mailLabel: '',
-    heroSubtitle: 'Wichtige Updates für deinen Renntag.'
+    heroSubtitle: 'Wichtige Updates für deine Teilnahme.'
   },
   free_form: {
     mailLabel: '',
@@ -523,15 +523,15 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   },
   payment_reminder_followup: {
     mailLabel: '',
-    heroSubtitle: 'Letzte Runde vor dem Start: Bitte Zahlung abschließen.'
+    heroSubtitle: 'Bitte schließe den offenen Zahlungsschritt für deine Nennung ab.'
   },
   email_confirmation: {
     mailLabel: '',
-    heroSubtitle: 'Ein Klick trennt dich noch vom finalen Go.'
+    heroSubtitle: 'Bitte bestätige deine E-Mail-Adresse, damit wir deine Nennung bearbeiten können.'
   },
   codriver_info: {
     mailLabel: '',
-    heroSubtitle: 'Anmeldung eingegangen'
+    heroSubtitle: 'Information zu deiner Beifahrer-Eintragung'
   }
 };
 
@@ -680,12 +680,16 @@ const buildHtmlDocument = (input: {
     ? `<div style="display:inline-block;background:#FACC15;color:#0F172A;padding:4px 10px;border-radius:8px;font-size:11px;font-weight:700;line-height:1;letter-spacing:.06em;text-transform:uppercase;">${escapeHtml(mailLabel)}</div>`
     : '';
   const headerRight = badgeHtml || (eventDateText ? `<div style="font-size:12px;opacity:.9;">${escapeHtml(eventDateText)}</div>` : '');
-  const processHeaderText = processHeaderTitle || preheaderText || heroSubtitle;
+  const processHeaderText = processHeaderTitle || preheaderText;
   const processHeaderLine = processHeaderText
     ? `<div style="margin-top:14px;font-size:13px;line-height:1.55;letter-spacing:.10em;text-transform:uppercase;font-weight:700;">${escapeHtml(processHeaderText)}</div>`
     : '';
   const campaignPreheaderLine = preheaderText
     ? `<div style="margin-top:14px;font-size:14px;line-height:1.7;opacity:.95;">${escapeHtml(preheaderText)}</div>`
+    : '';
+  const hiddenPreheaderText = (contract.scope === 'process' ? processHeaderText : preheaderText) || heroSubtitle;
+  const hiddenPreheader = hiddenPreheaderText
+    ? `<div style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;max-height:0;max-width:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;">${escapeHtml(hiddenPreheaderText)}&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>`
     : '';
 
   return [
@@ -708,6 +712,7 @@ const buildHtmlDocument = (input: {
     '</style>',
     '</head>',
     '<body style="margin:0;padding:0;background:#F8FAFC;color:#0F172A;font-family:Segoe UI,Arial,sans-serif;">',
+    hiddenPreheader,
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="mail-wrapper" style="width:100%;background:#F8FAFC;padding:24px 12px;">',
     '<tr><td align="center">',
     '<table role="presentation" width="640" cellpadding="0" cellspacing="0" class="mail-card" style="width:100%;max-width:640px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:14px;">',

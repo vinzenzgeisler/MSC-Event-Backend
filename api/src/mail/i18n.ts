@@ -67,6 +67,7 @@ type MailChromeCopy = {
   nextStepsTitle: string;
   organizerNoteTitle: string;
   entryContextTitle: string;
+  codriverEntryContextTitle: string;
   fallbackGreeting: string;
   replyHint: string;
   impressumLabel: string;
@@ -87,6 +88,7 @@ const CHROME_COPY: Record<SupportedMailLocale, MailChromeCopy> = {
     nextStepsTitle: 'Nächste Schritte',
     organizerNoteTitle: 'Hinweis vom Veranstalter',
     entryContextTitle: 'Deine Anmeldung',
+    codriverEntryContextTitle: 'Eintragung als Beifahrer',
     fallbackGreeting: 'Hallo',
     replyHint: 'Bei Fragen antworte einfach auf diese E-Mail.',
     impressumLabel: 'Impressum',
@@ -105,6 +107,7 @@ const CHROME_COPY: Record<SupportedMailLocale, MailChromeCopy> = {
     nextStepsTitle: 'Next steps',
     organizerNoteTitle: 'Organizer note',
     entryContextTitle: 'Your registration',
+    codriverEntryContextTitle: 'Codriver assignment',
     fallbackGreeting: 'Hello',
     replyHint: 'If you have any questions, simply reply to this email.',
     impressumLabel: 'Legal notice',
@@ -123,6 +126,7 @@ const CHROME_COPY: Record<SupportedMailLocale, MailChromeCopy> = {
     nextStepsTitle: 'Další kroky',
     organizerNoteTitle: 'Poznámka pořadatele',
     entryContextTitle: 'Vaše přihláška',
+    codriverEntryContextTitle: 'Zařazení jako spolujezdec',
     fallbackGreeting: 'Dobrý den',
     replyHint: 'V případě dotazů stačí odpovědět na tento e-mail.',
     impressumLabel: 'Impresum',
@@ -141,6 +145,7 @@ const CHROME_COPY: Record<SupportedMailLocale, MailChromeCopy> = {
     nextStepsTitle: 'Kolejne kroki',
     organizerNoteTitle: 'Informacja od organizatora',
     entryContextTitle: 'Twoje zgłoszenie',
+    codriverEntryContextTitle: 'Wpis jako pilot',
     fallbackGreeting: 'Dzień dobry',
     replyHint: 'W razie pytań wystarczy odpowiedzieć na tę wiadomość.',
     impressumLabel: 'Impressum',

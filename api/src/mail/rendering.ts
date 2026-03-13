@@ -392,6 +392,7 @@ const buildEntryContextCard = (
 ): string => {
   const copy = getMailChromeCopy(locale);
   const visual = getTemplateVisualConfig(templateKey);
+  const entryContextTitle = templateKey === 'codriver_info' ? copy.codriverEntryContextTitle : copy.entryContextTitle;
   const rows: Array<{ label: string; value: string }> = [];
   if (isPresentValue(data.className)) {
     rows.push({ label: 'Klasse', value: toStringValue(data.className) });
@@ -403,7 +404,11 @@ const buildEntryContextCard = (
   if (vehicleLabel) {
     rows.push({ label: 'Fahrzeug', value: vehicleLabel });
   }
-  if (isPresentValue(data.amountOpen)) {
+  const showAmountOpen =
+    templateKey === 'accepted_open_payment' ||
+    templateKey === 'payment_reminder' ||
+    templateKey === 'payment_reminder_followup';
+  if (showAmountOpen && isPresentValue(data.amountOpen)) {
     rows.push({ label: 'Nenngeld offen', value: toStringValue(data.amountOpen) });
   }
   if (rows.length === 0) {
@@ -420,7 +425,7 @@ const buildEntryContextCard = (
   return [
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="mail-entry" style="margin:0 0 14px 0;border:1px solid ${visual.entryBorder};border-radius:10px;background:${visual.entryBackground};">`,
     `<tr><td style="padding:${compact ? '10px 12px' : '12px 14px'};">`,
-    `<div style="margin:0 0 8px 0;color:${visual.entryLabelColor};font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(copy.entryContextTitle)}</div>`,
+    `<div style="margin:0 0 8px 0;color:${visual.entryLabelColor};font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(entryContextTitle)}</div>`,
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tbody>${rowHtml}</tbody></table>`,
     '</td></tr>',
     '</table>'

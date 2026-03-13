@@ -155,6 +155,17 @@ const normalizeWhitespaceBlocks = (value: string): string =>
     .replace(/[ \t]+\n/g, '\n')
     .trim();
 
+const ensureClubSuffix = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (/\be\.\s?v\.\s*$/i.test(trimmed)) {
+    return trimmed.replace(/\be\.\s?v\.\s*$/i, 'e.V.');
+  }
+  return `${trimmed} e.V.`;
+};
+
 const stripLegacySupportHintsText = (value: string): string => {
   const lines = value
     .split(/\r?\n/)
@@ -166,6 +177,19 @@ const stripLegacySupportHintsHtml = (value: string): string =>
   value
     .replace(/<p[^>]*>\s*bei\s+r(?:ü|ue)ckfragen[\s\S]*?<\/p>/gi, '')
     .replace(/<p[^>]*>\s*bei\s+fragen[\s\S]*?<\/p>/gi, '');
+
+const stripCodriverSupportSentenceText = (value: string): string =>
+  normalizeWhitespaceBlocks(
+    value.replace(
+      /(?:^|[\s\n])bei\s+r(?:ü|ue)ckfragen\s+melde\s+dich\s+bitte\s+unter\s+[^\n.]+\.?/gi,
+      ' '
+    )
+  );
+
+const stripCodriverSupportSentenceHtml = (value: string): string =>
+  value
+    .replace(/<p[^>]*>[\s\S]*?bei\s+r(?:ü|ue)ckfragen\s+melde\s+dich\s+bitte\s+unter[\s\S]*?<\/p>/gi, '')
+    .replace(/bei\s+r(?:ü|ue)ckfragen\s+melde\s+dich\s+bitte\s+unter\s+[^<.]+\.?/gi, '');
 
 const normalizeInlineTypographyHtml = (value: string): string =>
   value
@@ -264,8 +288,110 @@ const resolveVehicleLabel = (data: TemplateData): string => {
   return parts.join(' · ');
 };
 
-const buildEntryContextCard = (data: TemplateData, compact: boolean, locale: SupportedMailLocale): string => {
+type TemplateVisualConfig = {
+  accentLine: string;
+  entryBackground: string;
+  entryBorder: string;
+  entryLabelColor: string;
+};
+
+const TEMPLATE_VISUALS: Record<string, TemplateVisualConfig> = {
+  registration_received: {
+    accentLine: '#7DD3FC',
+    entryBackground: '#F0F9FF',
+    entryBorder: '#BAE6FD',
+    entryLabelColor: '#0369A1'
+  },
+  email_confirmation_reminder: {
+    accentLine: '#67E8F9',
+    entryBackground: '#ECFEFF',
+    entryBorder: '#A5F3FC',
+    entryLabelColor: '#0891B2'
+  },
+  preselection: {
+    accentLine: '#93C5FD',
+    entryBackground: '#EFF6FF',
+    entryBorder: '#BFDBFE',
+    entryLabelColor: '#1D4ED8'
+  },
+  accepted_open_payment: {
+    accentLine: '#FCD34D',
+    entryBackground: '#FFFBEB',
+    entryBorder: '#FDE68A',
+    entryLabelColor: '#B45309'
+  },
+  accepted_paid_completed: {
+    accentLine: '#86EFAC',
+    entryBackground: '#ECFDF5',
+    entryBorder: '#BBF7D0',
+    entryLabelColor: '#15803D'
+  },
+  rejected: {
+    accentLine: '#FDA4AF',
+    entryBackground: '#FFF1F2',
+    entryBorder: '#FECDD3',
+    entryLabelColor: '#BE123C'
+  },
+  newsletter: {
+    accentLine: '#7DD3FC',
+    entryBackground: '#F0F9FF',
+    entryBorder: '#BAE6FD',
+    entryLabelColor: '#0369A1'
+  },
+  event_update: {
+    accentLine: '#93C5FD',
+    entryBackground: '#EFF6FF',
+    entryBorder: '#BFDBFE',
+    entryLabelColor: '#1D4ED8'
+  },
+  free_form: {
+    accentLine: '#A5B4FC',
+    entryBackground: '#EEF2FF',
+    entryBorder: '#C7D2FE',
+    entryLabelColor: '#4338CA'
+  },
+  payment_reminder_followup: {
+    accentLine: '#FCD34D',
+    entryBackground: '#FFFBEB',
+    entryBorder: '#FDE68A',
+    entryLabelColor: '#B45309'
+  },
+  payment_reminder: {
+    accentLine: '#FCD34D',
+    entryBackground: '#FFFBEB',
+    entryBorder: '#FDE68A',
+    entryLabelColor: '#B45309'
+  },
+  email_confirmation: {
+    accentLine: '#7DD3FC',
+    entryBackground: '#F0F9FF',
+    entryBorder: '#BAE6FD',
+    entryLabelColor: '#0369A1'
+  },
+  codriver_info: {
+    accentLine: '#7DD3FC',
+    entryBackground: '#F0F9FF',
+    entryBorder: '#BAE6FD',
+    entryLabelColor: '#0369A1'
+  }
+};
+
+const getTemplateVisualConfig = (templateKey: string): TemplateVisualConfig =>
+  TEMPLATE_VISUALS[templateKey] ?? {
+    accentLine: '#93C5FD',
+    entryBackground: '#EFF6FF',
+    entryBorder: '#BFDBFE',
+    entryLabelColor: '#1D4ED8'
+  };
+
+const buildEntryContextCard = (
+  templateKey: string,
+  data: TemplateData,
+  compact: boolean,
+  locale: SupportedMailLocale
+): string => {
   const copy = getMailChromeCopy(locale);
+  const visual = getTemplateVisualConfig(templateKey);
   const rows: Array<{ label: string; value: string }> = [];
   if (isPresentValue(data.className)) {
     rows.push({ label: 'Klasse', value: toStringValue(data.className) });
@@ -292,9 +418,9 @@ const buildEntryContextCard = (data: TemplateData, compact: boolean, locale: Sup
     .join('');
 
   return [
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="mail-entry" style="margin:0 0 18px 0;border:1px solid #DDE4EE;border-left:4px solid #F4C406;border-radius:10px;background:#FFFFFF;">',
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="mail-entry" style="margin:0 0 14px 0;border:1px solid ${visual.entryBorder};border-radius:10px;background:${visual.entryBackground};">`,
     `<tr><td style="padding:${compact ? '10px 12px' : '12px 14px'};">`,
-    `<div style="margin:0 0 8px 0;color:#254CA2;font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">${escapeHtml(copy.entryContextTitle)}</div>`,
+    `<div style="margin:0 0 8px 0;color:${visual.entryLabelColor};font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(copy.entryContextTitle)}</div>`,
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tbody>${rowHtml}</tbody></table>`,
     '</td></tr>',
     '</table>'
@@ -405,7 +531,7 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   },
   codriver_info: {
     mailLabel: '',
-    heroSubtitle: 'Du wurdest als Beifahrer eingetragen.'
+    heroSubtitle: 'Anmeldung eingegangen'
   }
 };
 
@@ -466,6 +592,7 @@ const buildHtmlDocument = (input: {
   locale: SupportedMailLocale;
 }): string => {
   const copy = getMailChromeCopy(input.locale);
+  const visual = getTemplateVisualConfig(input.templateKey);
   const eventName = isPresentValue(input.data.eventName)
     ? toStringValue(input.data.eventName)
     : (process.env.MAIL_BRAND_EVENT_NAME ?? 'MSC Event');
@@ -491,13 +618,13 @@ const buildHtmlDocument = (input: {
     templatePresentation.mailLabel;
   const mailLabel = isPresentValue(mailLabelValue) ? toStringValue(mailLabelValue) : '';
 
-  const heroEyebrow = isPresentValue(input.data.heroEyebrow) ? toStringValue(input.data.heroEyebrow) : '';
   const processHeaderTitle = isPresentValue(input.data.headerTitle) ? toStringValue(input.data.headerTitle) : '';
-  const eyebrowText = contract.scope === 'process' ? processHeaderTitle : heroEyebrow;
   const heroSubtitle = isPresentValue(input.data.heroSubtitle)
     ? toStringValue(input.data.heroSubtitle)
     : templatePresentation.heroSubtitle;
+  const preheaderText = isPresentValue(input.data.preheader) ? toStringValue(input.data.preheader) : '';
   const heroImageUrl = normalizeHttpsUrl(input.data.heroImageUrl);
+  const brandName = ensureClubSuffix((process.env.MAIL_BRAND_NAME ?? 'MSC Oberlausitzer Dreiländereck').trim());
 
   const eventDateText = isPresentValue(input.data.eventDateText)
     ? toStringValue(input.data.eventDateText)
@@ -512,17 +639,18 @@ const buildHtmlDocument = (input: {
     normalizeBaseUrl(process.env.NENNUNGSTOOL_URL);
   const impressumUrl = baseUrl ? `${baseUrl}/anmeldung/rechtliches/impressum` : null;
   const datenschutzUrl = baseUrl ? `${baseUrl}/anmeldung/rechtliches/datenschutz` : null;
-
   const { logoUrl } = resolveLogoUrl(input.data);
 
   const contactHtml = contactEmail
-    ? `<div style="margin-top:6px;">Kontakt: <a href="mailto:${escapeHtml(contactEmail)}" style="color:#254CA2;text-decoration:underline;">${escapeHtml(contactEmail)}</a></div>`
+    ? `<div style="margin-top:6px;">Kontakt: <a href="mailto:${escapeHtml(contactEmail)}" style="color:#1D4ED8;text-decoration:underline;">${escapeHtml(contactEmail)}</a></div>`
     : '';
   const replyHintHtml = `<div style="margin-top:8px;">${escapeHtml(copy.replyHint)}</div>`;
   const legalLinks = impressumUrl && datenschutzUrl
-    ? `<div style="margin-top:8px;"><a href="${escapeHtml(impressumUrl)}" target="_blank" rel="noopener noreferrer" style="color:#254CA2;text-decoration:underline;">${escapeHtml(copy.impressumLabel)}</a> · <a href="${escapeHtml(datenschutzUrl)}" target="_blank" rel="noopener noreferrer" style="color:#254CA2;text-decoration:underline;">${escapeHtml(copy.privacyLabel)}</a></div>`
+    ? `<div style="margin-top:8px;"><a href="${escapeHtml(impressumUrl)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${escapeHtml(copy.impressumLabel)}</a> · <a href="${escapeHtml(datenschutzUrl)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${escapeHtml(copy.privacyLabel)}</a></div>`
     : '';
-  const dateHtml = eventDateText ? `<div>${escapeHtml(eventName)} · ${escapeHtml(eventDateText)}</div>` : `<div>${escapeHtml(eventName)}</div>`;
+  const dateHtml = eventDateText
+    ? `<div>${escapeHtml(eventName)} · ${escapeHtml(eventDateText)}</div>`
+    : `<div>${escapeHtml(eventName)}</div>`;
 
   const campaignCtaUrl = normalizePublicUrl(input.data.ctaUrl);
   const campaignCtaText = isPresentValue(input.data.ctaText) ? toStringValue(input.data.ctaText) : 'Mehr erfahren';
@@ -534,42 +662,31 @@ const buildHtmlDocument = (input: {
       input.templateKey === 'email_confirmation' ||
       input.templateKey === 'email_confirmation_reminder'
     ) && input.verificationUrl
-      ? `<p style="margin:18px 0 0 0;"><a class="mail-cta" href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#F4C406;color:#0F1729;text-decoration:none;font-size:15px;font-weight:700;line-height:1;padding:12px 18px;border-radius:10px;border:1px solid #E2B700;">${verificationCtaLabel}</a></p><p style="margin:8px 0 0 0;color:#64748B;font-size:13px;line-height:1.5;word-break:break-word;">${escapeHtml(copy.ctaFallbackPrefix)} ${escapeHtml(input.verificationUrl)}</p>`
+      ? `<p style="margin:18px 0 0 0;"><a class="mail-cta" href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#FACC15;color:#0F172A;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:700;">${verificationCtaLabel}</a></p><p style="margin:10px 0 0 0;color:#64748B;font-size:12px;line-height:1.5;">${escapeHtml(copy.ctaFallbackPrefix)} <a href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;">${escapeHtml(input.verificationUrl)}</a></p>`
       : isCampaignTemplate(input.templateKey) && campaignCtaUrl
-        ? `<p style="margin:18px 0 0 0;"><a class="mail-cta" href="${escapeHtml(campaignCtaUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#F4C406;color:#0F1729;text-decoration:none;font-size:15px;font-weight:700;line-height:1;padding:12px 18px;border-radius:10px;border:1px solid #E2B700;">${escapeHtml(campaignCtaText)}</a></p><p style="margin:8px 0 0 0;color:#64748B;font-size:13px;line-height:1.5;word-break:break-word;">${escapeHtml(copy.ctaFallbackPrefix)} ${escapeHtml(campaignCtaUrl)}</p>`
+        ? `<p style="margin:18px 0 0 0;"><a class="mail-cta" href="${escapeHtml(campaignCtaUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#FACC15;color:#0F172A;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:700;">${escapeHtml(campaignCtaText)}</a></p><p style="margin:10px 0 0 0;color:#64748B;font-size:12px;line-height:1.5;">${escapeHtml(copy.ctaFallbackPrefix)} <a href="${escapeHtml(campaignCtaUrl)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;">${escapeHtml(campaignCtaUrl)}</a></p>`
         : '';
 
   const sectionsHtml = !input.hasContentOverride && isCampaignTemplate(input.templateKey) ? input.structuredSectionsHtml : '';
   const entryContextHtml = includeEntryContext ? input.entryContextHtml : '';
   const signoffHtml = input.includeStandardSignoff
-    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:18px 0 0 0;"><tr><td><p style="margin:0 0 10px 0;color:#0F1729;font-size:15px;line-height:1.6;">${escapeHtml(copy.signoffLead)}</p><p style="margin:0;color:#0F1729;font-size:15px;line-height:1.6;">${escapeHtml(copy.signoffLine1)}<br />${escapeHtml(copy.signoffLine2)}<br />${escapeHtml(copy.signoffLine3)}</p></td></tr></table>`
+    ? `<p style="margin:18px 0 0 0;color:#475569;font-size:15px;line-height:1.72;">${escapeHtml(copy.signoffLead)}</p><p style="margin:12px 0 0 0;color:#475569;font-size:15px;line-height:1.72;">${escapeHtml(copy.signoffLine1)}<br />${escapeHtml(copy.signoffLine2)}<br />${escapeHtml(copy.signoffLine3)}</p>`
     : '';
 
   const logoHtml = logoUrl
-    ? `<img class="mail-logo" src="${escapeHtml(logoUrl)}" alt="Logo" width="56" style="display:block;width:56px;max-width:56px;height:auto;border:0;outline:none;text-decoration:none;" />`
+    ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" width="28" style="display:block;width:28px;max-width:28px;height:auto;border:0;" />`
     : '';
   const badgeHtml = showBadge && mailLabel
-    ? `<div style="display:inline-block;background:#F4C406;color:#0F1729;padding:4px 10px;border-radius:8px;font-size:11px;font-weight:700;line-height:1;letter-spacing:0.06em;text-transform:uppercase;">${escapeHtml(mailLabel)}</div>`
+    ? `<div style="display:inline-block;background:#FACC15;color:#0F172A;padding:4px 10px;border-radius:8px;font-size:11px;font-weight:700;line-height:1;letter-spacing:.06em;text-transform:uppercase;">${escapeHtml(mailLabel)}</div>`
     : '';
-  const heroBadgeRow = badgeHtml
-    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td class="mail-badge-wrap" align="right" style="padding:0 0 10px 0;">${badgeHtml}</td></tr></table>`
+  const headerRight = badgeHtml || (eventDateText ? `<div style="font-size:12px;opacity:.9;">${escapeHtml(eventDateText)}</div>` : '');
+  const processHeaderText = processHeaderTitle || preheaderText || heroSubtitle;
+  const processHeaderLine = processHeaderText
+    ? `<div style="margin-top:14px;font-size:13px;line-height:1.55;letter-spacing:.10em;text-transform:uppercase;font-weight:700;">${escapeHtml(processHeaderText)}</div>`
     : '';
-  const heroBrandRow = [
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="mail-hero-grid">',
-    '<tr>',
-    logoHtml
-      ? `<td class="mail-brand-cell" valign="top" style="width:72px;padding:0 12px 0 0;"><table role="presentation" cellpadding="0" cellspacing="0" class="mail-logo-frame" style="display:inline-table;border:1px solid rgba(255,255,255,0.42);border-radius:10px;background:rgba(255,255,255,0.14);"><tr><td style="padding:6px;">${logoHtml}</td></tr></table></td>`
-      : '',
-    '<td class="mail-headline-cell" valign="top">',
-    eyebrowText
-      ? `<div class="mail-eyebrow" style="margin:0 0 6px 0;font-size:11px;line-height:1.2;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#F4C406;">${escapeHtml(eyebrowText)}</div>`
-      : '',
-    `<div class="mail-title" style="margin:0;font-size:30px;line-height:1.1;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;">${escapeHtml(eventName)}</div>`,
-    `<div class="mail-subtitle" style="margin:8px 0 0 0;font-size:14px;line-height:1.5;color:#DCE7FF;">${escapeHtml(heroSubtitle)}</div>`,
-    '</td>',
-    '</tr>',
-    '</table>'
-  ].join('');
+  const campaignPreheaderLine = preheaderText
+    ? `<div style="margin-top:14px;font-size:14px;line-height:1.7;opacity:.95;">${escapeHtml(preheaderText)}</div>`
+    : '';
 
   return [
     '<!doctype html>',
@@ -580,52 +697,41 @@ const buildHtmlDocument = (input: {
     '<meta name="x-apple-disable-message-reformatting" />',
     `<title>${escapeHtml(input.subjectRendered)}</title>`,
     '<style>',
-    '@media only screen and (max-width:620px){',
-    '  .mail-shell{padding:12px 6px;}',
-    '  .mail-card{border-radius:10px;}',
-    '  .mail-logo{width:48px;max-width:48px;}',
-    '  .mail-brand-cell, .mail-headline-cell{display:block;width:100%;}',
-    '  .mail-brand-cell{padding:0 0 10px 0;}',
-    '  .mail-badge-wrap{text-align:left;}',
-    '  .mail-hero{padding:14px;}',
-    '  .mail-title{font-size:24px;line-height:1.15;}',
-    '  .mail-subtitle{font-size:14px;line-height:1.5;}',
-    '  .mail-content{padding:14px;}',
-    '  .mail-footer{padding:12px 14px 16px;}',
-    '  .mail-entry-label, .mail-entry-value{display:block;width:100%;text-align:left;padding:3px 0;}',
-    '  .mail-cta{display:block;width:100%;box-sizing:border-box;text-align:center;padding:14px 16px;font-size:16px;}',
-    '  .mail-legal a{display:inline-block;margin-top:6px;}',
+    '@media only screen and (max-width:640px){',
+    '  .mail-wrapper{padding:12px 8px !important;}',
+    '  .mail-hero,.mail-content,.mail-footer{padding:16px !important;}',
+    '  .mail-title{font-size:24px !important;line-height:1.15 !important;}',
+    '  .mail-entry-label,.mail-entry-value{display:block !important;width:100% !important;text-align:left !important;padding:3px 0 !important;}',
+    '  .mail-cta{display:block !important;width:100% !important;box-sizing:border-box !important;text-align:center !important;}',
     '}',
-    '.mail-body, .mail-body p, .mail-body li, .mail-body td, .mail-body div, .mail-body span, .mail-body a {',
-    '  font-size:15px;',
-    '  line-height:1.6;',
-    '  color:#0F1729;',
-    '}',
-    '.mail-logo-frame td{padding:6px;}',
+    '.mail-body,.mail-body p,.mail-body li,.mail-body td,.mail-body div,.mail-body span,.mail-body a{font-size:15px;line-height:1.72;color:#0F172A;}',
     '</style>',
     '</head>',
-    '<body style="margin:0;padding:0;background:#F3F5F8;color:#0F1729;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">',
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="mail-shell" style="width:100%;background:#F3F5F8;padding:22px 10px;">',
+    '<body style="margin:0;padding:0;background:#F8FAFC;color:#0F172A;font-family:Segoe UI,Arial,sans-serif;">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="mail-wrapper" style="width:100%;background:#F8FAFC;padding:24px 12px;">',
     '<tr><td align="center">',
-    '<table role="presentation" width="600" cellpadding="0" cellspacing="0" class="mail-card" style="width:100%;max-width:600px;background:#FFFFFF;border:1px solid #DDE4EE;border-radius:12px;">',
-    '<tr><td style="height:4px;line-height:4px;font-size:0;background:#F4C406;">&nbsp;</td></tr>',
-    '<tr>',
-    '<td class="mail-hero" style="padding:16px 18px 14px 18px;background:#254CA2;color:#FFFFFF;">',
-    heroBadgeRow,
-    heroBrandRow,
-    '</td>',
-    '</tr>',
+    '<table role="presentation" width="640" cellpadding="0" cellspacing="0" class="mail-card" style="width:100%;max-width:640px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:14px;">',
+    '<tr><td class="mail-hero" style="background:linear-gradient(90deg,#172554 0%,#1E3A8A 55%,#1E40AF 100%);padding:24px 26px;color:#FFFFFF;">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>',
+    logoHtml ? `<td valign="middle" style="width:36px;padding:0 8px 0 0;">${logoHtml}</td>` : '',
+    `<td valign="middle" style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;opacity:.9;">${escapeHtml(brandName)}</td>`,
+    `<td valign="middle" align="right">${headerRight}</td>`,
+    '</tr></table>',
+    `<div class="mail-title" style="margin-top:14px;font-size:28px;line-height:1.22;font-weight:700;">${escapeHtml(eventName)}</div>`,
+    `<div style="margin-top:12px;height:4px;width:86px;background:${visual.accentLine};border-radius:999px;"></div>`,
+    contract.scope === 'process' ? processHeaderLine : campaignPreheaderLine,
+    '</td></tr>',
     heroImageUrl
-      ? `<tr><td style="padding:0;"><img src="${escapeHtml(heroImageUrl)}" alt="Hero" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;outline:none;text-decoration:none;" /></td></tr>`
+      ? `<tr><td style="padding:0;"><img src="${escapeHtml(heroImageUrl)}" alt="Hero" width="640" style="display:block;width:100%;max-width:640px;height:auto;border:0;" /></td></tr>`
       : '',
-    '<tr><td class="mail-content" style="padding:18px;">',
+    '<tr><td class="mail-content" style="padding:24px 26px;font-size:15px;line-height:1.72;">',
     entryContextHtml,
     sectionsHtml,
     `<div class="mail-body">${input.bodyHtmlRendered}</div>`,
     ctaBlock,
     signoffHtml,
     '</td></tr>',
-    `<tr><td class="mail-footer" style="padding:14px 18px 18px 18px;border-top:1px solid #DDE4EE;background:#FFFFFF;color:#64748B;font-size:13px;line-height:1.5;"><div class="mail-legal">${dateHtml}${contactHtml}${replyHintHtml}${legalLinks}</div></td></tr>`,
+    `<tr><td class="mail-footer" style="border-top:1px solid #E2E8F0;background:#F8FAFC;padding:14px 26px;font-size:12px;line-height:1.5;color:#64748B;">${dateHtml}${contactHtml}${replyHintHtml}${legalLinks}</td></tr>`,
     '</table>',
     '</td></tr>',
     '</table>',
@@ -688,7 +794,9 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
   const structuredSections = buildStructuredSections(templateData, locale);
   const contract = getTemplateContract(input.templateKey);
   const includeEntryContext = input.renderOptions?.includeEntryContext ?? contract.renderOptions.includeEntryContextDefault;
-  const entryContextHtml = includeEntryContext ? buildEntryContextCard(templateData, isCompactEntryContextTemplate(input.templateKey), locale) : '';
+  const entryContextHtml = includeEntryContext
+    ? buildEntryContextCard(input.templateKey, templateData, isCompactEntryContextTemplate(input.templateKey), locale)
+    : '';
 
   const verificationUrl = normalizePublicUrl(templateData.verificationUrl);
   let bodyTextRendered = bodyText.rendered.trim();
@@ -700,6 +808,10 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
 
   bodyTextRendered = stripLegacySupportHintsText(bodyTextRendered);
   bodyHtmlRendered = stripLegacySupportHintsHtml(bodyHtmlRendered);
+  if (input.templateKey === 'codriver_info') {
+    bodyTextRendered = stripCodriverSupportSentenceText(bodyTextRendered);
+    bodyHtmlRendered = stripCodriverSupportSentenceHtml(bodyHtmlRendered);
+  }
   bodyHtmlRendered = normalizeInlineTypographyHtml(bodyHtmlRendered);
   bodyTextRendered = applyEventArticleHeuristic(bodyTextRendered, eventName);
   bodyHtmlRendered = applyEventArticleHeuristic(bodyHtmlRendered, eventName);

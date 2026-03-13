@@ -982,7 +982,9 @@ const queueCodriverInfoMails = async (
             driverName,
             className: recipient.className,
             startNumber: recipient.startNumber,
-            contactEmail: recipient.contactEmail,
+            headerTitle: 'Anmeldung eingegangen',
+            preheader: 'Anmeldung eingegangen',
+            ...(recipient.contactEmail && recipient.contactEmail.trim().length > 0 ? { contactEmail: recipient.contactEmail } : {}),
             entryCount: recipient.entryCount
           }
         },

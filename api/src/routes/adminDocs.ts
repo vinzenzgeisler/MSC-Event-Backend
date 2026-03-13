@@ -7,6 +7,7 @@ import { writeAuditLog } from '../audit/log';
 import { renderBatchDocumentPdf, renderTechCheckPdf, renderWaiverPdf } from '../docs/pdf';
 import { uploadPdf, getPresignedDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
+import { getOrCreateEntryConfirmationAttachment } from '../docs/entryConfirmation';
 
 const documentRequestSchema = z.object({
   eventId: z.string().uuid(),
@@ -317,10 +318,15 @@ export const getDocumentDownload = async (id: string, actorUserId: string | null
 };
 
 export const getOrCreateEntryDocumentDownload = async (
-  input: DocumentRequest & { type: 'waiver' | 'tech_check' },
+  input: DocumentRequest & { type: 'waiver' | 'tech_check' | 'entry_confirmation' },
   actorUserId: string | null
 ) => {
   const db = await getDb();
+  if (input.type === 'entry_confirmation') {
+    const attachment = await getOrCreateEntryConfirmationAttachment(input.eventId, input.entryId, actorUserId);
+    return getDocumentDownload(attachment.documentId, actorUserId);
+  }
+
   const existingRows = await db
     .select()
     .from(document)

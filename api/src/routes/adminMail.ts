@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { and, desc, eq, inArray, isNull, or, sql, SQL } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import {
+  emailOutboxAttachment,
   emailOutbox,
   emailTemplate,
   emailTemplateVersion,
@@ -11,6 +12,7 @@ import {
   eventClass,
   eventPricingRule,
   invoice,
+  mailAttachmentUpload,
   person,
   registrationGroupEmailVerification,
   vehicle
@@ -21,10 +23,12 @@ import { getTemplateVersion } from '../mail/templateStore';
 import { buildPublicVerificationUrl } from '../mail/verificationUrl';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
-import { renderTemplateString } from '../mail/templates';
 import { PLACEHOLDER_CATALOG, REQUIRED_PLACEHOLDERS_BY_TEMPLATE } from '../mail/placeholders';
 import { renderMailContract } from '../mail/rendering';
 import { CAMPAIGN_TEMPLATE_KEYS, getTemplateContract, MailRenderOptions } from '../mail/templateContracts';
+import { getAssetObjectMetadata, getPresignedAssetsUploadUrl } from '../docs/storage';
+import { getMailChromeCopy, getProcessTemplateCopy, resolveMailLocale } from '../mail/i18n';
+import { getOrCreateEntryConfirmationAttachment } from '../docs/entryConfirmation';
 
 type RecipientFilter = {
   acceptanceStatus?: 'pending' | 'shortlist' | 'accepted' | 'rejected';
@@ -37,6 +41,9 @@ const hasRecipientFilter = (filters: RecipientFilter | undefined): boolean =>
   Boolean(filters?.acceptanceStatus || filters?.registrationStatus || filters?.paymentStatus || filters?.classId);
 
 const DISABLED_LIFECYCLE_EVENTS = new Set<LifecycleInput['eventType']>(['preselection']);
+const MAX_CAMPAIGN_ATTACHMENTS = 3;
+const MAX_ATTACHMENT_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENT_TOTAL_SIZE_BYTES = 15 * 1024 * 1024;
 
 const assertCampaignTemplateAllowed = (templateKey: string) => {
   if (!CAMPAIGN_TEMPLATE_KEYS.has(templateKey)) {
@@ -63,6 +70,7 @@ const queueMailSchema = z
     bodyOverride: z.string().min(1).optional(),
     bodyHtmlOverride: z.string().min(1).optional(),
     templateData: z.record(z.unknown()).optional(),
+    attachmentUploadIds: z.array(z.string().uuid()).max(MAX_CAMPAIGN_ATTACHMENTS).optional(),
     renderOptions: renderOptionsSchema,
     sendAfter: z.string().datetime().optional(),
     recipientEmails: z.array(z.string().email()).optional(),
@@ -105,6 +113,7 @@ const lifecycleSchema = z.object({
   entryId: z.string().uuid(),
   eventType: z.enum([
     'registration_received',
+    'email_confirmation_reminder',
     'preselection',
     'accepted_open_payment',
     'accepted_paid_completed',
@@ -181,6 +190,7 @@ const templatePreviewSchema = z.object({
   entryId: z.string().uuid().optional(),
   templateData: z.record(z.unknown()).optional(),
   sampleData: z.record(z.unknown()).optional(),
+  attachmentUploadIds: z.array(z.string().uuid()).max(MAX_CAMPAIGN_ATTACHMENTS).optional(),
   subjectOverride: z.string().min(1).optional(),
   bodyOverride: z.string().min(1).optional(),
   bodyHtmlOverride: z.string().min(1).optional(),
@@ -199,6 +209,7 @@ const communicationSendSchema = z
     bodyOverride: z.string().min(1).optional(),
     bodyHtmlOverride: z.string().min(1).optional(),
     templateData: z.record(z.unknown()).optional(),
+    attachmentUploadIds: z.array(z.string().uuid()).max(MAX_CAMPAIGN_ATTACHMENTS).optional(),
     renderOptions: renderOptionsSchema,
     sendAfter: z.string().datetime().optional(),
     additionalEmails: z.array(z.string().email()).optional(),
@@ -247,6 +258,18 @@ const searchRecipientsSchema = z.object({
   limit: z.number().int().min(1).max(100).optional().default(20)
 });
 
+const attachmentUploadInitSchema = z.object({
+  eventId: z.string().uuid(),
+  fileName: z.string().trim().min(1).max(255),
+  contentType: z.literal('application/pdf'),
+  fileSizeBytes: z.number().int().min(1).max(MAX_ATTACHMENT_FILE_SIZE_BYTES)
+});
+
+const attachmentUploadFinalizeSchema = z.object({
+  uploadId: z.string().uuid(),
+  eventId: z.string().uuid()
+});
+
 type QueueMailInput = z.infer<typeof queueMailSchema>;
 type ReminderInput = z.infer<typeof reminderSchema>;
 type LifecycleInput = z.infer<typeof lifecycleSchema>;
@@ -259,6 +282,8 @@ type TemplatePreviewInput = z.infer<typeof templatePreviewSchema>;
 type CommunicationSendInput = z.infer<typeof communicationSendSchema>;
 type ResolveRecipientsInput = z.infer<typeof resolveRecipientsSchema>;
 type SearchRecipientsInput = z.infer<typeof searchRecipientsSchema>;
+type AttachmentUploadInitInput = z.infer<typeof attachmentUploadInitSchema>;
+type AttachmentUploadFinalizeInput = z.infer<typeof attachmentUploadFinalizeSchema>;
 
 export class DuplicateRequestError extends Error {
   public readonly existingOutboxId: string | null;
@@ -318,7 +343,8 @@ export type LifecycleMailErrorCode =
   | 'TEMPLATE_RENDER_FAILED'
   | 'OUTBOX_INSERT_FAILED'
   | 'TEMPLATE_NOT_FOUND'
-  | 'ENTRY_NOT_FOUND';
+  | 'ENTRY_NOT_FOUND'
+  | 'ENTRY_CONFIRMATION_PDF_GENERATION_FAILED';
 
 const lifecycleErrorMeta: Record<LifecycleMailErrorCode, { statusCode: number; message: string }> = {
   NO_RECIPIENT: {
@@ -344,6 +370,10 @@ const lifecycleErrorMeta: Record<LifecycleMailErrorCode, { statusCode: number; m
   ENTRY_NOT_FOUND: {
     statusCode: 404,
     message: 'Entry not found'
+  },
+  ENTRY_CONFIRMATION_PDF_GENERATION_FAILED: {
+    statusCode: 500,
+    message: 'Entry confirmation PDF generation failed'
   }
 };
 
@@ -370,6 +400,14 @@ type RegistrationContext = {
   firstName: string | null;
   lastName: string | null;
   driverName: string | null;
+};
+
+type QueuedAttachmentRef = {
+  fileName: string;
+  contentType: 'application/pdf';
+  s3Key: string;
+  fileSizeBytes: number | null;
+  source: 'upload' | 'system' | 'document';
 };
 
 const buildDedupeKey = (
@@ -440,6 +478,11 @@ const formatDateOnlyText = (value: string | Date | null): string | null => {
   }).format(date);
 };
 
+const getFallbackContactEmail = (): string | null => {
+  const candidate = (process.env.MAIL_CONTACT_EMAIL ?? process.env.SES_FROM_EMAIL ?? '').trim();
+  return candidate.length > 0 ? candidate : null;
+};
+
 const getEventMailDefaults = async (eventId: string) => {
   const db = await getDb();
   const rows = await db
@@ -457,16 +500,94 @@ const getEventMailDefaults = async (eventId: string) => {
     return {
       eventName: null,
       eventDateText: null,
-      contactEmail: process.env.MAIL_CONTACT_EMAIL ?? null,
+      contactEmail: getFallbackContactEmail(),
       nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null
     };
   }
   return {
     eventName: row.name,
     eventDateText: formatEventDateText(row.startsAt, row.endsAt),
-    contactEmail: row.contactEmail ?? process.env.MAIL_CONTACT_EMAIL ?? null,
+    contactEmail: row.contactEmail ?? getFallbackContactEmail(),
     nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null
   };
+};
+
+const normalizePdfFileName = (value: string): string => {
+  const trimmed = value.trim();
+  const safe = trimmed.replace(/[^a-zA-Z0-9._ -]/g, '_').slice(0, 200);
+  if (!safe.toLowerCase().endsWith('.pdf')) {
+    return `${safe || 'attachment'}.pdf`;
+  }
+  return safe;
+};
+
+const validateAttachmentBundle = (attachments: QueuedAttachmentRef[]) => {
+  if (attachments.length > MAX_CAMPAIGN_ATTACHMENTS) {
+    throw new Error('ATTACHMENT_LIMIT_EXCEEDED');
+  }
+  let totalSize = 0;
+  attachments.forEach((attachment) => {
+    if (attachment.contentType !== 'application/pdf') {
+      throw new Error('ATTACHMENT_INVALID_CONTENT_TYPE');
+    }
+    const size = attachment.fileSizeBytes ?? 0;
+    if (size > MAX_ATTACHMENT_FILE_SIZE_BYTES) {
+      throw new Error('ATTACHMENT_FILE_TOO_LARGE');
+    }
+    totalSize += size;
+  });
+  if (totalSize > MAX_ATTACHMENT_TOTAL_SIZE_BYTES) {
+    throw new Error('ATTACHMENT_TOTAL_SIZE_EXCEEDED');
+  }
+};
+
+const resolveUploadAttachments = async (eventId: string, uploadIds: string[] | undefined): Promise<QueuedAttachmentRef[]> => {
+  if (!uploadIds || uploadIds.length === 0) {
+    return [];
+  }
+  const uniqueIds = Array.from(new Set(uploadIds));
+  if (uniqueIds.length > MAX_CAMPAIGN_ATTACHMENTS) {
+    throw new Error('ATTACHMENT_LIMIT_EXCEEDED');
+  }
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: mailAttachmentUpload.id,
+      eventId: mailAttachmentUpload.eventId,
+      s3Key: mailAttachmentUpload.s3Key,
+      contentType: mailAttachmentUpload.contentType,
+      fileName: mailAttachmentUpload.fileName,
+      fileSizeBytes: mailAttachmentUpload.fileSizeBytes,
+      status: mailAttachmentUpload.status,
+      expiresAt: mailAttachmentUpload.expiresAt
+    })
+    .from(mailAttachmentUpload)
+    .where(inArray(mailAttachmentUpload.id, uniqueIds));
+
+  if (rows.length !== uniqueIds.length) {
+    throw new Error('ATTACHMENT_UPLOAD_NOT_FOUND');
+  }
+  const now = new Date();
+  const attachments = rows.map((row) => {
+    if (row.eventId !== eventId) {
+      throw new Error('ATTACHMENT_UPLOAD_EVENT_MISMATCH');
+    }
+    if (row.status !== 'finalized' || row.expiresAt <= now) {
+      throw new Error('ATTACHMENT_UPLOAD_NOT_FINALIZED');
+    }
+    if (row.contentType !== 'application/pdf') {
+      throw new Error('ATTACHMENT_INVALID_CONTENT_TYPE');
+    }
+    return {
+      fileName: normalizePdfFileName(row.fileName),
+      contentType: 'application/pdf' as const,
+      s3Key: row.s3Key,
+      fileSizeBytes: row.fileSizeBytes,
+      source: 'upload' as const
+    };
+  });
+  validateAttachmentBundle(attachments);
+  return attachments;
 };
 
 const resolvePaymentDeadlineDefault = async (eventId: string): Promise<string | null> => {
@@ -485,7 +606,12 @@ const enrichEntryContextTemplateData = async (
   target: RecipientTarget
 ): Promise<Record<string, unknown>> => {
   const db = await getDb();
-  const byEntryId = target.entryId || (isNonEmptyString(currentData.entryId) ? currentData.entryId : null);
+  const byEntryId = toUuidOrNull(target.entryId) ?? toUuidOrNull(currentData.entryId);
+  const byDriverPersonId = toUuidOrNull(target.driverPersonId) ?? toUuidOrNull(currentData.driverPersonId);
+  if (!byEntryId && !byDriverPersonId) {
+    // Recipient-only mails can intentionally have no entry/person binding.
+    return currentData;
+  }
   const rows = await db
     .select({
       className: eventClass.name,
@@ -503,7 +629,7 @@ const enrichEntryContextTemplateData = async (
     .where(
       byEntryId
         ? and(eq(entry.eventId, eventId), eq(entry.id, byEntryId), sql`${entry.deletedAt} is null`)
-        : and(eq(entry.eventId, eventId), eq(entry.driverPersonId, target.driverPersonId ?? ''), sql`${entry.deletedAt} is null`)
+        : and(eq(entry.eventId, eventId), eq(entry.driverPersonId, byDriverPersonId as string), sql`${entry.deletedAt} is null`)
     )
     .orderBy(desc(entry.createdAt))
     .limit(1);
@@ -547,6 +673,16 @@ const findOutboxByIdempotencyKey = async (idempotencyKey: string) => {
 
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const toUuidOrNull = (value: unknown): string | null => {
+  if (!isNonEmptyString(value)) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return UUID_PATTERN.test(trimmed) ? trimmed : null;
+};
 
 export const hasRequiredRegistrationReceivedVariables = (templateData: Record<string, unknown>): boolean =>
   Boolean(templateData.eventName && templateData.driverName && templateData.verificationUrl);
@@ -845,6 +981,7 @@ const insertOutboxRows = async (
     toEmail: string;
     templateData: Record<string, unknown>;
     idempotencyKey: string;
+    attachments?: QueuedAttachmentRef[];
   }>
 ) => {
   const db = await getDb();
@@ -853,7 +990,7 @@ const insertOutboxRows = async (
   }
 
   try {
-    await db.insert(emailOutbox).values(
+    const inserted = await db.insert(emailOutbox).values(
       rows.map((row) => ({
         eventId,
         toEmail: row.toEmail,
@@ -866,7 +1003,30 @@ const insertOutboxRows = async (
         idempotencyKey: row.idempotencyKey,
         maxAttempts: 5
       }))
-    );
+    ).returning({
+      id: emailOutbox.id,
+      idempotencyKey: emailOutbox.idempotencyKey
+    });
+
+    const idByDedupe = new Map(inserted.map((item) => [item.idempotencyKey, item.id]));
+    const attachmentRows = rows.flatMap((row) => {
+      const outboxId = idByDedupe.get(row.idempotencyKey);
+      if (!outboxId || !row.attachments || row.attachments.length === 0) {
+        return [];
+      }
+      return row.attachments.map((attachment) => ({
+        outboxId,
+        fileName: attachment.fileName,
+        contentType: attachment.contentType,
+        s3Key: attachment.s3Key,
+        fileSizeBytes: attachment.fileSizeBytes,
+        source: attachment.source
+      }));
+    });
+
+    if (attachmentRows.length > 0) {
+      await db.insert(emailOutboxAttachment).values(attachmentRows);
+    }
   } catch (error) {
     if (isPgUniqueViolation(error)) {
       throw new Error('UNIQUE_VIOLATION');
@@ -892,6 +1052,14 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
   const eventMailDefaults = await getEventMailDefaults(input.eventId);
   const paymentDeadlineDefault =
     template.templateKey === 'payment_reminder_followup' ? await resolvePaymentDeadlineDefault(input.eventId) : null;
+  const templateContract = getTemplateContract(template.templateKey);
+  if (templateContract.scope !== 'campaign' && input.attachmentUploadIds && input.attachmentUploadIds.length > 0) {
+    throw new Error('ATTACHMENT_NOT_ALLOWED_FOR_PROCESS');
+  }
+  const uploadAttachments =
+    templateContract.scope === 'campaign'
+      ? await resolveUploadAttachments(input.eventId, input.attachmentUploadIds)
+      : [];
   const renderOptions = normalizeRenderOptions(template.templateKey, input.renderOptions);
   const hasContentOverride = Boolean(input.bodyOverride || input.bodyHtmlOverride);
 
@@ -909,10 +1077,19 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         bodyTextOverride: input.bodyOverride ?? null,
         bodyHtmlOverride: input.bodyHtmlOverride ?? null
       };
+      const locale = resolveMailLocale(templateData);
+      templateData = {
+        ...templateData,
+        locale
+      };
 
       templateData = await enrichEntryContextTemplateData(input.eventId, templateData, target);
 
-      if (template.templateKey === 'registration_received' || template.templateKey === 'email_confirmation') {
+      if (
+        template.templateKey === 'registration_received' ||
+        template.templateKey === 'email_confirmation' ||
+        template.templateKey === 'email_confirmation_reminder'
+      ) {
         const context = await resolveRegistrationContext(input.eventId, target, input.templateData);
         let generatedVerificationUrl: string | null = null;
         if (context.entryId && context.registrationGroupId) {
@@ -964,6 +1141,7 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
       return {
         toEmail: target.email,
         templateData,
+        attachments: uploadAttachments,
         idempotencyKey: buildDedupeKey(
           'mail',
           input.eventId,
@@ -973,6 +1151,7 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
           {
             sendAfter: sendAfter.toISOString(),
             templateData,
+            attachmentKeys: uploadAttachments.map((item) => item.s3Key),
             driverPersonId: target.driverPersonId,
             entryId: target.entryId
           }
@@ -1182,9 +1361,11 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       eventEndsAt: event.endsAt,
       eventContactEmail: event.contactEmail,
       className: eventClass.name,
+      startNumber: entry.startNumberNorm,
       email: person.email,
       firstName: person.firstName,
-      lastName: person.lastName
+      lastName: person.lastName,
+      nationality: person.nationality
     })
     .from(entry)
     .innerJoin(event, eq(entry.eventId, event.id))
@@ -1219,6 +1400,22 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   const row = rows[0];
   const email = row.email as string;
   const driverName = `${row.firstName} ${row.lastName}`;
+  const locale = resolveMailLocale({
+    locale: null,
+    nationality: row.nationality
+  });
+  const chromeCopy = getMailChromeCopy(locale);
+  const processTemplateCopy = (
+    template.templateKey === 'registration_received' ||
+    template.templateKey === 'email_confirmation_reminder' ||
+    template.templateKey === 'accepted_open_payment' ||
+    template.templateKey === 'accepted_paid_completed' ||
+    template.templateKey === 'rejected'
+  )
+    ? getProcessTemplateCopy(template.templateKey, locale)
+    : null;
+  const lifecycleSubjectTemplate = processTemplateCopy?.subjectTemplate ?? template.subjectTemplate;
+  const lifecycleBodyTextTemplate = processTemplateCopy?.bodyTextTemplate ?? template.bodyTextTemplate;
   const normalizedDriverNote = (row.driverNote ?? '').trim();
   const driverNoteBlock =
     normalizedDriverNote.length > 0 ? `\n\nHinweis vom Veranstalter:\n${normalizedDriverNote}` : '';
@@ -1229,6 +1426,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     eventName: row.eventName,
     eventDateText: formatEventDateText(row.eventStartsAt ?? null, row.eventEndsAt ?? null),
     className: row.className,
+    startNumber: row.startNumber,
     driverName,
     entryId: row.entryId,
     registrationStatus: row.registrationStatus,
@@ -1236,7 +1434,14 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     paymentStatus: row.paymentStatus ?? null,
     amountOpenCents: row.totalCents ?? 0,
     amountOpen: `${formatEuroFromCents(row.totalCents ?? 0)} EUR`,
-    contactEmail: row.eventContactEmail ?? process.env.MAIL_CONTACT_EMAIL ?? null,
+    locale,
+    fallbackGreeting: chromeCopy.fallbackGreeting,
+    headerTitle: processTemplateCopy?.headerTitle ?? null,
+    ctaText:
+      template.templateKey === 'email_confirmation_reminder'
+        ? chromeCopy.confirmationReminderCta
+        : chromeCopy.verificationCta,
+    contactEmail: row.eventContactEmail ?? getFallbackContactEmail(),
     nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null,
     driverNote: includeDriverNoteInLifecycleMail && normalizedDriverNote.length > 0 ? normalizedDriverNote : null,
     driverNoteBlock: includeDriverNoteInLifecycleMail ? driverNoteBlock : '',
@@ -1245,7 +1450,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     paymentRecipient: process.env.PAYMENT_RECIPIENT ?? ''
   };
 
-  if (template.templateKey === 'registration_received') {
+  if (template.templateKey === 'registration_received' || template.templateKey === 'email_confirmation_reminder') {
     if (!row.registrationGroupId) {
       throw new LifecycleMailError('TEMPLATE_RENDER_FAILED', 'missing_registration_group');
     }
@@ -1264,15 +1469,36 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     };
   }
 
-  if (template.templateKey === 'registration_received') {
+  if (template.templateKey === 'registration_received' || template.templateKey === 'email_confirmation_reminder') {
     if (!hasRequiredRegistrationReceivedVariables(templateData)) {
       throw new LifecycleMailError('TEMPLATE_RENDER_FAILED', 'missing_required_registration_received_variables');
     }
   }
 
-  const renderedSubject = renderTemplateString(template.subjectTemplate, templateData).trim();
-  const renderedBody = renderTemplateString(template.bodyTextTemplate, templateData).trim();
-  if (!renderedSubject || !renderedBody) {
+  templateData = {
+    ...templateData,
+    bodyTextOverride: lifecycleBodyTextTemplate,
+    bodyHtmlOverride: null,
+    renderOptions: normalizeRenderOptions(template.templateKey, undefined)
+  };
+
+  const renderValidation = renderMailContract({
+    templateKey: template.templateKey,
+    subjectTemplate: lifecycleSubjectTemplate,
+    bodyTextTemplate: lifecycleBodyTextTemplate,
+    bodyHtmlTemplate: template.bodyHtmlTemplate,
+    data: templateData,
+    renderOptions: normalizeRenderOptions(template.templateKey, undefined),
+    hasContentOverride: true
+  });
+  if (renderValidation.missingPlaceholders.length > 0) {
+    throw new LifecycleMailError(
+      'TEMPLATE_RENDER_FAILED',
+      `missing_placeholders:${renderValidation.missingPlaceholders.join(',')}`
+    );
+  }
+
+  if (!renderValidation.subjectRendered || !renderValidation.bodyTextRendered) {
     throw new LifecycleMailError('TEMPLATE_RENDER_FAILED', 'rendered_subject_or_body_empty');
   }
 
@@ -1298,6 +1524,27 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   const idempotencyKey = input.allowDuplicate
     ? `${lifecycleDedupeKey}:allowDuplicate:${Date.now()}:${randomUUID()}`
     : lifecycleDedupeKey;
+  let lifecycleAttachments: QueuedAttachmentRef[] = [];
+  if (template.templateKey === 'accepted_open_payment') {
+    try {
+      const attachment = await getOrCreateEntryConfirmationAttachment(input.eventId, row.entryId, actorUserId);
+      lifecycleAttachments = [
+        {
+          fileName: attachment.fileName,
+          contentType: attachment.contentType,
+          s3Key: attachment.s3Key,
+          fileSizeBytes: attachment.fileSizeBytes,
+          source: attachment.source
+        }
+      ];
+    } catch (error) {
+      if (error instanceof Error && error.message === 'ENTRY_NOT_FOUND') {
+        throw new LifecycleMailError('ENTRY_NOT_FOUND', 'entry_not_found_for_entry_confirmation_pdf');
+      }
+      const reason = error instanceof Error ? error.message : 'unknown_entry_confirmation_pdf_error';
+      throw new LifecycleMailError('ENTRY_CONFIRMATION_PDF_GENERATION_FAILED', reason);
+    }
+  }
 
   let createdOutboxId: string | null = null;
   try {
@@ -1306,7 +1553,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       .values({
         eventId: input.eventId,
         toEmail: email,
-        subject: template.subjectTemplate,
+        subject: lifecycleSubjectTemplate,
         templateId: template.templateKey,
         templateVersion: template.templateVersion,
         templateData,
@@ -1317,6 +1564,18 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       })
       .returning({ id: emailOutbox.id });
     createdOutboxId = inserted[0]?.id ?? null;
+    if (createdOutboxId && lifecycleAttachments.length > 0) {
+      await db.insert(emailOutboxAttachment).values(
+        lifecycleAttachments.map((attachment) => ({
+          outboxId: createdOutboxId as string,
+          fileName: attachment.fileName,
+          contentType: attachment.contentType,
+          s3Key: attachment.s3Key,
+          fileSizeBytes: attachment.fileSizeBytes,
+          source: attachment.source
+        }))
+      );
+    }
   } catch (error) {
     if (!input.allowDuplicate && error instanceof Error && error.message === 'UNIQUE_VIOLATION') {
       const existing = await findOutboxByIdempotencyKey(lifecycleDedupeKey);
@@ -1356,6 +1615,7 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
   const db = await getDb();
   await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
   const template = await resolveTemplate(input.templateKey, input.templateVersion, input.subjectOverride);
+  assertCampaignTemplateAllowed(template.templateKey);
   const sendAfter = toIsoDate(input.sendAfter);
 
   const conditions: SQL<unknown>[] = [
@@ -1381,6 +1641,7 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
       driverPersonId: entry.driverPersonId,
       firstName: person.firstName,
       lastName: person.lastName,
+      nationality: person.nationality,
       paymentStatus: invoice.paymentStatus
     })
     .from(entry)
@@ -1416,6 +1677,7 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
         entryId: row.entryId,
         driverPersonId: row.driverPersonId,
         driverName: `${row.firstName} ${row.lastName}`,
+        nationality: row.nationality,
         paymentStatus: row.paymentStatus ?? null
       }
     ])
@@ -1430,7 +1692,8 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
         entryId: source?.entryId ?? null,
         driverPersonId: source?.driverPersonId ?? null,
         driverName: source?.driverName ?? null,
-        paymentStatus: source?.paymentStatus ?? null
+        paymentStatus: source?.paymentStatus ?? null,
+        locale: resolveMailLocale({ nationality: source?.nationality ?? null })
       },
       idempotencyKey: buildDedupeKey(
         'broadcast',
@@ -1915,9 +2178,24 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
 
 export const previewMailTemplate = async (input: TemplatePreviewInput) => {
   const template = await resolveTemplate(input.templateKey, undefined);
+  const contract = getTemplateContract(input.templateKey);
+  const previewEventId =
+    (input.sampleData && isNonEmptyString(input.sampleData.eventId) ? input.sampleData.eventId : null) ??
+    (input.templateData && isNonEmptyString(input.templateData.eventId) ? input.templateData.eventId : null);
+  if (contract.scope === 'campaign' && input.attachmentUploadIds && input.attachmentUploadIds.length > 0 && !previewEventId) {
+    throw new Error('ATTACHMENT_EVENT_REQUIRED');
+  }
+  const uploadedAttachments =
+    contract.scope === 'campaign'
+      ? await resolveUploadAttachments(previewEventId ?? '', input.attachmentUploadIds)
+      : [];
   let data: Record<string, unknown> = {
     ...(input.templateData ?? {}),
-    ...(input.sampleData ?? {})
+    ...(input.sampleData ?? {}),
+    locale:
+      (input.templateData && isNonEmptyString(input.templateData.locale) ? input.templateData.locale : null) ??
+      (input.sampleData && isNonEmptyString(input.sampleData.locale) ? input.sampleData.locale : null) ??
+      'de'
   };
   if (input.entryId) {
     const entryData = await buildPreviewDataFromEntry(input.entryId);
@@ -1960,7 +2238,106 @@ export const previewMailTemplate = async (input: TemplatePreviewInput) => {
 
   return {
     templateKey: input.templateKey,
+    attachments: uploadedAttachments.map((attachment) => ({
+      fileName: attachment.fileName,
+      contentType: attachment.contentType,
+      fileSizeBytes: attachment.fileSizeBytes
+    })),
     ...rendered
+  };
+};
+
+export const initMailAttachmentUpload = async (input: AttachmentUploadInitInput, actorUserId: string | null) => {
+  await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
+  const db = await getDb();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 1000 * 60 * 60);
+  const uploadId = randomUUID();
+  const fileName = normalizePdfFileName(input.fileName);
+  const key = `uploads/${input.eventId}/mail-attachments/${uploadId}.pdf`;
+  const upload = await getPresignedAssetsUploadUrl(key, 'application/pdf', 900);
+
+  await db.insert(mailAttachmentUpload).values({
+    id: uploadId,
+    eventId: input.eventId,
+    s3Key: key,
+    contentType: 'application/pdf',
+    fileName,
+    fileSizeBytes: input.fileSizeBytes,
+    uploadedBy: actorUserId,
+    status: 'initiated',
+    expiresAt,
+    finalizedAt: null,
+    createdAt: now,
+    updatedAt: now
+  });
+
+  return {
+    uploadId,
+    eventId: input.eventId,
+    fileName,
+    contentType: 'application/pdf',
+    fileSizeBytes: input.fileSizeBytes,
+    uploadUrl: upload.url,
+    requiredHeaders: upload.requiredHeaders,
+    expiresAt
+  };
+};
+
+export const finalizeMailAttachmentUpload = async (input: AttachmentUploadFinalizeInput) => {
+  const db = await getDb();
+  const rows = await db
+    .select()
+    .from(mailAttachmentUpload)
+    .where(and(eq(mailAttachmentUpload.id, input.uploadId), eq(mailAttachmentUpload.eventId, input.eventId)))
+    .limit(1);
+  const current = rows[0];
+  if (!current) {
+    throw new Error('ATTACHMENT_UPLOAD_NOT_FOUND');
+  }
+
+  const now = new Date();
+  if (current.expiresAt <= now) {
+    await db
+      .update(mailAttachmentUpload)
+      .set({
+        status: 'expired',
+        updatedAt: now
+      })
+      .where(eq(mailAttachmentUpload.id, current.id));
+    throw new Error('ATTACHMENT_UPLOAD_EXPIRED');
+  }
+
+  const metadata = await getAssetObjectMetadata(current.s3Key);
+  if (!metadata) {
+    throw new Error('ATTACHMENT_UPLOAD_OBJECT_MISSING');
+  }
+  if (metadata.contentType && metadata.contentType !== 'application/pdf') {
+    throw new Error('ATTACHMENT_INVALID_CONTENT_TYPE');
+  }
+  if ((metadata.contentLength ?? current.fileSizeBytes) > MAX_ATTACHMENT_FILE_SIZE_BYTES) {
+    throw new Error('ATTACHMENT_FILE_TOO_LARGE');
+  }
+
+  const resolvedSize = metadata.contentLength ?? current.fileSizeBytes;
+  await db
+    .update(mailAttachmentUpload)
+    .set({
+      contentType: 'application/pdf',
+      fileSizeBytes: resolvedSize,
+      status: 'finalized',
+      finalizedAt: now,
+      updatedAt: now
+    })
+    .where(eq(mailAttachmentUpload.id, current.id));
+
+  return {
+    uploadId: current.id,
+    eventId: current.eventId,
+    fileName: current.fileName,
+    contentType: 'application/pdf',
+    fileSizeBytes: resolvedSize,
+    status: 'finalized'
   };
 };
 
@@ -2151,6 +2528,7 @@ export const queueCommunicationSend = async (input: CommunicationSendInput, acto
         bodyOverride: input.bodyOverride,
         bodyHtmlOverride: input.bodyHtmlOverride,
         templateData: input.templateData,
+        attachmentUploadIds: input.attachmentUploadIds,
         renderOptions: input.renderOptions,
         sendAfter: input.sendAfter,
         recipientEmails: input.additionalEmails,
@@ -2190,6 +2568,8 @@ export const validateSearchRecipientsInput = (query: Record<string, string | und
     paymentStatus: query.paymentStatus,
     limit: query.limit === undefined ? undefined : Number(query.limit)
   });
+export const validateMailAttachmentUploadInitInput = (payload: unknown) => attachmentUploadInitSchema.parse(payload);
+export const validateMailAttachmentUploadFinalizeInput = (payload: unknown) => attachmentUploadFinalizeSchema.parse(payload);
 export const validateListTemplateVersionsInput = (params: Record<string, string | undefined>) =>
   listTemplateVersionsSchema.parse({
     key: params.key

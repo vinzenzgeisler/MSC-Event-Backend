@@ -464,6 +464,51 @@ export const emailDelivery = pgTable(
   })
 );
 
+export const mailAttachmentUpload = pgTable(
+  'mail_attachment_upload',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    s3Key: text('s3_key').notNull(),
+    contentType: text('content_type').notNull(),
+    fileName: text('file_name').notNull(),
+    fileSizeBytes: integer('file_size_bytes').notNull(),
+    uploadedBy: text('uploaded_by'),
+    status: text('status').notNull().default('initiated'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    statusCheck: check('mail_attachment_upload_status_check', sql`${table.status} in ('initiated', 'finalized', 'expired')`),
+    statusExpiresIndex: index('mail_attachment_upload_status_expires_idx').on(table.status, table.expiresAt),
+    eventIndex: index('mail_attachment_upload_event_idx').on(table.eventId, table.createdAt)
+  })
+);
+
+export const emailOutboxAttachment = pgTable(
+  'email_outbox_attachment',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    outboxId: uuid('outbox_id')
+      .notNull()
+      .references(() => emailOutbox.id, { onDelete: 'cascade' }),
+    fileName: text('file_name').notNull(),
+    contentType: text('content_type').notNull(),
+    s3Key: text('s3_key').notNull(),
+    fileSizeBytes: integer('file_size_bytes'),
+    source: text('source').notNull().default('upload'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    sourceCheck: check('email_outbox_attachment_source_check', sql`${table.source} in ('upload', 'system', 'document')`),
+    outboxIndex: index('email_outbox_attachment_outbox_idx').on(table.outboxId)
+  })
+);
+
 export const emailTemplate = pgTable(
   'email_template',
   {
@@ -520,7 +565,10 @@ export const document = pgTable(
     createdBy: text('created_by')
   },
   (table) => ({
-    typeCheck: check('document_type_check', sql`${table.type} in ('waiver', 'tech_check', 'waiver_batch', 'tech_check_batch')`),
+    typeCheck: check(
+      'document_type_check',
+      sql`${table.type} in ('waiver', 'tech_check', 'waiver_batch', 'tech_check_batch', 'entry_confirmation')`
+    ),
     statusCheck: check('document_status_check', sql`${table.status} in ('generated', 'failed')`),
     templateVariantCheck: check(
       'document_template_variant_check',

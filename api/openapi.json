@@ -1302,6 +1302,16 @@
               }
             }
           },
+          "422": {
+            "description": "Unprocessable Entity (code: ATTACHMENT_NOT_ALLOWED_FOR_PROCESS, ATTACHMENT_UPLOAD_NOT_FOUND, ATTACHMENT_UPLOAD_NOT_FINALIZED, ATTACHMENT_LIMIT_EXCEEDED, ATTACHMENT_FILE_TOO_LARGE, ATTACHMENT_TOTAL_SIZE_EXCEEDED, ATTACHMENT_INVALID_CONTENT_TYPE, MISSING_REQUIRED_PLACEHOLDERS)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Error",
             "content": {
@@ -1424,6 +1434,15 @@
                         "format": "uuid"
                       }
                     }
+                  },
+                  "attachmentUploadIds": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "Optional finalized upload IDs for PDF attachments (campaign templates only). Max 3 files."
                   }
                 }
               }
@@ -2370,7 +2389,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Process-only endpoint. Campaign templates are not allowed. preselection is intentionally blocked and returns TEMPLATE_NOT_ALLOWED_IN_PROCESS.",
+        "description": "Process-only endpoint. Campaign templates are not allowed. preselection is intentionally blocked and returns TEMPLATE_NOT_ALLOWED_IN_PROCESS. For eventType=accepted_open_payment a server-rendered PDF attachment (Nennbestätigung) is mandatory and generated/reused by entry revision hash.",
         "responses": {
           "200": {
             "description": "OK"
@@ -2445,11 +2464,23 @@
             }
           },
           "500": {
-            "description": "Internal Error",
+            "description": "Internal Error (e.g. code: ENTRY_CONFIRMATION_PDF_GENERATION_FAILED)",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiError"
+                },
+                "examples": {
+                  "entry_confirmation_pdf_failed": {
+                    "value": {
+                      "ok": false,
+                      "code": "ENTRY_CONFIRMATION_PDF_GENERATION_FAILED",
+                      "message": "Entry confirmation PDF generation failed",
+                      "details": {
+                        "reason": "ENTRY_CONFIRMATION_DOCUMENT_INSERT_FAILED"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -2480,6 +2511,7 @@
                     "description": "Lifecycle process event. preselection is currently blocked and returns TEMPLATE_NOT_ALLOWED_IN_PROCESS.",
                     "enum": [
                       "registration_received",
+                      "email_confirmation_reminder",
                       "preselection",
                       "accepted_open_payment",
                       "accepted_paid_completed",
@@ -3249,6 +3281,7 @@
         "tags": [
           "admin"
         ],
+        "description": "On-demand document download by entry and type. type=entry_confirmation generates/uses a server-rendered Nennbestätigung PDF (reused when revision hash is unchanged; re-rendered when relevant entry/event/payment data changed). Included fields: eventName/eventDate/organizer, driver (name/address/email/phone), optional codriver (name/birthdate), vehicle + optional backupVehicle, class/startNumber, payment totals/paid/open/deadline and payment settings, legal proof hint.",
         "responses": {
           "200": {
             "description": "OK"
@@ -3321,6 +3354,28 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "eventId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "waiver",
+                "tech_check",
+                "entry_confirmation"
+              ]
             }
           }
         ],
@@ -7008,6 +7063,21 @@
                     "bodyOverride": "Bitte bestätigen: {{verificationUrl}}",
                     "previewMode": "draft"
                   }
+                },
+                "draft_with_attachments": {
+                  "value": {
+                    "templateKey": "newsletter",
+                    "previewMode": "draft",
+                    "templateData": {
+                      "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
+                      "eventName": "12. Oberlausitzer Dreieck",
+                      "driverName": "Max Musterfahrer",
+                      "heroImageUrl": "https://event.msc-oberlausitzer-dreilaendereck.de/assets/hero.jpg"
+                    },
+                    "attachmentUploadIds": [
+                      "11111111-1111-1111-1111-111111111111"
+                    ]
+                  }
                 }
               }
             }
@@ -7413,7 +7483,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Campaign endpoint only. Allowed template keys: newsletter, event_update, free_form, payment_reminder_followup, email_confirmation. Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates. Send is blocked when required placeholders are missing.",
+        "description": "Recipient union preview for campaign send. Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates. Uses the same dedupe semantics as /admin/mail/send.",
         "security": [
           {
             "bearerAuth": []
@@ -7466,58 +7536,6 @@
                     "additionalEmails": [
                       "extra@example.com"
                     ]
-                  }
-                },
-                "email_confirmation_by_ids": {
-                  "value": {
-                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
-                    "templateKey": "email_confirmation",
-                    "driverPersonIds": [
-                      "96da7e10-4277-4e59-96e8-f2c112624486"
-                    ],
-                    "templateData": {
-                      "verificationUrl": "https://nennungstool.example.org/verify?token=abc123",
-                      "introText": "Bitte bestätige erneut deine E-Mail-Adresse.",
-                      "detailsText": "Ohne Bestätigung können wir deine Anmeldung nicht abschließen.",
-                      "closingText": "Danke für deine Mithilfe."
-                    },
-                    "renderOptions": {
-                      "showBadge": false,
-                      "mailLabel": null
-                    }
-                  }
-                },
-                "free_form_with_template_data": {
-                  "value": {
-                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
-                    "templateKey": "free_form",
-                    "additionalEmails": [
-                      "extra@example.com"
-                    ],
-                    "templateData": {
-                      "introText": "Kurze Info an dich.",
-                      "detailsText": "Bitte bringe Unterlagen im Original mit.",
-                      "closingText": "Danke und bis bald."
-                    },
-                    "renderOptions": {
-                      "showBadge": false
-                    }
-                  }
-                },
-                "payment_followup_filter": {
-                  "value": {
-                    "eventId": "15ed4cb5-44bb-4e34-926e-81e3cd206f16",
-                    "templateKey": "payment_reminder_followup",
-                    "filters": {
-                      "paymentStatus": "due",
-                      "registrationStatus": "submitted_verified"
-                    },
-                    "templateData": {
-                      "introText": "Dies ist eine erneute Zahlungsaufforderung.",
-                      "detailsText": "Bitte beachte unsere Bankdaten im Teilnehmerbereich.",
-                      "closingText": "Vielen Dank.",
-                      "paymentDeadline": "15.04.2026"
-                    }
                   }
                 }
               }
@@ -7609,7 +7627,7 @@
             "bearerAuth": []
           }
         ],
-        "description": "Campaign endpoint only. Allowed template keys: newsletter, event_update, free_form, payment_reminder_followup, email_confirmation. Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates.",
+        "description": "Campaign endpoint only. Allowed template keys: newsletter, event_update, free_form, payment_reminder_followup. Union semantics: recipients = (filter matches) U (driverPersonIds) U (entryIds) U (additionalEmails), minus invalid and duplicates.",
         "requestBody": {
           "required": true,
           "content": {
@@ -7709,6 +7727,15 @@
                   },
                   "renderOptions": {
                     "$ref": "#/components/schemas/MailRenderOptionsInput"
+                  },
+                  "attachmentUploadIds": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "Optional finalized upload IDs for PDF attachments (campaign templates only). Max 3 files."
                   }
                 }
               },
@@ -7836,7 +7863,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Entity (code: TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN, MISSING_REQUIRED_PLACEHOLDERS)",
+            "description": "Unprocessable Entity (code: TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN, ATTACHMENT_NOT_ALLOWED_FOR_PROCESS, ATTACHMENT_UPLOAD_NOT_FOUND, ATTACHMENT_UPLOAD_NOT_FINALIZED, ATTACHMENT_LIMIT_EXCEEDED, ATTACHMENT_FILE_TOO_LARGE, ATTACHMENT_TOTAL_SIZE_EXCEEDED, ATTACHMENT_INVALID_CONTENT_TYPE, MISSING_REQUIRED_PLACEHOLDERS)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7856,14 +7883,224 @@
                       "code": "MISSING_REQUIRED_PLACEHOLDERS",
                       "message": "Missing required placeholders",
                       "details": {
-                        "templateKey": "email_confirmation",
+                        "templateKey": "newsletter",
                         "recipient": "driver@example.com",
                         "missingPlaceholders": [
-                          "verificationUrl"
+                          "heroImageUrl"
                         ]
                       }
                     }
                   }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/mail/attachments/init": {
+      "post": {
+        "operationId": "post_admin_mail_attachments_init",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailAttachmentUploadInitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailAttachmentUploadInitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/mail/attachments/finalize": {
+      "post": {
+        "operationId": "post_admin_mail_attachments_finalize",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailAttachmentUploadFinalizeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailAttachmentUploadFinalizeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -8981,10 +9218,10 @@
             "isActive": true
           },
           {
-            "key": "email_confirmation",
-            "label": "E-Mail-Bestätigung",
-            "subject": "Bitte E-Mail bestätigen - {{eventName}}",
-            "bodyText": "Hallo {{driverName}}, bestätige hier: {{verificationUrl}}",
+            "key": "email_confirmation_reminder",
+            "label": "Erinnerung E-Mail-Bestätigung",
+            "subject": "Erinnerung: E-Mail bestätigen - {{eventName}}",
+            "bodyText": "Hallo {{driverName}}, bitte bestätige deine E-Mail-Adresse über {{verificationUrl}}.",
             "status": "published",
             "isActive": true
           },
@@ -9093,6 +9330,15 @@
               "draft"
             ],
             "default": "stored"
+          },
+          "attachmentUploadIds": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Optional finalized upload IDs for PDF attachments (campaign templates only). Max 3 files."
           }
         },
         "examples": [
@@ -9135,6 +9381,7 @@
         "required": [
           "ok",
           "templateKey",
+          "attachments",
           "subjectRendered",
           "bodyTextRendered",
           "bodyHtmlRendered",
@@ -9188,6 +9435,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailAttachmentDescriptor"
+            }
           }
         },
         "examples": [
@@ -9205,7 +9458,8 @@
             ],
             "missingPlaceholders": [],
             "unknownPlaceholders": [],
-            "warnings": []
+            "warnings": [],
+            "attachments": []
           },
           {
             "ok": true,
@@ -9224,7 +9478,8 @@
             "unknownPlaceholders": [],
             "warnings": [
               "verificationUrl fehlt; CTA und Verifizierungslink können nicht gerendert werden."
-            ]
+            ],
+            "attachments": []
           }
         ]
       },
@@ -9394,6 +9649,178 @@
           },
           "finalCount": {
             "type": "integer"
+          }
+        }
+      },
+      "MailAttachmentDescriptor": {
+        "type": "object",
+        "required": [
+          "fileName",
+          "contentType",
+          "fileSizeBytes"
+        ],
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "application/pdf"
+            ]
+          },
+          "fileSizeBytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "MailAttachmentUploadInitRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "eventId",
+          "fileName",
+          "contentType",
+          "fileSizeBytes"
+        ],
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fileName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "application/pdf"
+            ]
+          },
+          "fileSizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5242880
+          }
+        }
+      },
+      "MailAttachmentUploadInitResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "uploadId",
+          "eventId",
+          "fileName",
+          "contentType",
+          "fileSizeBytes",
+          "uploadUrl",
+          "requiredHeaders",
+          "expiresAt"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "uploadId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "application/pdf"
+            ]
+          },
+          "fileSizeBytes": {
+            "type": "integer"
+          },
+          "uploadUrl": {
+            "type": "string"
+          },
+          "requiredHeaders": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MailAttachmentUploadFinalizeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "uploadId",
+          "eventId"
+        ],
+        "properties": {
+          "uploadId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "MailAttachmentUploadFinalizeResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "uploadId",
+          "eventId",
+          "fileName",
+          "contentType",
+          "fileSizeBytes",
+          "status"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "uploadId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "application/pdf"
+            ]
+          },
+          "fileSizeBytes": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "finalized"
+            ]
           }
         }
       }

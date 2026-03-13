@@ -92,3 +92,62 @@ export const doesAssetObjectExist = async (key: string): Promise<boolean> => {
     return false;
   }
 };
+
+export const getAssetObjectMetadata = async (key: string): Promise<{ contentType: string | null; contentLength: number | null } | null> => {
+  const client = getS3Client();
+  const bucket = getAssetsBucket();
+  try {
+    const response = await client.send(
+      new HeadObjectCommand({
+        Bucket: bucket,
+        Key: key
+      })
+    );
+    return {
+      contentType: response.ContentType ?? null,
+      contentLength: typeof response.ContentLength === 'number' ? response.ContentLength : null
+    };
+  } catch {
+    return null;
+  }
+};
+
+export const getAssetObjectBuffer = async (key: string): Promise<Buffer | null> => {
+  const client = getS3Client();
+  const bucket = getAssetsBucket();
+  try {
+    const response = await client.send(
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: key
+      })
+    );
+    if (!response.Body) {
+      return null;
+    }
+    const bytes = await response.Body.transformToByteArray();
+    return Buffer.from(bytes);
+  } catch {
+    return null;
+  }
+};
+
+export const getDocumentObjectBuffer = async (key: string): Promise<Buffer | null> => {
+  const client = getS3Client();
+  const bucket = getDocumentsBucket();
+  try {
+    const response = await client.send(
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: key
+      })
+    );
+    if (!response.Body) {
+      return null;
+    }
+    const bytes = await response.Body.transformToByteArray();
+    return Buffer.from(bytes);
+  } catch {
+    return null;
+  }
+};

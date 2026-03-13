@@ -61,10 +61,25 @@ export class ApiStack extends Stack {
     const dbResourceId = props.dataStack.dbInstance.instanceResourceId;
     const dbConnectArn = `arn:aws:rds-db:${dbRegion}:${Stack.of(this).account}:dbuser:${dbResourceId}/${dbUser}`;
     const sesFromEmail = props.config.sesFromEmail;
+    const sesFromName = process.env.SES_FROM_NAME ?? 'MSC Oberlausitzer Dreilaendereck e.V.';
     const publicVerifyBaseUrl = props.config.publicVerifyBaseUrl;
     if (!publicVerifyBaseUrl && props.config.stage === 'prod') {
       throw new Error('Missing publicVerifyBaseUrl in infra/lib/config/prod.ts.');
     }
+    const mailPublicBaseUrl = (() => {
+      if (!publicVerifyBaseUrl) {
+        return '';
+      }
+      try {
+        const parsed = new URL(publicVerifyBaseUrl);
+        return `${parsed.protocol}//${parsed.host}`;
+      } catch {
+        if (props.config.stage === 'prod') {
+          throw new Error('Invalid publicVerifyBaseUrl format in stage config.');
+        }
+        return '';
+      }
+    })();
     const lambdaVpcConfig = props.config.apiInVpc
       ? {
           vpc: props.dataStack.vpc,
@@ -99,10 +114,13 @@ export class ApiStack extends Stack {
         COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
         COGNITO_USER_POOL_ID: props.authStack.userPool.userPoolId,
         SES_FROM_EMAIL: sesFromEmail,
+        SES_FROM_NAME: sesFromName,
         PAYMENT_IBAN: process.env.PAYMENT_IBAN ?? '',
         PAYMENT_BIC: process.env.PAYMENT_BIC ?? '',
         PAYMENT_RECIPIENT: process.env.PAYMENT_RECIPIENT ?? '',
-        PUBLIC_VERIFY_BASE_URL: publicVerifyBaseUrl
+        PUBLIC_VERIFY_BASE_URL: publicVerifyBaseUrl,
+        MAIL_PUBLIC_BASE_URL: mailPublicBaseUrl,
+        NENNUNGSTOOL_URL: mailPublicBaseUrl
       },
       bundling: {
         target: 'node20',
@@ -132,7 +150,13 @@ export class ApiStack extends Stack {
         DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
         DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
         DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+        ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
+        DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
         SES_FROM_EMAIL: sesFromEmail,
+        SES_FROM_NAME: sesFromName,
+        PUBLIC_VERIFY_BASE_URL: publicVerifyBaseUrl,
+        MAIL_PUBLIC_BASE_URL: mailPublicBaseUrl,
+        NENNUNGSTOOL_URL: mailPublicBaseUrl,
         EMAIL_WORKER_BATCH_SIZE: '20'
       },
       bundling: {
@@ -211,6 +235,31 @@ export class ApiStack extends Stack {
       );
     });
 
+    emailWorker.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [props.storageStack.assetsBucket.bucketArn]
+      })
+    );
+    emailWorker.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:GetObject'],
+        resources: [`${props.storageStack.assetsBucket.bucketArn}/*`]
+      })
+    );
+    emailWorker.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [props.storageStack.documentsBucket.bucketArn]
+      })
+    );
+    emailWorker.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:GetObject'],
+        resources: [`${props.storageStack.documentsBucket.bucketArn}/*`]
+      })
+    );
+
     [apiHandler, emailWorker].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
@@ -274,16 +323,21 @@ export class ApiStack extends Stack {
               allowHeaders: [
                 'content-type',
                 'authorization',
+                'accept',
                 'x-requested-with',
                 'x-amz-date',
                 'x-amz-security-token',
                 'x-api-key'
               ],
-              maxAge: cdk.Duration.hours(1)
+              maxAge: cdk.Duration.seconds(600)
             }
           }
         : {})
     });
+
+    const mailLogoUrl = `${this.api.apiEndpoint}/public/mail/logo`;
+    apiHandler.addEnvironment('MAIL_LOGO_URL', mailLogoUrl);
+    emailWorker.addEnvironment('MAIL_LOGO_URL', mailLogoUrl);
 
     apiHandler.addPermission('HttpApiInvokePermission', {
       principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
@@ -303,6 +357,12 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/public/events/{id}/entries',
       methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/mail/logo',
+      methods: [apigwv2.HttpMethod.GET],
       integration
     });
 
@@ -431,6 +491,20 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/mail/attachments/init',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/attachments/finalize',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/mail/templates/{id}/placeholders',
       methods: [apigwv2.HttpMethod.GET],
       integration,
@@ -440,6 +514,13 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/admin/mail/broadcast/resolve-recipients',
       methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/mail/recipients/search',
+      methods: [apigwv2.HttpMethod.GET],
       integration,
       authorizer: jwtAuthorizer
     });

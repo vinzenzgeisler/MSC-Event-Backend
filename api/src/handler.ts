@@ -5,6 +5,7 @@ import { getDb } from './db/client';
 import { getAuthContext, hasAnyGroup, hasGroup } from './http/auth';
 import { errorJson, json } from './http/response';
 import { parseJsonBody } from './http/parse';
+import { getPresignedAssetsDownloadUrl } from './docs/storage';
 import {
   archiveEvent,
   activateEvent,
@@ -93,6 +94,8 @@ import {
   listMailTemplates,
   listMailTemplateVersions,
   listOutbox,
+  initMailAttachmentUpload,
+  finalizeMailAttachmentUpload,
   patchMailTemplate,
   previewMailTemplate,
   resolveBroadcastRecipients,
@@ -106,6 +109,8 @@ import {
   validateMailTemplatePatchInput,
   validateMailTemplatePreviewInput,
   validateMailTemplateVersionCreateInput,
+  validateMailAttachmentUploadInitInput,
+  validateMailAttachmentUploadFinalizeInput,
   validateResolveRecipientsInput,
   validateSearchRecipientsInput,
   validateQueueMailInput,
@@ -159,6 +164,25 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/health') {
     return json(200, { ok: true, stage });
+  }
+
+  if (method === 'GET' && path === '/public/mail/logo') {
+    try {
+      const logoUrl = await getPresignedAssetsDownloadUrl('public/mail/msc-logo.png', 300);
+      const origin = process.env.CORS_ALLOW_ORIGIN ?? process.env.WEB_APP_ORIGIN ?? '*';
+      return {
+        statusCode: 302,
+        headers: {
+          location: logoUrl,
+          'cache-control': 'no-store',
+          'access-control-allow-origin': origin,
+          vary: 'Origin'
+        },
+        body: ''
+      };
+    } catch {
+      return errorJson(500, 'Mail logo unavailable', undefined, 'MAIL_LOGO_UNAVAILABLE');
+    }
   }
 
   const publicCreateEntryMatch = path.match(/^\/public\/events\/([^/]+)\/entries$/);
@@ -851,6 +875,30 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
         return errorJson(409, 'Event is read-only');
       }
+      if (error instanceof Error && error.message === 'ATTACHMENT_NOT_ALLOWED_FOR_PROCESS') {
+        return errorJson(422, 'Attachments are only allowed for campaign templates', undefined, 'ATTACHMENT_NOT_ALLOWED_FOR_PROCESS');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_NOT_FOUND') {
+        return errorJson(404, 'Attachment upload not found', undefined, 'ATTACHMENT_UPLOAD_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_EVENT_MISMATCH') {
+        return errorJson(422, 'Attachment upload does not belong to this event', undefined, 'ATTACHMENT_UPLOAD_EVENT_MISMATCH');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_NOT_FINALIZED') {
+        return errorJson(422, 'Attachment upload is not finalized', undefined, 'ATTACHMENT_UPLOAD_NOT_FINALIZED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_LIMIT_EXCEEDED') {
+        return errorJson(422, 'Attachment limit exceeded (max 3 files)', undefined, 'ATTACHMENT_LIMIT_EXCEEDED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_FILE_TOO_LARGE') {
+        return errorJson(422, 'Attachment file too large (max 5 MB)', undefined, 'ATTACHMENT_FILE_TOO_LARGE');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_TOTAL_SIZE_EXCEEDED') {
+        return errorJson(422, 'Attachment total size exceeded (max 15 MB)', undefined, 'ATTACHMENT_TOTAL_SIZE_EXCEEDED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_INVALID_CONTENT_TYPE') {
+        return errorJson(422, 'Only PDF attachments are allowed', undefined, 'ATTACHMENT_INVALID_CONTENT_TYPE');
+      }
       if (error instanceof MissingRequiredPlaceholdersError) {
         return errorJson(
           422,
@@ -1017,6 +1065,30 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'MISSING_VERIFICATION_URL') {
         return errorJson(409, 'Verification URL is required', undefined, 'MISSING_VERIFICATION_URL');
       }
+      if (error instanceof Error && error.message === 'ATTACHMENT_EVENT_REQUIRED') {
+        return errorJson(422, 'eventId is required when previewing with attachmentUploadIds', undefined, 'ATTACHMENT_EVENT_REQUIRED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_NOT_FOUND') {
+        return errorJson(404, 'Attachment upload not found', undefined, 'ATTACHMENT_UPLOAD_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_EVENT_MISMATCH') {
+        return errorJson(422, 'Attachment upload does not belong to this event', undefined, 'ATTACHMENT_UPLOAD_EVENT_MISMATCH');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_NOT_FINALIZED') {
+        return errorJson(422, 'Attachment upload is not finalized', undefined, 'ATTACHMENT_UPLOAD_NOT_FINALIZED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_LIMIT_EXCEEDED') {
+        return errorJson(422, 'Attachment limit exceeded (max 3 files)', undefined, 'ATTACHMENT_LIMIT_EXCEEDED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_FILE_TOO_LARGE') {
+        return errorJson(422, 'Attachment file too large (max 5 MB)', undefined, 'ATTACHMENT_FILE_TOO_LARGE');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_TOTAL_SIZE_EXCEEDED') {
+        return errorJson(422, 'Attachment total size exceeded (max 15 MB)', undefined, 'ATTACHMENT_TOTAL_SIZE_EXCEEDED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_INVALID_CONTENT_TYPE') {
+        return errorJson(422, 'Only PDF attachments are allowed', undefined, 'ATTACHMENT_INVALID_CONTENT_TYPE');
+      }
       if (error instanceof Error && error.message === 'TEMPLATE_RENDER_FAILED') {
         return errorJson(409, 'Template render failed', undefined, 'TEMPLATE_RENDER_FAILED');
       }
@@ -1024,6 +1096,69 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(404, 'Template not found', undefined, 'TEMPLATE_NOT_FOUND');
       }
       return errorJson(500, 'Template preview failed', undefined, 'TEMPLATE_RENDER_FAILED');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/mail/attachments/init') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateMailAttachmentUploadInitInput(payload);
+      const result = await initMailAttachmentUpload(input, auth.sub);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found', undefined, 'EVENT_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
+        return errorJson(409, 'Event is read-only', undefined, 'EVENT_STATUS_FORBIDDEN');
+      }
+      return errorJson(500, 'Attachment upload initialization failed', undefined, 'ATTACHMENT_UPLOAD_INIT_FAILED');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/mail/attachments/finalize') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateMailAttachmentUploadFinalizeInput(payload);
+      const result = await finalizeMailAttachmentUpload(input);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_NOT_FOUND') {
+        return errorJson(404, 'Attachment upload not found', undefined, 'ATTACHMENT_UPLOAD_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_EXPIRED') {
+        return errorJson(409, 'Attachment upload expired', undefined, 'ATTACHMENT_UPLOAD_EXPIRED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_OBJECT_MISSING') {
+        return errorJson(422, 'Uploaded object not found in storage', undefined, 'ATTACHMENT_UPLOAD_OBJECT_MISSING');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_INVALID_CONTENT_TYPE') {
+        return errorJson(422, 'Only PDF attachments are allowed', undefined, 'ATTACHMENT_INVALID_CONTENT_TYPE');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_FILE_TOO_LARGE') {
+        return errorJson(422, 'Attachment file too large (max 5 MB)', undefined, 'ATTACHMENT_FILE_TOO_LARGE');
+      }
+      return errorJson(500, 'Attachment upload finalize failed', undefined, 'ATTACHMENT_UPLOAD_FINALIZE_FAILED');
     }
   }
 
@@ -1090,6 +1225,30 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'MISSING_VERIFICATION_URL') {
         return errorJson(409, 'Verification URL is required', undefined, 'MISSING_VERIFICATION_URL');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_NOT_ALLOWED_FOR_PROCESS') {
+        return errorJson(422, 'Attachments are only allowed for campaign templates', undefined, 'ATTACHMENT_NOT_ALLOWED_FOR_PROCESS');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_NOT_FOUND') {
+        return errorJson(404, 'Attachment upload not found', undefined, 'ATTACHMENT_UPLOAD_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_EVENT_MISMATCH') {
+        return errorJson(422, 'Attachment upload does not belong to this event', undefined, 'ATTACHMENT_UPLOAD_EVENT_MISMATCH');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UPLOAD_NOT_FINALIZED') {
+        return errorJson(422, 'Attachment upload is not finalized', undefined, 'ATTACHMENT_UPLOAD_NOT_FINALIZED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_LIMIT_EXCEEDED') {
+        return errorJson(422, 'Attachment limit exceeded (max 3 files)', undefined, 'ATTACHMENT_LIMIT_EXCEEDED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_FILE_TOO_LARGE') {
+        return errorJson(422, 'Attachment file too large (max 5 MB)', undefined, 'ATTACHMENT_FILE_TOO_LARGE');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_TOTAL_SIZE_EXCEEDED') {
+        return errorJson(422, 'Attachment total size exceeded (max 15 MB)', undefined, 'ATTACHMENT_TOTAL_SIZE_EXCEEDED');
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_INVALID_CONTENT_TYPE') {
+        return errorJson(422, 'Only PDF attachments are allowed', undefined, 'ATTACHMENT_INVALID_CONTENT_TYPE');
       }
       if (error instanceof MissingRequiredPlaceholdersError) {
         return errorJson(
@@ -1231,6 +1390,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'TEMPLATE_NOT_FOUND') {
         return errorJson(404, 'Template not found');
+      }
+      if (error instanceof Error && error.message === 'TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN') {
+        return errorJson(422, 'Template is not allowed in campaign endpoint', undefined, 'TEMPLATE_NOT_ALLOWED_IN_CAMPAIGN');
       }
       if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
         return errorJson(404, 'Event not found');
@@ -1414,8 +1576,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     try {
       const eventId = event.queryStringParameters?.eventId;
       const type = event.queryStringParameters?.type;
-      if (!eventId || (type !== 'waiver' && type !== 'tech_check')) {
-        return errorJson(400, 'eventId and type(waiver|tech_check) are required');
+      if (!eventId || (type !== 'waiver' && type !== 'tech_check' && type !== 'entry_confirmation')) {
+        return errorJson(400, 'eventId and type(waiver|tech_check|entry_confirmation) are required');
       }
       const result = await getOrCreateEntryDocumentDownload(
         {

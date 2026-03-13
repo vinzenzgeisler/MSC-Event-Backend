@@ -26,7 +26,8 @@ const cases = [
   ['TEMPLATE_RENDER_FAILED', 400, 'Lifecycle template render failed'],
   ['OUTBOX_INSERT_FAILED', 409, 'Lifecycle outbox insert failed'],
   ['TEMPLATE_NOT_FOUND', 404, 'Template not found'],
-  ['ENTRY_NOT_FOUND', 404, 'Entry not found']
+  ['ENTRY_NOT_FOUND', 404, 'Entry not found'],
+  ['ENTRY_CONFIRMATION_PDF_GENERATION_FAILED', 500, 'Entry confirmation PDF generation failed']
 ];
 
 for (const [code, expectedStatusCode, expectedMessage] of cases) {

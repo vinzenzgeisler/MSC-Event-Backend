@@ -286,92 +286,207 @@ export const renderEntryConfirmationPdf = async (payload: EntryConfirmationPdfPa
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
+    const leftX = 46;
+    const contentWidth = doc.page.width - 92;
+    const rightLogoX = doc.page.width - 140;
+
     if (payload.logoImage && payload.logoImage.length > 0) {
       try {
-        doc.image(payload.logoImage, 46, 40, { fit: [44, 44], align: 'left', valign: 'top' });
+        doc.image(payload.logoImage, rightLogoX, 34, { fit: [94, 94], align: 'right', valign: 'top' });
       } catch {
         // Logo is optional. If image parsing fails, continue without visual logo.
       }
     }
 
-    doc.fillColor('#0B1F4D').font('Helvetica-Bold').fontSize(20).text('Nennbestätigung', payload.logoImage ? 98 : 46, 46);
+    const gateNote = (process.env.ENTRY_CONFIRMATION_GATE_NOTE ?? 'Bei Einfahrt in das Fahrerlager vorzeigen.').trim();
+    const addressPrefix = (process.env.ENTRY_CONFIRMATION_ORGANIZER_ADDRESS_PREFIX ?? payload.organizer).trim();
+    const venueAddress = (process.env.ENTRY_CONFIRMATION_VENUE_ADDRESS ?? '').trim();
+    const venueGps = (process.env.ENTRY_CONFIRMATION_VENUE_GPS ?? '').trim();
+    const termsLine1 = (process.env.ENTRY_CONFIRMATION_TERMS_LINE1 ?? '').trim();
+    const termsLine2 = (process.env.ENTRY_CONFIRMATION_TERMS_LINE2 ?? '').trim();
+    const warningRed1 = (
+      process.env.ENTRY_CONFIRMATION_WARNING_RED_1 ??
+      'Bitte beachte, dass die Ölablassschrauben und die Ölfilterpatronen zu sichern sind!'
+    ).trim();
+    const warningBlack = (
+      process.env.ENTRY_CONFIRMATION_WARNING_BLACK ??
+      'Wir weisen darauf hin, dass die Abreise erst nach Ende der Veranstaltung möglich ist.'
+    ).trim();
+    const scheduleLines = (
+      process.env.ENTRY_CONFIRMATION_SCHEDULE_LINES ??
+      `Anmeldung: Veranstaltungstag\nTechnische Abnahme: Veranstaltungstag\nFahrerbesprechung: Veranstaltungstag\nStart: Veranstaltungstag`
+    )
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    const firstName = normalizeText(payload.driver.fullName, 'Fahrer').split(/\s+/)[0] ?? 'Fahrer';
+    const driverAddressLines = [
+      normalizeText(payload.driver.fullName, ''),
+      normalizeText(payload.driver.street, ''),
+      [normalizeText(payload.driver.zip, ''), normalizeText(payload.driver.city, '')].filter(Boolean).join(' ').trim()
+    ].filter((line) => line.length > 0);
+
+    const primaryVehicleLine = [
+      normalizeText(payload.vehicle.vehicleType, ''),
+      normalizeText(payload.vehicle.make, ''),
+      normalizeText(payload.vehicle.model, '')
+    ]
+      .filter((item) => item.length > 0)
+      .join(' ')
+      .trim();
+
+    const backupVehicleLine = payload.backupVehicle
+      ? [normalizeText(payload.backupVehicle.vehicleType, ''), normalizeText(payload.backupVehicle.make, ''), normalizeText(payload.backupVehicle.model, '')]
+          .filter((item) => item.length > 0)
+          .join(' ')
+          .trim()
+      : null;
+    const paymentReference = `Kliv_${normalizeText(payload.driver.fullName)
+      .replace(/\s+/g, '')}_${normalizeText(payload.className)
+      .replace(/\s+/g, '')}_${normalizeText(payload.startNumber)
+      .replace(/\s+/g, '')}`;
+
+    const leftColumnWidth = 248;
+    const rightColumnWidth = 228;
+    const rightColumnX = leftX + leftColumnWidth + 18;
+
+    doc.font('Helvetica-Bold').fontSize(22).fillColor('#D81E05').text(gateNote, leftX, 86, { width: 310 });
+    doc.font('Helvetica').fontSize(8.5).fillColor('#4B5563').text(addressPrefix, leftX, 132, { width: 320 });
+
+    let y = 152;
+    doc.font('Helvetica').fontSize(16).fillColor('#111111');
+    driverAddressLines.forEach((line) => {
+      doc.text(line, leftX, y, { width: 240 });
+      y += 18;
+    });
+
+    const titleY = 318;
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(26)
+      .fillColor('#111111')
+      .text('Nennbestätigung (entry confirmation)', leftX, titleY, { width: contentWidth });
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(17)
+      .text(`für ${payload.eventName} vom ${payload.eventDateText}`, leftX, titleY + 34, { width: contentWidth });
+
+    let textY = titleY + 86;
+    doc.font('Helvetica').fontSize(13.5).fillColor('#111111').text(`Lieber ${firstName},`, leftX, textY);
+    textY += 34;
     doc
       .font('Helvetica')
-      .fontSize(10)
-      .fillColor('#4B5563')
-      .text(payload.organizer, payload.logoImage ? 98 : 46, 72)
-      .text(payload.eventDateText, payload.logoImage ? 98 : 46, 86);
+      .fontSize(12)
+      .fillColor('#111111')
+      .text(
+        `wir bedanken uns für Deine Nennung zum ${payload.eventName} und möchten hiermit die Nennung, vorbehaltlich des Nenngeldeingangs, bestätigen.`,
+        leftX,
+        textY,
+        { width: contentWidth, lineGap: 1.8 }
+      );
+    textY += 70;
 
-    doc.y = payload.logoImage ? 112 : 104;
+    doc.font('Helvetica-Bold').fontSize(12).text('Genannte Fahrzeuge:', leftX, textY, { width: leftColumnWidth });
+    let leftY = textY + 24;
+    doc.font('Helvetica').fontSize(11.5);
+    doc.text(`Klasse ${normalizeText(payload.className)}`, leftX, leftY, { width: leftColumnWidth, lineGap: 1.8 });
+    leftY += 19;
+    doc.text(`Startnummer ${normalizeText(payload.startNumber)}`, leftX, leftY, { width: leftColumnWidth, lineGap: 1.8 });
+    leftY += 19;
+    doc.text(`Fahrzeug ${normalizeText(primaryVehicleLine)}`, leftX, leftY, { width: leftColumnWidth, lineGap: 1.8 });
+    leftY += 19;
+    if (backupVehicleLine) {
+      doc.text(`Ersatzfahrzeug ${normalizeText(backupVehicleLine)}`, leftX, leftY, { width: leftColumnWidth, lineGap: 1.8 });
+      leftY += 19;
+    }
+    if (payload.codriver?.fullName) {
+      doc.text(`Beifahrer ${normalizeText(payload.codriver.fullName)}`, leftX, leftY, { width: leftColumnWidth, lineGap: 1.8 });
+      leftY += 19;
+    }
+
+    leftY += 8;
+    doc.font('Helvetica-Bold').fontSize(12).text('Zahlung:', leftX, leftY, { width: leftColumnWidth });
+    leftY += 22;
     doc
-      .save()
-      .lineWidth(1)
-      .strokeColor('#D1D5DB')
-      .moveTo(46, doc.y)
-      .lineTo(doc.page.width - 46, doc.y)
-      .stroke()
-      .restore();
-    doc.moveDown(1.1);
+      .font('Helvetica')
+      .fontSize(11.5)
+      .text(
+        `Überweise bitte den Nennbetrag in Höhe von ${normalizeText(payload.payment.openAmount)} spätestens bis ${normalizeText(payload.payment.paymentDeadline)} mit dem Verwendungszweck`,
+        leftX,
+        leftY,
+        { width: leftColumnWidth, lineGap: 1.6 }
+      );
+    leftY += 52;
+    doc.font('Helvetica-Bold').fontSize(11.5).text(paymentReference, leftX, leftY, {
+      width: leftColumnWidth
+    });
+    leftY += 20;
+    doc.font('Helvetica').fontSize(11.5).text(`${normalizeText(payload.payment.paymentRecipient)}\nIBAN: ${normalizeText(payload.payment.paymentIban)}\nBIC: ${normalizeText(payload.payment.paymentBic)}`, leftX, leftY, {
+      width: leftColumnWidth,
+      lineGap: 1.6
+    });
+    leftY += 70;
 
-    drawSectionTitle(doc, 'Event');
-    drawKeyValue(doc, 'Event', normalizeText(payload.eventName));
-    drawKeyValue(doc, 'Datum', normalizeText(payload.eventDateText));
-    drawKeyValue(doc, 'Klasse', normalizeText(payload.className));
-    drawKeyValue(doc, 'Startnummer', normalizeText(payload.startNumber));
+    doc.font('Helvetica-Bold').fontSize(12).fillColor('#D81E05').text(warningRed1, leftX, leftY, {
+      width: leftColumnWidth,
+      lineGap: 1.8
+    });
+    leftY += 46;
+    doc.font('Helvetica-Bold').fontSize(12).fillColor('#111111').text(warningBlack, leftX, leftY, {
+      width: leftColumnWidth,
+      lineGap: 1.8
+    });
 
-    drawSectionTitle(doc, 'Fahrer');
-    drawKeyValue(doc, 'Name', normalizeText(payload.driver.fullName));
-    drawKeyValue(
-      doc,
-      'Adresse',
-      [normalizeText(payload.driver.street, ''), normalizeText(payload.driver.zip, ''), normalizeText(payload.driver.city, '')]
-        .filter((item) => item.length > 0)
-        .join(' ')
-        .trim() || '-'
+    doc.font('Helvetica-Bold').fontSize(12).fillColor('#111111').text('Veranstaltungsinfos:', rightColumnX, textY, {
+      width: rightColumnWidth
+    });
+    let rightY = textY + 24;
+    doc.font('Helvetica').fontSize(11.5).text(
+      `Das Fahrerlager ist ${payload.eventDateText} geöffnet.\nFür Anreisende aus der Ferne, bieten wir den Zugang bereits am Vortag an.`,
+      rightColumnX,
+      rightY,
+      { width: rightColumnWidth, lineGap: 1.8 }
     );
-    drawKeyValue(doc, 'E-Mail', normalizeText(payload.driver.email));
-    drawKeyValue(doc, 'Telefon', normalizeText(payload.driver.phone));
+    rightY += 65;
 
-    if (payload.codriver) {
-      drawSectionTitle(doc, 'Beifahrer (optional)');
-      drawKeyValue(doc, 'Name', normalizeText(payload.codriver.fullName));
-      drawKeyValue(doc, 'Geburtsdatum', normalizeText(payload.codriver.birthdate));
-    }
+    doc.font('Helvetica-Bold').fontSize(12).text('Adresse:', rightColumnX, rightY, { width: rightColumnWidth });
+    rightY += 22;
+    const rightAddressLines = [venueAddress, venueGps].filter((line) => line.length > 0).join('\n');
+    doc.font('Helvetica').fontSize(11.5).text(rightAddressLines || '-', rightColumnX, rightY, {
+      width: rightColumnWidth,
+      lineGap: 1.8
+    });
+    rightY += rightAddressLines ? 62 : 22;
 
-    renderVehicleBlock(doc, 'Fahrzeug', payload.vehicle);
-    if (payload.backupVehicle) {
-      renderVehicleBlock(doc, 'Ersatzfahrzeug', payload.backupVehicle);
-    }
+    doc.font('Helvetica-Bold').fontSize(12).text('Termine:', rightColumnX, rightY, { width: rightColumnWidth });
+    rightY += 22;
+    const termLines = [termsLine1, termsLine2, ...scheduleLines].filter((line) => line.length > 0).join('\n');
+    doc.font('Helvetica').fontSize(11.5).text(termLines, rightColumnX, rightY, {
+      width: rightColumnWidth,
+      lineGap: 1.8
+    });
 
-    drawSectionTitle(doc, 'Zahlung');
-    drawKeyValue(doc, 'Nenngeld gesamt', normalizeText(payload.payment.totalFee));
-    drawKeyValue(doc, 'Bereits bezahlt', normalizeText(payload.payment.paidAmount));
-    drawKeyValue(doc, 'Offen', normalizeText(payload.payment.openAmount));
-    drawKeyValue(doc, 'Zahlungsfrist', normalizeText(payload.payment.paymentDeadline));
-    drawKeyValue(doc, 'Empfänger', normalizeText(payload.payment.paymentRecipient));
-    drawKeyValue(doc, 'IBAN', normalizeText(payload.payment.paymentIban));
-    drawKeyValue(doc, 'BIC', normalizeText(payload.payment.paymentBic));
-
-    drawSectionTitle(doc, 'Hinweis');
+    const contentBottomY = Math.max(leftY + 58, rightY + 108);
     doc
       .font('Helvetica')
-      .fontSize(10)
-      .fillColor('#111827')
-      .text(payload.legalHint, {
-        width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
-        align: 'left',
-        lineGap: 2
-      });
+      .fontSize(11.5)
+      .fillColor('#111111')
+      .text(
+        `${payload.legalHint}\n\nDie Eintrittsbändchen erhaltet Ihr vor Ort bei der Anmeldung.\n\nMotorsportliche Grüße die Fahrtleitung`,
+        leftX,
+        contentBottomY,
+        { width: contentWidth, lineGap: 1.8 }
+      );
 
-    const footerY = doc.page.height - doc.page.margins.bottom - 28;
-    doc
-      .font('Helvetica')
-      .fontSize(8)
-      .fillColor('#6B7280')
-      .text('Dokument automatisch generiert. Bitte im Fahrerlager bereithalten.', 46, footerY, {
-        width: doc.page.width - 92,
-        align: 'left'
-      });
+    const footerY = doc.page.height - 42;
+    doc.font('Helvetica').fontSize(8).fillColor('#6B7280').text(payload.organizer, leftX, footerY, {
+      width: contentWidth - 42
+    });
+    doc.font('Helvetica').fontSize(8).fillColor('#6B7280').text('1 / 1', doc.page.width - 72, footerY, {
+      width: 26,
+      align: 'right'
+    });
 
     doc.end();
   });

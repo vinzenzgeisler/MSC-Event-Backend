@@ -6,7 +6,7 @@ import { renderEntryConfirmationPdf } from './pdf';
 import { getAssetObjectBuffer, uploadPdf } from './storage';
 import { writeAuditLog } from '../audit/log';
 
-const ENTRY_CONFIRMATION_TEMPLATE_VERSION = 'v1';
+const ENTRY_CONFIRMATION_TEMPLATE_VERSION = 'v2';
 const ENTRY_CONFIRMATION_TYPE = 'entry_confirmation';
 const ENTRY_CONFIRMATION_FILE_NAME = 'Nennbestätigung.pdf';
 const MAIL_LOGO_KEY = 'public/mail/msc-logo.png';

@@ -1,8 +1,17 @@
 node_modules/
 cdk.out/
+infra/cdk.out-*/
 dist/
 *.log
 .env
 .env.*
 !.env.example
 !.env.*.example
+api/certs/
+tmp-*.pdf
+tmp-*.json
+Nennung.pdf
+Nennung.png
+msc-logo.png
+BACKEND_EMAIL_DESIGN_SPEC.md
+docs/BACKEND_MAIL_*.md

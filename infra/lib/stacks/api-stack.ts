@@ -61,7 +61,6 @@ export class ApiStack extends Stack {
     const dbResourceId = props.dataStack.dbInstance.instanceResourceId;
     const dbConnectArn = `arn:aws:rds-db:${dbRegion}:${Stack.of(this).account}:dbuser:${dbResourceId}/${dbUser}`;
     const sesFromEmail = props.config.sesFromEmail;
-    const sesFromName = process.env.SES_FROM_NAME ?? 'MSC Oberlausitzer Dreilaendereck e.V.';
     const publicVerifyBaseUrl = props.config.publicVerifyBaseUrl;
     if (!publicVerifyBaseUrl && props.config.stage === 'prod') {
       throw new Error('Missing publicVerifyBaseUrl in infra/lib/config/prod.ts.');
@@ -114,10 +113,6 @@ export class ApiStack extends Stack {
         COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
         COGNITO_USER_POOL_ID: props.authStack.userPool.userPoolId,
         SES_FROM_EMAIL: sesFromEmail,
-        SES_FROM_NAME: sesFromName,
-        PAYMENT_IBAN: process.env.PAYMENT_IBAN ?? '',
-        PAYMENT_BIC: process.env.PAYMENT_BIC ?? '',
-        PAYMENT_RECIPIENT: process.env.PAYMENT_RECIPIENT ?? '',
         PUBLIC_VERIFY_BASE_URL: publicVerifyBaseUrl,
         MAIL_PUBLIC_BASE_URL: mailPublicBaseUrl,
         NENNUNGSTOOL_URL: mailPublicBaseUrl
@@ -153,11 +148,12 @@ export class ApiStack extends Stack {
         ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
         DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
         SES_FROM_EMAIL: sesFromEmail,
-        SES_FROM_NAME: sesFromName,
         PUBLIC_VERIFY_BASE_URL: publicVerifyBaseUrl,
         MAIL_PUBLIC_BASE_URL: mailPublicBaseUrl,
         NENNUNGSTOOL_URL: mailPublicBaseUrl,
-        EMAIL_WORKER_BATCH_SIZE: '20'
+        EMAIL_WORKER_BATCH_SIZE: '20',
+        PAYMENT_REMINDER_FIRST_DAYS: '30',
+        PAYMENT_REMINDER_REPEAT_DAYS: '14'
       },
       bundling: {
         target: 'node20',
@@ -556,6 +552,13 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/admin/events/current',
       methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/config/entry-confirmation-defaults',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PATCH],
       integration,
       authorizer: jwtAuthorizer
     });

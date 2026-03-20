@@ -16,7 +16,37 @@ export const PLACEHOLDER_CATALOG: PlaceholderCatalogItem[] = [
   { name: 'driverName', description: 'Vollständiger Fahrername', example: 'Max Mustermann' },
   { name: 'className', description: 'Klassenname', example: 'Klasse 4A' },
   { name: 'startNumber', description: 'Startnummer', example: '42' },
+  {
+    name: 'acceptedEntrySummaryText',
+    description: 'Kompakte Beschreibung der konkret zugelassenen Nennung',
+    example: 'Klasse 2 · Startnummer 92 · NSU Fox'
+  },
+  {
+    name: 'rejectedEntrySummaryText',
+    description: 'Kompakte Beschreibung der konkret abgelehnten Nennung',
+    example: 'Klasse 2 · Startnummer 92 · NSU Fox'
+  },
+  {
+    name: 'rejectionScopeHint',
+    description: 'Hinweis zum Geltungsbereich der Ablehnung bei Mehrfachstartern',
+    example: 'Diese Entscheidung bezieht sich ausschließlich auf die in dieser E-Mail genannte Nennung.'
+  },
   { name: 'amountOpen', description: 'Offener Betrag als Text', example: '120,00 EUR' },
+  { name: 'paymentDueDate', description: 'Zahlungsfrist', example: '15.04.2026' },
+  { name: 'paymentRecipient', description: 'Zahlungsempfänger', example: 'MSC Oberlausitzer Dreiländereck e.V.' },
+  { name: 'paymentIban', description: 'IBAN für Überweisung', example: 'DE38 8505 0100 0232 0498 07' },
+  { name: 'paymentBic', description: 'BIC für Überweisung', example: 'WELADED1GRL' },
+  { name: 'paymentReference', description: 'Verwendungszweck für Überweisung', example: 'Nennung 11OLD-7K4P9 Max Musterfahrer' },
+  {
+    name: 'paymentInstructionText',
+    description: 'Vollständiger Zahlungsabschnitt als Mailtext',
+    example: 'Der aktuelle Gesamtbetrag für deine Nennungen beträgt 150,00 EUR.'
+  },
+  {
+    name: 'registrationNextStepText',
+    description: 'Hinweis zum weiteren Ablauf nach Registrierung bzw. E-Mail-Bestätigung',
+    example: 'Zahlungsinformationen erhältst du erst mit einer Zulassung.'
+  },
   {
     name: 'verificationUrl',
     description: 'Verifizierungslink',

@@ -3,7 +3,7 @@ import { sendEmail } from '../mail/ses';
 import { getTemplateVersion } from '../mail/templateStore';
 import { renderMailContract } from '../mail/rendering';
 import { getAssetObjectBuffer, getDocumentObjectBuffer } from '../docs/storage';
-import { DuplicateRequestError, queueLifecycleMail } from '../routes/adminMail';
+import { DuplicateRequestError, queueLifecycleMail, queuePaymentReminders } from '../routes/adminMail';
 
 type OutboxRow = {
   id: string;
@@ -27,6 +27,14 @@ type OutboxAttachmentRow = {
 type LifecycleCandidateRow = {
   event_id: string;
   entry_id: string;
+};
+
+type PaymentReminderCandidateRow = {
+  event_id: string;
+  entry_id: string;
+  accepted_mail_at: string | null;
+  payment_due_date: string | null;
+  last_reminder_at: string | null;
 };
 
 const parsePositiveInt = (value: string | undefined, fallbackValue: number): number => {
@@ -258,12 +266,125 @@ const queueAcceptedPaidCompletedMails = async (limit: number): Promise<number> =
   return queued;
 };
 
+const addDays = (date: Date, days: number): Date => {
+  const result = new Date(date);
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
+};
+
+export const isDueForPaymentReminder = (
+  candidate: PaymentReminderCandidateRow,
+  firstReminderDelayDays: number,
+  recurringReminderDelayDays: number,
+  now: Date
+): boolean => {
+  const acceptedMailAt = candidate.accepted_mail_at ? new Date(candidate.accepted_mail_at) : null;
+  const paymentDueDate = candidate.payment_due_date ? new Date(candidate.payment_due_date) : null;
+  const validBaseDates = [acceptedMailAt, paymentDueDate].filter((value): value is Date => Boolean(value && !Number.isNaN(value.getTime())));
+  if (validBaseDates.length === 0) {
+    return false;
+  }
+  const baseDate = validBaseDates.reduce((latest, current) => (current > latest ? current : latest));
+  const lastReminderAt = candidate.last_reminder_at ? new Date(candidate.last_reminder_at) : null;
+  const nextReminderAt =
+    lastReminderAt && !Number.isNaN(lastReminderAt.getTime())
+      ? addDays(lastReminderAt, recurringReminderDelayDays)
+      : addDays(baseDate, firstReminderDelayDays);
+  return nextReminderAt <= now;
+};
+
+const queueAutomaticPaymentReminders = async (
+  limit: number,
+  firstReminderDelayDays: number,
+  recurringReminderDelayDays: number
+): Promise<number> => {
+  const pool = await getPool();
+  const result = await pool.query(
+    `
+      select
+        e.event_id,
+        e.id as entry_id,
+        accepted_mail.accepted_mail_at,
+        epr.early_deadline::text as payment_due_date,
+        reminders.last_reminder_at
+      from entry e
+      inner join event ev on ev.id = e.event_id
+      inner join invoice i
+        on i.event_id = e.event_id
+       and i.driver_person_id = e.driver_person_id
+      left join event_pricing_rule epr on epr.event_id = e.event_id
+      left join lateral (
+        select max(o.created_at) as accepted_mail_at
+        from email_outbox o
+        where o.event_id = e.event_id
+          and o.template_id = 'accepted_open_payment'
+          and o.template_data->>'entryId' = e.id::text
+      ) accepted_mail on true
+      left join lateral (
+        select max(o.created_at) as last_reminder_at
+        from email_outbox o
+        where o.event_id = e.event_id
+          and o.template_id = 'payment_reminder'
+          and o.template_data->>'entryId' = e.id::text
+      ) reminders on true
+      where e.deleted_at is null
+        and e.acceptance_status = 'accepted'
+        and i.payment_status = 'due'
+        and ev.status in ('open', 'closed')
+        and not exists (
+          select 1
+          from email_outbox q
+          where q.event_id = e.event_id
+            and q.template_id = 'payment_reminder'
+            and q.template_data->>'entryId' = e.id::text
+            and q.status in ('queued', 'sending')
+        )
+      order by coalesce(reminders.last_reminder_at, accepted_mail.accepted_mail_at, e.created_at) asc
+    `
+  );
+
+  const now = new Date();
+  const dueCandidates = (result.rows as PaymentReminderCandidateRow[])
+    .filter((row) => isDueForPaymentReminder(row, firstReminderDelayDays, recurringReminderDelayDays, now))
+    .slice(0, limit);
+
+  let queued = 0;
+  for (const row of dueCandidates) {
+    try {
+      const outcome = await queuePaymentReminders(
+        {
+          eventId: row.event_id,
+          entryId: row.entry_id,
+          allowDuplicate: false,
+          templateId: 'payment_reminder'
+        },
+        null
+      );
+      queued += outcome.queued;
+    } catch (error) {
+      if (error instanceof DuplicateRequestError) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return queued;
+};
+
 export const handler = async () => {
   const batchSize = Number.parseInt(process.env.EMAIL_WORKER_BATCH_SIZE ?? '20', 10);
   const automationBatchSize = parsePositiveInt(process.env.EMAIL_WORKER_AUTOMATION_BATCH_SIZE, 50);
   const reminderDelayDays = parsePositiveInt(process.env.EMAIL_CONFIRMATION_REMINDER_DAYS, 3);
+  const paymentReminderFirstDelayDays = parsePositiveInt(process.env.PAYMENT_REMINDER_FIRST_DAYS, 30);
+  const paymentReminderRepeatDays = parsePositiveInt(process.env.PAYMENT_REMINDER_REPEAT_DAYS, 14);
 
   const reminderQueued = await queueEmailConfirmationReminders(automationBatchSize, reminderDelayDays);
+  const paymentReminderQueued = await queueAutomaticPaymentReminders(
+    automationBatchSize,
+    paymentReminderFirstDelayDays,
+    paymentReminderRepeatDays
+  );
   const acceptedPaidQueued = await queueAcceptedPaidCompletedMails(automationBatchSize);
 
   const rows = await claimOutbox(batchSize);
@@ -347,6 +468,7 @@ export const handler = async () => {
     processed: rows.length,
     automation: {
       emailConfirmationReminderQueued: reminderQueued,
+      paymentReminderQueued,
       acceptedPaidCompletedQueued: acceptedPaidQueued
     }
   };

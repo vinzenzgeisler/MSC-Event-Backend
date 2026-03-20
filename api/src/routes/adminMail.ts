@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { and, desc, eq, inArray, isNull, or, sql, SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, or, sql, SQL } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import {
   emailOutboxAttachment,
@@ -29,6 +29,10 @@ import { CAMPAIGN_TEMPLATE_KEYS, getTemplateContract, MailRenderOptions } from '
 import { getAssetObjectMetadata, getPresignedAssetsUploadUrl } from '../docs/storage';
 import { getMailChromeCopy, getProcessTemplateCopy, resolveMailLocale } from '../mail/i18n';
 import { getOrCreateEntryConfirmationAttachment } from '../docs/entryConfirmation';
+import { buildEntryConfirmationConfigFallback, overlayEntryConfirmationConfig } from '../domain/entryConfirmationConfig';
+import { buildPaymentReference } from '../domain/paymentReference';
+import { getEntryLineTotalCents, sumEntryLineTotalCents } from '../domain/pricingSnapshot';
+import { getEntryConfirmationDefaults } from './adminConfig';
 
 type RecipientFilter = {
   acceptanceStatus?: 'pending' | 'shortlist' | 'accepted' | 'rejected';
@@ -436,6 +440,175 @@ const toIsoDate = (value: string | undefined): Date => (value ? new Date(value) 
 
 const formatEuroFromCents = (value: number): string => (value / 100).toFixed(2).replace('.', ',');
 
+const buildAcceptedPaymentInstructionText = (input: {
+  locale: 'de' | 'en' | 'cs' | 'pl';
+  amountOpen: string;
+  amountOpenCents: number;
+  paymentDueDate: string | null;
+  paymentRecipient: string | null;
+  paymentIban: string | null;
+  paymentReference: string;
+}): string => {
+  if (input.amountOpenCents <= 0) {
+    if (input.locale === 'en') {
+      return 'There is currently no additional payment due for this accepted entry.';
+    }
+    if (input.locale === 'cs') {
+      return 'Pro tuto přijatou přihlášku momentálně není splatná žádná další částka.';
+    }
+    if (input.locale === 'pl') {
+      return 'Dla tego zaakceptowanego zgłoszenia nie ma obecnie żadnej dodatkowej kwoty do zapłaty.';
+    }
+    return 'Für diese zugelassene Nennung ist aktuell kein zusätzlicher Zahlbetrag offen.';
+  }
+
+  if (input.locale === 'en') {
+    return [
+      `Please transfer the entry fee by ${input.paymentDueDate ?? 'the due date shown in the PDF'} using the following account:`,
+      `- Amount: ${input.amountOpen}`,
+      input.paymentRecipient ? `- Recipient: ${input.paymentRecipient}` : null,
+      input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
+      `- Reference: ${input.paymentReference}`
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join('\n');
+  }
+  if (input.locale === 'cs') {
+    return [
+      `Prosíme o úhradu startovného nejpozději do ${input.paymentDueDate ?? 'termínu uvedeného v PDF'} na následující účet:`,
+      `- Částka: ${input.amountOpen}`,
+      input.paymentRecipient ? `- Příjemce: ${input.paymentRecipient}` : null,
+      input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
+      `- Platební údaj: ${input.paymentReference}`
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join('\n');
+  }
+  if (input.locale === 'pl') {
+    return [
+      `Prosimy o opłacenie wpisowego do ${input.paymentDueDate ?? 'terminu podanego w PDF'} na poniższy rachunek:`,
+      `- Kwota: ${input.amountOpen}`,
+      input.paymentRecipient ? `- Odbiorca: ${input.paymentRecipient}` : null,
+      input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
+      `- Tytuł przelewu: ${input.paymentReference}`
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join('\n');
+  }
+  return [
+    `Bitte überweise das Nenngeld bis ${input.paymentDueDate ?? 'zu der in der PDF genannten Frist'} auf folgendes Konto:`,
+    `- Betrag: ${input.amountOpen}`,
+    input.paymentRecipient ? `- Empfänger: ${input.paymentRecipient}` : null,
+    input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
+    `- Verwendungszweck: ${input.paymentReference}`
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join('\n');
+};
+
+const buildRegistrationNextStepText = (input: {
+  locale: 'de' | 'en' | 'cs' | 'pl';
+  entryCount: number;
+}): string => {
+  if (input.locale === 'en') {
+    return input.entryCount > 1
+      ? 'After you confirm your email address, we will review your registrations and send you the next update. Payment details follow only after acceptance.'
+      : 'After you confirm your email address, we will review your registration and send you the next update. Payment details follow only after acceptance.';
+  }
+  if (input.locale === 'cs') {
+    return input.entryCount > 1
+      ? 'Po potvrzení e-mailové adresy vaše přihlášky zkontrolujeme a zašleme vám další informaci. Platební údaje obdržíte až po přijetí.'
+      : 'Po potvrzení e-mailové adresy vaši přihlášku zkontrolujeme a zašleme vám další informaci. Platební údaje obdržíte až po přijetí.';
+  }
+  if (input.locale === 'pl') {
+    return input.entryCount > 1
+      ? 'Po potwierdzeniu adresu e-mail sprawdzimy Twoje zgłoszenia i prześlemy kolejną informację. Dane do płatności otrzymasz dopiero po akceptacji.'
+      : 'Po potwierdzeniu adresu e-mail sprawdzimy Twoje zgłoszenie i prześlemy kolejną informację. Dane do płatności otrzymasz dopiero po akceptacji.';
+  }
+  return input.entryCount > 1
+    ? 'Sobald du deine E-Mail-Adresse bestätigt hast, prüfen wir deine Nennungen und melden uns mit dem nächsten Stand. Zahlungsinformationen erhältst du erst mit einer Zulassung.'
+    : 'Sobald du deine E-Mail-Adresse bestätigt hast, prüfen wir deine Nennung und melden uns mit dem nächsten Stand. Zahlungsinformationen erhältst du erst mit einer Zulassung.';
+};
+
+const buildPaymentReminderInstructionText = (input: {
+  locale: 'de' | 'en' | 'cs' | 'pl';
+  acceptedEntrySummaryText: string;
+  amountOpen: string;
+  paymentDueDate: string | null;
+  paymentRecipient: string | null;
+  paymentIban: string | null;
+  paymentReference: string;
+  combinedTransferHint: string;
+}): string => {
+  if (input.locale === 'en') {
+    return [
+      'This reminder refers to the following accepted entry:',
+      input.acceptedEntrySummaryText,
+      '',
+      'Please transfer the outstanding entry fee using the following account details:',
+      `- Amount: ${input.amountOpen}`,
+      input.paymentDueDate ? `- Due date: ${input.paymentDueDate}` : null,
+      input.paymentRecipient ? `- Recipient: ${input.paymentRecipient}` : null,
+      input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
+      `- Reference: ${input.paymentReference}`,
+      input.combinedTransferHint ? '' : null,
+      input.combinedTransferHint || null
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join('\n');
+  }
+  if (input.locale === 'cs') {
+    return [
+      'Tato připomínka se vztahuje k následující přijaté přihlášce:',
+      input.acceptedEntrySummaryText,
+      '',
+      'Prosíme o úhradu otevřeného startovného na následující účet:',
+      `- Částka: ${input.amountOpen}`,
+      input.paymentDueDate ? `- Termín: ${input.paymentDueDate}` : null,
+      input.paymentRecipient ? `- Příjemce: ${input.paymentRecipient}` : null,
+      input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
+      `- Platební údaj: ${input.paymentReference}`,
+      input.combinedTransferHint ? '' : null,
+      input.combinedTransferHint || null
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join('\n');
+  }
+  if (input.locale === 'pl') {
+    return [
+      'To przypomnienie dotyczy następującego zaakceptowanego zgłoszenia:',
+      input.acceptedEntrySummaryText,
+      '',
+      'Prosimy o opłacenie otwartego wpisowego na poniższy rachunek:',
+      `- Kwota: ${input.amountOpen}`,
+      input.paymentDueDate ? `- Termin: ${input.paymentDueDate}` : null,
+      input.paymentRecipient ? `- Odbiorca: ${input.paymentRecipient}` : null,
+      input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
+      `- Tytuł przelewu: ${input.paymentReference}`,
+      input.combinedTransferHint ? '' : null,
+      input.combinedTransferHint || null
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join('\n');
+  }
+  return [
+    'Diese Erinnerung bezieht sich auf folgende zugelassene Nennung:',
+    input.acceptedEntrySummaryText,
+    '',
+    'Bitte überweise das offene Nenngeld auf folgendes Konto:',
+    `- Betrag: ${input.amountOpen}`,
+    input.paymentDueDate ? `- Frist: ${input.paymentDueDate}` : null,
+    input.paymentRecipient ? `- Empfänger: ${input.paymentRecipient}` : null,
+    input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
+    `- Verwendungszweck: ${input.paymentReference}`,
+    input.combinedTransferHint ? '' : null,
+    input.combinedTransferHint || null
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join('\n');
+};
+
+
 const formatEventDateText = (startsAt: string | Date | null, endsAt: string | Date | null): string | null => {
   const normalize = (value: string | Date | null): Date | null => {
     if (!value) {
@@ -479,7 +652,7 @@ const formatDateOnlyText = (value: string | Date | null): string | null => {
 };
 
 const getFallbackContactEmail = (): string | null => {
-  const candidate = (process.env.MAIL_CONTACT_EMAIL ?? process.env.SES_FROM_EMAIL ?? '').trim();
+  const candidate = (process.env.SES_FROM_EMAIL ?? '').trim();
   return candidate.length > 0 ? candidate : null;
 };
 
@@ -600,23 +773,69 @@ const resolvePaymentDeadlineDefault = async (eventId: string): Promise<string | 
   return formatDateOnlyText(rows[0]?.earlyDeadline ?? null);
 };
 
-const enrichEntryContextTemplateData = async (
+type MailEntryContextSummary = {
+  className: string | null;
+  startNumber: string | null;
+  vehicleMake: string | null;
+  vehicleModel: string | null;
+  vehicleLabel: string | null;
+};
+
+const formatMailEntrySummary = (item: MailEntryContextSummary): string => {
+  const parts = [
+    item.className,
+    item.startNumber ? `Startnummer ${item.startNumber}` : null,
+    item.vehicleLabel
+  ].filter((value): value is string => Boolean(value && value.trim().length > 0));
+  return parts.join(' · ');
+};
+
+const buildAcceptedEntrySummaryText = (input: {
+  locale: 'de' | 'en' | 'cs' | 'pl';
+  className: string | null;
+  startNumber: string | null;
+  vehicleLabel: string | null;
+}): string => {
+  const startNumberLabel =
+    input.locale === 'en'
+      ? 'Start Number'
+      : input.locale === 'cs'
+        ? 'Startovní číslo'
+        : input.locale === 'pl'
+          ? 'Numer startowy'
+          : 'Startnummer';
+  return [
+    input.className,
+    input.startNumber ? `${startNumberLabel} ${input.startNumber}` : null,
+    input.vehicleLabel
+  ]
+    .filter((value): value is string => Boolean(value && value.trim().length > 0))
+    .join(' · ');
+};
+
+const loadMailEntryContext = async (
   eventId: string,
   currentData: Record<string, unknown>,
   target: RecipientTarget
-): Promise<Record<string, unknown>> => {
+): Promise<{
+  focused: MailEntryContextSummary | null;
+  summaries: string[];
+  amountOpen: string | null;
+  startNumbers: string[];
+}> => {
   const db = await getDb();
   const byEntryId = toUuidOrNull(target.entryId) ?? toUuidOrNull(currentData.entryId);
   const byDriverPersonId = toUuidOrNull(target.driverPersonId) ?? toUuidOrNull(currentData.driverPersonId);
-  if (!byEntryId && !byDriverPersonId) {
-    // Recipient-only mails can intentionally have no entry/person binding.
-    return currentData;
+  const byRegistrationGroupId = toUuidOrNull(currentData.registrationGroupId);
+  if (!byEntryId && !byDriverPersonId && !byRegistrationGroupId) {
+    return { focused: null, summaries: [], amountOpen: null, startNumbers: [] };
   }
+
   const rows = await db
     .select({
+      entryId: entry.id,
       className: eventClass.name,
       startNumber: entry.startNumberNorm,
-      vehicleType: vehicle.vehicleType,
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       totalCents: invoice.totalCents,
@@ -627,32 +846,73 @@ const enrichEntryContextTemplateData = async (
     .leftJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
     .where(
-      byEntryId
-        ? and(eq(entry.eventId, eventId), eq(entry.id, byEntryId), sql`${entry.deletedAt} is null`)
-        : and(eq(entry.eventId, eventId), eq(entry.driverPersonId, byDriverPersonId as string), sql`${entry.deletedAt} is null`)
+      byRegistrationGroupId
+        ? and(eq(entry.eventId, eventId), eq(entry.registrationGroupId, byRegistrationGroupId), sql`${entry.deletedAt} is null`)
+        : byDriverPersonId
+          ? and(eq(entry.eventId, eventId), eq(entry.driverPersonId, byDriverPersonId), sql`${entry.deletedAt} is null`)
+          : and(eq(entry.eventId, eventId), eq(entry.id, byEntryId as string), sql`${entry.deletedAt} is null`)
     )
-    .orderBy(desc(entry.createdAt))
-    .limit(1);
+    .orderBy(asc(entry.createdAt));
 
-  const row = rows[0];
-  if (!row) {
+  if (rows.length === 0) {
+    return { focused: null, summaries: [], amountOpen: null, startNumbers: [] };
+  }
+
+  const mapped = rows.map((row) => {
+    const vehicleLabel = [row.vehicleMake, row.vehicleModel]
+      .filter((value): value is string => Boolean(value && value.trim().length > 0))
+      .join(' ');
+    return {
+      entryId: row.entryId,
+      summary: {
+        className: row.className ?? null,
+        startNumber: row.startNumber ?? null,
+        vehicleMake: row.vehicleMake ?? null,
+        vehicleModel: row.vehicleModel ?? null,
+        vehicleLabel: vehicleLabel || null
+      },
+      amountOpen: formatAmountOpen(row.totalCents ?? 0, row.paidAmountCents ?? 0)
+    };
+  });
+
+  const focusedRow = mapped.find((row) => row.entryId === byEntryId) ?? mapped[0] ?? null;
+  const orderedSummaries = focusedRow
+    ? [focusedRow, ...mapped.filter((row) => row.entryId !== focusedRow.entryId)]
+    : mapped;
+  const focused = focusedRow?.summary ?? null;
+  const amountOpen = focusedRow?.amountOpen ?? null;
+
+  return {
+    focused,
+    summaries: orderedSummaries.map((row) => formatMailEntrySummary(row.summary)).filter((item) => item.length > 0),
+    amountOpen,
+    startNumbers: orderedSummaries
+      .map((row) => row.summary.startNumber)
+      .filter((value): value is string => Boolean(value && value.trim().length > 0))
+  };
+};
+
+const enrichEntryContextTemplateData = async (
+  eventId: string,
+  currentData: Record<string, unknown>,
+  target: RecipientTarget
+): Promise<Record<string, unknown>> => {
+  const context = await loadMailEntryContext(eventId, currentData, target);
+  if (!context.focused) {
+    // Recipient-only mails can intentionally have no entry/person binding.
     return currentData;
   }
 
-  const vehicleLabel = [row.vehicleType, row.vehicleMake, row.vehicleModel]
-    .filter((item): item is string => Boolean(item && item.trim().length > 0))
-    .join(' · ');
-  const amountOpen = formatAmountOpen(row.totalCents ?? 0, row.paidAmountCents ?? 0);
-
   return {
     ...currentData,
-    className: currentData.className ?? row.className,
-    startNumber: currentData.startNumber ?? row.startNumber,
-    vehicleType: currentData.vehicleType ?? row.vehicleType,
-    vehicleMake: currentData.vehicleMake ?? row.vehicleMake,
-    vehicleModel: currentData.vehicleModel ?? row.vehicleModel,
-    vehicleLabel: (currentData.vehicleLabel ?? vehicleLabel) || null,
-    amountOpen: currentData.amountOpen ?? amountOpen
+    className: currentData.className ?? context.focused.className,
+    startNumber: currentData.startNumber ?? context.focused.startNumber,
+    vehicleMake: currentData.vehicleMake ?? context.focused.vehicleMake,
+    vehicleModel: currentData.vehicleModel ?? context.focused.vehicleModel,
+    vehicleLabel: (currentData.vehicleLabel ?? context.focused.vehicleLabel) || null,
+    entrySummaries: Array.isArray(currentData.entrySummaries) ? currentData.entrySummaries : context.summaries,
+    amountOpen: currentData.amountOpen ?? context.amountOpen,
+    entryStartNumbers: Array.isArray(currentData.entryStartNumbers) ? currentData.entryStartNumbers : context.startNumbers
   };
 };
 
@@ -1189,6 +1449,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
   await assertEventStatusAllowed(input.eventId, ['open', 'closed']);
   const template = await resolveTemplate(input.templateId, input.templateVersion, input.subject);
   const sendAfter = toIsoDate(input.sendAfter);
+  const globalEntryConfirmationDefaults = (await getEntryConfirmationDefaults()).config;
 
   const rows = await db
     .select({
@@ -1196,20 +1457,24 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
       eventId: invoice.eventId,
       invoiceId: invoice.id,
       driverPersonId: invoice.driverPersonId,
+      acceptanceStatus: entry.acceptanceStatus,
       totalCents: invoice.totalCents,
+      pricingSnapshot: invoice.pricingSnapshot,
       paidAmountCents: invoice.paidAmountCents,
       paymentStatus: invoice.paymentStatus,
       entryFeeCents: entry.entryFeeCents,
+      orgaCode: entry.orgaCode,
       email: person.email,
       firstName: person.firstName,
       lastName: person.lastName,
+      nationality: person.nationality,
       eventName: event.name
     })
     .from(entry)
     .innerJoin(person, eq(entry.driverPersonId, person.id))
     .innerJoin(event, eq(entry.eventId, event.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
-    .where(and(eq(entry.eventId, input.eventId), eq(entry.id, input.entryId)))
+    .where(and(eq(entry.eventId, input.eventId), eq(entry.id, input.entryId), sql`${entry.deletedAt} is null`))
     .limit(1);
 
   const current = rows[0];
@@ -1232,15 +1497,71 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     return { queued: 0, skipped: 1, reason: 'processing_restricted', outboxIds: [] as string[] };
   }
 
+  if (current.acceptanceStatus !== 'accepted') {
+    return { queued: 0, skipped: 1, reason: 'not_allowed', outboxIds: [] as string[] };
+  }
+
   if (current.paymentStatus === 'paid') {
     return { queued: 0, skipped: 1, reason: 'not_allowed', outboxIds: [] as string[] };
   }
 
-  const effectiveTotalCents = current.totalCents ?? current.entryFeeCents ?? 0;
+  const focusedEntryFeeCents =
+    getEntryLineTotalCents(current.pricingSnapshot, current.entryId) ?? current.entryFeeCents ?? 0;
   const effectivePaidAmountCents = current.paidAmountCents ?? 0;
-  const amountOpenCents = Math.max(0, effectiveTotalCents - effectivePaidAmountCents);
+  const amountOpenCents = Math.max(0, focusedEntryFeeCents);
+  if (amountOpenCents <= 0) {
+    return { queued: 0, skipped: 1, reason: 'not_allowed', outboxIds: [] as string[] };
+  }
   const amountOpenEur = formatEuroFromCents(amountOpenCents);
   const amountOpen = `${amountOpenEur} EUR`;
+  const locale = resolveMailLocale({ nationality: current.nationality ?? null });
+  const eventRows = await db
+    .select({
+      eventEntryConfirmationConfig: event.entryConfirmationConfig
+    })
+    .from(event)
+    .where(eq(event.id, input.eventId))
+    .limit(1);
+  const entryConfirmationConfig = overlayEntryConfirmationConfig(
+    overlayEntryConfirmationConfig(buildEntryConfirmationConfigFallback(), globalEntryConfirmationDefaults),
+    eventRows[0]?.eventEntryConfirmationConfig ?? {}
+  );
+  const paymentDueDate = await resolvePaymentDeadlineDefault(input.eventId);
+  const siblingEntries = await db
+    .select({
+      id: entry.id,
+      acceptanceStatus: entry.acceptanceStatus
+    })
+    .from(entry)
+    .where(
+      and(
+        eq(entry.eventId, input.eventId),
+        eq(entry.driverPersonId, current.driverPersonId),
+        sql`${entry.deletedAt} is null`,
+        sql`${entry.id} <> ${current.entryId}`
+      )
+    );
+  const acceptedEntryIds = [
+    current.entryId,
+    ...siblingEntries.filter((item) => item.acceptanceStatus === 'accepted').map((item) => item.id)
+  ];
+  const hasAcceptedSiblingEntries = siblingEntries.some((item) => item.acceptanceStatus === 'accepted');
+  const acceptedEntriesTotalCents = sumEntryLineTotalCents(current.pricingSnapshot, acceptedEntryIds);
+  const acceptedEntriesTotal = `${formatEuroFromCents(acceptedEntriesTotalCents)} EUR`;
+  const combinedTransferHint = hasAcceptedSiblingEntries
+    ? locale === 'en'
+      ? `If you pay your already accepted entries together, the current total amount is ${acceptedEntriesTotal}.`
+      : locale === 'cs'
+        ? `Při společné úhradě vašich již přijatých přihlášek činí aktuální celková částka ${acceptedEntriesTotal}.`
+        : locale === 'pl'
+          ? `Przy wspólnej płatności za już zaakceptowane zgłoszenia aktualna łączna kwota wynosi ${acceptedEntriesTotal}.`
+          : `Bei gemeinsamer Überweisung deiner bereits zugelassenen Nennungen beträgt der aktuelle Gesamtbetrag ${acceptedEntriesTotal}.`
+    : '';
+  const paymentReference = buildPaymentReference({
+    orgaCode: current.orgaCode,
+    firstName: current.firstName,
+    lastName: current.lastName
+  });
 
   const idempotencyKey = buildDedupeKey(
     'reminder',
@@ -1251,6 +1572,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     {
       entryId: current.entryId,
       paymentStatus: current.paymentStatus ?? 'due',
+      amountOpenCents,
       allowDuplicate: input.allowDuplicate ? randomUUID() : false
     }
   );
@@ -1262,17 +1584,55 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     }
   }
 
-  const templateData = {
+  let templateData: Record<string, unknown> = {
     ...(input.templateData ?? {}),
     entryId: current.entryId,
     driverPersonId: current.driverPersonId,
     driverName: `${current.firstName} ${current.lastName}`,
     eventName: current.eventName,
-    totalCents: effectiveTotalCents,
+    nationality: current.nationality ?? null,
+    locale,
+    totalCents: focusedEntryFeeCents,
     paidAmountCents: effectivePaidAmountCents,
     amountOpenCents,
     amountOpenEur,
-    amountOpen
+    amountOpen,
+    paymentDueDate: paymentDueDate ?? '',
+    paymentRecipient: entryConfirmationConfig.paymentRecipient ?? '',
+    paymentIban: entryConfirmationConfig.paymentIban ?? '',
+    paymentBic: entryConfirmationConfig.paymentBic ?? '',
+    paymentReference,
+    combinedTransferHint
+  };
+
+  templateData = await enrichEntryContextTemplateData(
+    input.eventId,
+    templateData,
+    {
+      email: current.email,
+      driverPersonId: current.driverPersonId,
+      entryId: current.entryId
+    }
+  );
+  const acceptedEntrySummaryText = buildAcceptedEntrySummaryText({
+    locale,
+    className: typeof templateData.className === 'string' ? templateData.className : null,
+    startNumber: typeof templateData.startNumber === 'string' ? templateData.startNumber : null,
+    vehicleLabel: typeof templateData.vehicleLabel === 'string' ? templateData.vehicleLabel : null
+  });
+  templateData = {
+    ...templateData,
+    acceptedEntrySummaryText,
+    paymentInstructionText: buildPaymentReminderInstructionText({
+      locale,
+      acceptedEntrySummaryText,
+      amountOpen,
+      paymentDueDate,
+      paymentRecipient: entryConfirmationConfig.paymentRecipient ?? null,
+      paymentIban: entryConfirmationConfig.paymentIban ?? null,
+      paymentReference,
+      combinedTransferHint
+    })
   };
 
   let createdId: string | null = null;
@@ -1344,6 +1704,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     throw error;
   }
   const sendAfter = toIsoDate(input.sendAfter);
+  const globalEntryConfirmationDefaults = (await getEntryConfirmationDefaults()).config;
 
   const rows = await db
     .select({
@@ -1355,13 +1716,22 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       registrationStatus: entry.registrationStatus,
       acceptanceStatus: entry.acceptanceStatus,
       totalCents: invoice.totalCents,
+      pricingSnapshot: invoice.pricingSnapshot,
+      paidAmountCents: invoice.paidAmountCents,
       paymentStatus: invoice.paymentStatus,
+      earlyDeadline: eventPricingRule.earlyDeadline,
       eventName: event.name,
       eventStartsAt: event.startsAt,
       eventEndsAt: event.endsAt,
       eventContactEmail: event.contactEmail,
+      eventWebsiteUrl: event.websiteUrl,
+      eventEntryConfirmationConfig: event.entryConfirmationConfig,
       className: eventClass.name,
       startNumber: entry.startNumberNorm,
+      orgaCode: entry.orgaCode,
+      entryFeeCents: entry.entryFeeCents,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model,
       email: person.email,
       firstName: person.firstName,
       lastName: person.lastName,
@@ -1371,7 +1741,9 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     .innerJoin(event, eq(entry.eventId, event.id))
     .innerJoin(eventClass, eq(entry.classId, eventClass.id))
     .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .leftJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+    .leftJoin(eventPricingRule, eq(eventPricingRule.eventId, entry.eventId))
     .where(and(eq(entry.eventId, input.eventId), eq(entry.id, input.entryId)));
 
   if (rows.length === 0) {
@@ -1400,6 +1772,31 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   const row = rows[0];
   const email = row.email as string;
   const driverName = `${row.firstName} ${row.lastName}`;
+  const siblingEntries =
+    template.templateKey === 'accepted_open_payment'
+      ? await db
+          .select({
+            id: entry.id,
+            acceptanceStatus: entry.acceptanceStatus
+          })
+          .from(entry)
+          .where(
+            and(
+              eq(entry.eventId, input.eventId),
+              eq(entry.driverPersonId, row.driverPersonId),
+              sql`${entry.deletedAt} is null`,
+              sql`${entry.id} <> ${row.entryId}`
+            )
+          )
+      : [];
+  const hasOpenSiblingEntries = siblingEntries.some(
+    (item) => item.acceptanceStatus === 'pending' || item.acceptanceStatus === 'shortlist'
+  );
+  const hasAcceptedSiblingEntries = siblingEntries.some((item) => item.acceptanceStatus === 'accepted');
+  const acceptedEntryIds = [
+    row.entryId,
+    ...siblingEntries.filter((item) => item.acceptanceStatus === 'accepted').map((item) => item.id)
+  ];
   const locale = resolveMailLocale({
     locale: null,
     nationality: row.nationality
@@ -1417,10 +1814,91 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   const lifecycleSubjectTemplate = processTemplateCopy?.subjectTemplate ?? template.subjectTemplate;
   const lifecycleBodyTextTemplate = processTemplateCopy?.bodyTextTemplate ?? template.bodyTextTemplate;
   const normalizedDriverNote = (row.driverNote ?? '').trim();
+  const entryConfirmationConfig = overlayEntryConfirmationConfig(
+    overlayEntryConfirmationConfig(buildEntryConfirmationConfigFallback(), globalEntryConfirmationDefaults),
+    row.eventEntryConfirmationConfig ?? {}
+  );
   const driverNoteBlock =
     normalizedDriverNote.length > 0 ? `\n\nHinweis vom Veranstalter:\n${normalizedDriverNote}` : '';
   const supportsDriverNoteInLifecycleMail = input.eventType === 'accepted_open_payment' || input.eventType === 'rejected';
   const includeDriverNoteInLifecycleMail = supportsDriverNoteInLifecycleMail && input.includeDriverNote;
+  const focusedEntryFeeCents =
+    getEntryLineTotalCents(row.pricingSnapshot, row.entryId) ?? row.entryFeeCents ?? row.totalCents ?? 0;
+  const amountOpenCents =
+    template.templateKey === 'accepted_open_payment'
+      ? Math.max(0, focusedEntryFeeCents)
+      : Math.max(0, (row.totalCents ?? 0) - (row.paidAmountCents ?? 0));
+  const amountOpen = `${formatEuroFromCents(amountOpenCents)} EUR`;
+  const acceptedEntriesTotalCents =
+    template.templateKey === 'accepted_open_payment' ? sumEntryLineTotalCents(row.pricingSnapshot, acceptedEntryIds) : 0;
+  const acceptedEntriesTotal =
+    template.templateKey === 'accepted_open_payment' ? `${formatEuroFromCents(acceptedEntriesTotalCents)} EUR` : '';
+  const paymentDueDate = formatDateOnlyText(row.earlyDeadline ?? null);
+  const entryScopeHint =
+    template.templateKey === 'accepted_open_payment'
+      ? locale === 'de'
+        ? hasOpenSiblingEntries
+          ? 'Diese Zulassung und der ausgewiesene Betrag beziehen sich ausschließlich auf die in dieser E-Mail genannte Nennung. Weitere Nennungen auf deinen Namen werden gesondert entschieden und berechnet.'
+          : hasAcceptedSiblingEntries
+            ? 'Diese Zulassung und der ausgewiesene Betrag beziehen sich ausschließlich auf die in dieser E-Mail genannte Nennung. Für weitere zugelassene Nennungen erhältst du jeweils eine gesonderte Bestätigung.'
+            : 'Diese Zulassung und der ausgewiesene Betrag beziehen sich ausschließlich auf die in dieser E-Mail genannte Nennung.'
+        : locale === 'en'
+          ? hasOpenSiblingEntries
+            ? 'This acceptance and the stated amount apply only to the entry referenced in this email. Any further entries in your name will be decided and charged separately.'
+            : hasAcceptedSiblingEntries
+              ? 'This acceptance and the stated amount apply only to the entry referenced in this email. You will receive a separate confirmation for each further accepted entry.'
+              : 'This acceptance and the stated amount apply only to the entry referenced in this email.'
+          : locale === 'cs'
+            ? hasOpenSiblingEntries
+              ? 'Toto potvrzení a uvedená částka se vztahují výhradně k přihlášce uvedené v tomto e-mailu. O dalších přihláškách na vaše jméno bude rozhodnuto a budou účtovány samostatně.'
+              : hasAcceptedSiblingEntries
+                ? 'Toto potvrzení a uvedená částka se vztahují výhradně k přihlášce uvedené v tomto e-mailu. Pro každou další přijatou přihlášku obdržíte samostatné potvrzení.'
+                : 'Toto potvrzení a uvedená částka se vztahují výhradně k přihlášce uvedené v tomto e-mailu.'
+            : hasOpenSiblingEntries
+              ? 'To potwierdzenie i wskazana kwota dotyczą wyłącznie zgłoszenia wskazanego w tej wiadomości. Pozostałe zgłoszenia na Twoje nazwisko będą rozpatrywane i rozliczane osobno.'
+              : hasAcceptedSiblingEntries
+                ? 'To potwierdzenie i wskazana kwota dotyczą wyłącznie zgłoszenia wskazanego w tej wiadomości. Dla każdego kolejnego zaakceptowanego zgłoszenia otrzymasz osobne potwierdzenie.'
+              : 'To potwierdzenie i wskazana kwota dotyczą wyłącznie zgłoszenia wskazanego w tej wiadomości.'
+      : '';
+  const rejectionScopeHint =
+    template.templateKey === 'rejected'
+      ? locale === 'de'
+        ? hasOpenSiblingEntries || hasAcceptedSiblingEntries
+          ? 'Diese Entscheidung bezieht sich ausschließlich auf die in dieser E-Mail genannte Nennung. Weitere Nennungen auf deinen Namen bleiben davon unberührt und werden gesondert entschieden.'
+          : 'Diese Entscheidung bezieht sich ausschließlich auf die in dieser E-Mail genannte Nennung.'
+        : locale === 'en'
+          ? hasOpenSiblingEntries || hasAcceptedSiblingEntries
+            ? 'This decision applies only to the entry referenced in this email. Any further entries in your name remain unaffected and will be decided separately.'
+            : 'This decision applies only to the entry referenced in this email.'
+          : locale === 'cs'
+            ? hasOpenSiblingEntries || hasAcceptedSiblingEntries
+              ? 'Toto rozhodnutí se vztahuje výhradně k přihlášce uvedené v tomto e-mailu. Další přihlášky na vaše jméno tím zůstávají nedotčeny a budou posouzeny samostatně.'
+              : 'Toto rozhodnutí se vztahuje výhradně k přihlášce uvedené v tomto e-mailu.'
+            : hasOpenSiblingEntries || hasAcceptedSiblingEntries
+              ? 'Ta decyzja dotyczy wyłącznie zgłoszenia wskazanego w tej wiadomości. Pozostałe zgłoszenia na Twoje nazwisko pozostają bez zmian i będą rozpatrywane osobno.'
+              : 'Ta decyzja dotyczy wyłącznie zgłoszenia wskazanego w tej wiadomości.'
+      : '';
+  const combinedTransferHint =
+    template.templateKey === 'accepted_open_payment' && (hasOpenSiblingEntries || hasAcceptedSiblingEntries)
+      ? locale === 'de'
+        ? hasAcceptedSiblingEntries
+          ? `Bei gemeinsamer Überweisung deiner bereits zugelassenen Nennungen beträgt der aktuelle Gesamtbetrag ${acceptedEntriesTotal}.`
+          : 'Bei Zulassung weiterer Nennungen desselben Fahrers können die Beträge gemeinsam überwiesen werden.'
+        : locale === 'en'
+          ? hasAcceptedSiblingEntries
+            ? `If you pay your already accepted entries together, the current total amount is ${acceptedEntriesTotal}.`
+            : 'If further entries for the same rider are accepted, the amounts may be paid together.'
+          : locale === 'cs'
+            ? hasAcceptedSiblingEntries
+              ? `Při společné úhradě vašich již přijatých přihlášek činí aktuální celková částka ${acceptedEntriesTotal}.`
+              : 'Budou-li přijaty další přihlášky téhož jezdce, mohou být částky uhrazeny společně.'
+            : hasAcceptedSiblingEntries
+              ? `Przy wspólnej płatności za już zaakceptowane zgłoszenia aktualna łączna kwota wynosi ${acceptedEntriesTotal}.`
+              : 'W przypadku akceptacji kolejnych zgłoszeń tego samego kierowcy kwoty mogą zostać opłacone łącznie.'
+      : '';
+  const vehicleLabel = [row.vehicleMake, row.vehicleModel]
+    .filter((value): value is string => Boolean(value && value.trim().length > 0))
+    .join(' ');
   let templateData: Record<string, unknown> = {
     eventType: input.eventType,
     eventName: row.eventName,
@@ -1429,11 +1907,12 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     startNumber: row.startNumber,
     driverName,
     entryId: row.entryId,
+    registrationGroupId: row.registrationGroupId,
     registrationStatus: row.registrationStatus,
     acceptanceStatus: row.acceptanceStatus,
     paymentStatus: row.paymentStatus ?? null,
-    amountOpenCents: row.totalCents ?? 0,
-    amountOpen: `${formatEuroFromCents(row.totalCents ?? 0)} EUR`,
+    amountOpenCents,
+    amountOpen,
     locale,
     fallbackGreeting: chromeCopy.fallbackGreeting,
     headerTitle: processTemplateCopy?.headerTitle ?? null,
@@ -1442,13 +1921,90 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       template.templateKey === 'email_confirmation_reminder'
         ? chromeCopy.confirmationReminderCta
         : chromeCopy.verificationCta,
-    contactEmail: row.eventContactEmail ?? getFallbackContactEmail(),
+    contactEmail: row.eventContactEmail ?? entryConfirmationConfig.organizerContactEmail ?? getFallbackContactEmail(),
     nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null,
     driverNote: includeDriverNoteInLifecycleMail && normalizedDriverNote.length > 0 ? normalizedDriverNote : null,
     driverNoteBlock: includeDriverNoteInLifecycleMail ? driverNoteBlock : '',
-    paymentIban: process.env.PAYMENT_IBAN ?? '',
-    paymentBic: process.env.PAYMENT_BIC ?? '',
-    paymentRecipient: process.env.PAYMENT_RECIPIENT ?? ''
+    entryScopeHint,
+    combinedTransferHint,
+    paymentDueDate: paymentDueDate ?? '',
+    paymentIban: entryConfirmationConfig.paymentIban ?? '',
+    paymentBic: entryConfirmationConfig.paymentBic ?? '',
+    paymentRecipient: entryConfirmationConfig.paymentRecipient ?? '',
+    websiteUrl: row.eventWebsiteUrl ?? entryConfirmationConfig.websiteUrl ?? null,
+    vehicleLabel,
+    vehicleMake: row.vehicleMake ?? '',
+    vehicleModel: row.vehicleModel ?? ''
+  };
+
+  templateData = await enrichEntryContextTemplateData(
+    input.eventId,
+    templateData,
+    {
+      email,
+      driverPersonId: row.driverPersonId,
+      entryId: row.entryId
+    }
+  );
+
+  const entryStartNumbers = Array.isArray(templateData.entryStartNumbers)
+    ? templateData.entryStartNumbers.filter((value): value is string => typeof value === 'string')
+    : [];
+  const paymentReference = buildPaymentReference({
+    orgaCode: row.orgaCode,
+    firstName: row.firstName,
+    lastName: row.lastName
+  });
+  const paymentInstructionText =
+    template.templateKey === 'accepted_open_payment'
+      ? buildAcceptedPaymentInstructionText({
+          locale,
+          amountOpen,
+          amountOpenCents,
+          paymentDueDate,
+          paymentRecipient: entryConfirmationConfig.paymentRecipient ?? null,
+          paymentIban: entryConfirmationConfig.paymentIban ?? null,
+          paymentReference
+        })
+      : '';
+  const acceptedEntrySummaryText =
+    template.templateKey === 'accepted_open_payment'
+      ? buildAcceptedEntrySummaryText({
+          locale,
+          className: typeof templateData.className === 'string' ? templateData.className : row.className,
+          startNumber: typeof templateData.startNumber === 'string' ? templateData.startNumber : row.startNumber,
+          vehicleLabel:
+            typeof templateData.vehicleLabel === 'string'
+              ? templateData.vehicleLabel
+              : vehicleLabel || null
+        })
+      : '';
+  const rejectedEntrySummaryText =
+    template.templateKey === 'rejected'
+      ? buildAcceptedEntrySummaryText({
+          locale,
+          className: typeof templateData.className === 'string' ? templateData.className : row.className,
+          startNumber: typeof templateData.startNumber === 'string' ? templateData.startNumber : row.startNumber,
+          vehicleLabel:
+            typeof templateData.vehicleLabel === 'string'
+              ? templateData.vehicleLabel
+              : vehicleLabel || null
+        })
+      : '';
+  templateData = {
+    ...templateData,
+    acceptedEntrySummaryText,
+    rejectedEntrySummaryText,
+    rejectionScopeHint,
+    paymentReference,
+    paymentInstructionText,
+    registrationNextStepText:
+      template.templateKey === 'registration_received' || template.templateKey === 'email_confirmation_reminder'
+        ? buildRegistrationNextStepText({
+            locale,
+            entryCount: Math.max(1, entryStartNumbers.length)
+          })
+        : ''
   };
 
   if (template.templateKey === 'registration_received' || template.templateKey === 'email_confirmation_reminder') {
@@ -2118,6 +2674,7 @@ export const getTemplatePlaceholders = async (key: string) => {
 
 const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string, unknown> | null> => {
   const db = await getDb();
+  const globalEntryConfirmationDefaults = (await getEntryConfirmationDefaults()).config;
   const rows = await db
     .select({
       entryId: entry.id,
@@ -2126,10 +2683,13 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
       eventStartsAt: event.startsAt,
       eventEndsAt: event.endsAt,
       eventContactEmail: event.contactEmail,
+      eventWebsiteUrl: event.websiteUrl,
+      eventEntryConfirmationConfig: event.entryConfirmationConfig,
       className: eventClass.name,
       firstName: person.firstName,
       lastName: person.lastName,
       startNumber: entry.startNumberNorm,
+      orgaCode: entry.orgaCode,
       vehicleType: vehicle.vehicleType,
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
@@ -2155,6 +2715,10 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
     const token = await upsertRegistrationGroupVerificationToken(row.registrationGroupId, seed);
     verificationUrl = buildPublicVerificationUrl(row.entryId, token);
   }
+  const entryConfirmationConfig = overlayEntryConfirmationConfig(
+    overlayEntryConfirmationConfig(buildEntryConfirmationConfigFallback(), globalEntryConfirmationDefaults),
+    row.eventEntryConfirmationConfig ?? {}
+  );
   return {
     eventId: row.eventId,
     eventName: row.eventName,
@@ -2164,16 +2728,21 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
     driverName: `${row.firstName} ${row.lastName}`.trim(),
     className: row.className,
     startNumber: row.startNumber,
+    orgaCode: row.orgaCode,
     vehicleType: row.vehicleType,
     vehicleMake: row.vehicleMake,
     vehicleModel: row.vehicleModel,
-    vehicleLabel: [row.vehicleType, row.vehicleMake, row.vehicleModel]
+    vehicleLabel: [row.vehicleMake, row.vehicleModel]
       .filter((item): item is string => Boolean(item && item.trim().length > 0))
-      .join(' · '),
+      .join(' '),
     amountOpen: formatAmountOpen(row.totalCents ?? 0, row.paidAmountCents ?? 0),
     verificationUrl,
-    contactEmail: row.eventContactEmail ?? process.env.MAIL_CONTACT_EMAIL ?? null,
-    nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null
+    contactEmail: row.eventContactEmail ?? entryConfirmationConfig.organizerContactEmail ?? getFallbackContactEmail(),
+    nennungstoolUrl: process.env.MAIL_PUBLIC_BASE_URL ?? process.env.NENNUNGSTOOL_URL ?? null,
+    paymentRecipient: entryConfirmationConfig.paymentRecipient ?? '',
+    paymentIban: entryConfirmationConfig.paymentIban ?? '',
+    paymentBic: entryConfirmationConfig.paymentBic ?? '',
+    websiteUrl: row.eventWebsiteUrl ?? entryConfirmationConfig.websiteUrl ?? null
   };
 };
 

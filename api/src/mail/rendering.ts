@@ -1,6 +1,6 @@
 import { KNOWN_PLACEHOLDER_NAMES, REQUIRED_PLACEHOLDERS_BY_TEMPLATE } from './placeholders';
 import { getTemplateContract, MailRenderOptions } from './templateContracts';
-import { getMailChromeCopy, resolveMailLocale, SupportedMailLocale } from './i18n';
+import { getMailChromeCopy, getProcessTemplateCopy, resolveMailLocale, SupportedMailLocale } from './i18n';
 
 type TemplateData = Record<string, unknown>;
 
@@ -276,9 +276,6 @@ const resolveVehicleLabel = (data: TemplateData): string => {
     return toStringValue(data.vehicleLabel);
   }
   const parts: string[] = [];
-  if (isPresentValue(data.vehicleType)) {
-    parts.push(toStringValue(data.vehicleType));
-  }
   if (isPresentValue(data.vehicleMake)) {
     parts.push(toStringValue(data.vehicleMake));
   }
@@ -286,6 +283,71 @@ const resolveVehicleLabel = (data: TemplateData): string => {
     parts.push(toStringValue(data.vehicleModel));
   }
   return parts.join(' · ');
+};
+
+const getEntryContextLabels = (
+  locale: SupportedMailLocale
+): {
+  className: string;
+  startNumber: string;
+  vehicle: string;
+  entries: string;
+  amountOpen: string;
+  paymentDueDate: string;
+  paymentRecipient: string;
+  paymentIban: string;
+  paymentBic: string;
+} => {
+  if (locale === 'cs') {
+    return {
+      className: 'Třída',
+      startNumber: 'Startovní číslo',
+      vehicle: 'Vozidlo',
+      entries: 'Přihlášky',
+      amountOpen: 'Startovné',
+      paymentDueDate: 'Termín',
+      paymentRecipient: 'Příjemce',
+      paymentIban: 'IBAN',
+      paymentBic: 'BIC'
+    };
+  }
+  if (locale === 'pl') {
+    return {
+      className: 'Klasa',
+      startNumber: 'Numer startowy',
+      vehicle: 'Pojazd',
+      entries: 'Zgłoszenia',
+      amountOpen: 'Wpisowe',
+      paymentDueDate: 'Termin',
+      paymentRecipient: 'Odbiorca',
+      paymentIban: 'IBAN',
+      paymentBic: 'BIC'
+    };
+  }
+  if (locale === 'en') {
+    return {
+      className: 'Class',
+      startNumber: 'Start number',
+      vehicle: 'Vehicle',
+      entries: 'Entries',
+      amountOpen: 'Entry fee',
+      paymentDueDate: 'Due date',
+      paymentRecipient: 'Recipient',
+      paymentIban: 'IBAN',
+      paymentBic: 'BIC'
+    };
+  }
+  return {
+    className: 'Klasse',
+    startNumber: 'Startnummer',
+    vehicle: 'Fahrzeug',
+    entries: 'Nennungen',
+    amountOpen: 'Nenngeld',
+    paymentDueDate: 'Frist',
+    paymentRecipient: 'Empfänger',
+    paymentIban: 'IBAN',
+    paymentBic: 'BIC'
+  };
 };
 
 type TemplateVisualConfig = {
@@ -391,25 +453,24 @@ const buildEntryContextCard = (
   locale: SupportedMailLocale
 ): string => {
   const copy = getMailChromeCopy(locale);
+  const labels = getEntryContextLabels(locale);
   const visual = getTemplateVisualConfig(templateKey);
   const entryContextTitle = templateKey === 'codriver_info' ? copy.codriverEntryContextTitle : copy.entryContextTitle;
-  const rows: Array<{ label: string; value: string }> = [];
-  if (isPresentValue(data.className)) {
-    rows.push({ label: 'Klasse', value: toStringValue(data.className) });
+  const rows: Array<{ label: string; value: string; multiline?: boolean }> = [];
+  const entrySummaries = parseMultiline(data.entrySummaries);
+  const showFocusedEntryDetails = entrySummaries.length <= 1;
+  if (showFocusedEntryDetails && isPresentValue(data.className)) {
+    rows.push({ label: labels.className, value: toStringValue(data.className) });
   }
-  if (isPresentValue(data.startNumber)) {
-    rows.push({ label: 'Startnummer', value: toStringValue(data.startNumber) });
+  if (showFocusedEntryDetails && isPresentValue(data.startNumber)) {
+    rows.push({ label: labels.startNumber, value: toStringValue(data.startNumber) });
   }
   const vehicleLabel = resolveVehicleLabel(data);
-  if (vehicleLabel) {
-    rows.push({ label: 'Fahrzeug', value: vehicleLabel });
+  if (showFocusedEntryDetails && vehicleLabel) {
+    rows.push({ label: labels.vehicle, value: vehicleLabel });
   }
-  const showAmountOpen =
-    templateKey === 'accepted_open_payment' ||
-    templateKey === 'payment_reminder' ||
-    templateKey === 'payment_reminder_followup';
-  if (showAmountOpen && isPresentValue(data.amountOpen)) {
-    rows.push({ label: 'Nenngeld offen', value: toStringValue(data.amountOpen) });
+  if (entrySummaries.length > 1) {
+    rows.push({ label: labels.entries, value: entrySummaries.join('\n'), multiline: true });
   }
   if (rows.length === 0) {
     return '';
@@ -418,7 +479,7 @@ const buildEntryContextCard = (
   const rowHtml = rows
     .map(
       (row) =>
-        `<tr><td class="mail-entry-label" style="padding:${compact ? '5px 0' : '7px 0'};font-size:${compact ? '13px' : '14px'};line-height:1.4;color:#475569;">${escapeHtml(row.label)}</td><td class="mail-entry-value" style="padding:${compact ? '5px 0' : '7px 0'};font-size:${compact ? '13px' : '14px'};line-height:1.4;color:#0F1729;font-weight:600;text-align:right;">${escapeHtml(row.value)}</td></tr>`
+        `<tr><td class="mail-entry-label" style="padding:${compact ? '5px 0' : '7px 0'};font-size:${compact ? '13px' : '14px'};line-height:1.4;color:#475569;vertical-align:${row.multiline ? 'top' : 'middle'};">${escapeHtml(row.label)}</td><td class="mail-entry-value" style="padding:${compact ? '5px 0' : '7px 0'};font-size:${compact ? '13px' : '14px'};line-height:1.4;color:#0F1729;font-weight:600;text-align:${row.multiline ? 'left' : 'right'};">${escapeHtml(row.value).replace(/\n/g, '<br />')}</td></tr>`
     )
     .join('');
 
@@ -629,14 +690,16 @@ const buildHtmlDocument = (input: {
     : templatePresentation.heroSubtitle;
   const preheaderText = isPresentValue(input.data.preheader) ? toStringValue(input.data.preheader) : '';
   const heroImageUrl = normalizeHttpsUrl(input.data.heroImageUrl);
-  const brandName = ensureClubSuffix((process.env.MAIL_BRAND_NAME ?? 'MSC Oberlausitzer Dreiländereck').trim());
+  const brandName = ensureClubSuffix(
+    (isPresentValue(input.data.brandName) ? toStringValue(input.data.brandName) : 'MSC Oberlausitzer Dreiländereck e.V.').trim()
+  );
 
   const eventDateText = isPresentValue(input.data.eventDateText)
     ? toStringValue(input.data.eventDateText)
-    : (process.env.MAIL_EVENT_DATE_TEXT ?? '');
+    : '';
   const contactEmail = isPresentValue(input.data.contactEmail)
     ? toStringValue(input.data.contactEmail)
-    : (process.env.MAIL_CONTACT_EMAIL ?? '');
+    : '';
   const baseUrl =
     normalizeBaseUrl(input.data.nennungstoolUrl) ??
     normalizeBaseUrl(input.data.url) ??
@@ -771,22 +834,128 @@ export type RenderMailContractResult = {
   warnings: string[];
 };
 
+const hasMultipleEntries = (data: TemplateData): boolean => {
+  const entryCount = Number(data.entryCount);
+  if (Number.isFinite(entryCount) && entryCount > 1) {
+    return true;
+  }
+  return parseMultiline(data.entrySummaries).length > 1;
+};
+
+const localizeMultiEntryCopy = (
+  templateKey: string,
+  locale: SupportedMailLocale,
+  bodyTextTemplate: string,
+  preheader: string | undefined
+): { bodyTextTemplate: string; preheader?: string } => {
+  if (locale === 'de') {
+    if (templateKey === 'registration_received') {
+      return {
+        bodyTextTemplate: bodyTextTemplate
+          .replace(
+            'Folgende Nennung ist für das {{eventName}} bei uns eingegangen.',
+            'Folgende Nennungen sind für das {{eventName}} bei uns eingegangen.'
+          )
+          .replace('deine Nennung für das {{eventName}} ist bei uns eingegangen.', 'deine Nennungen für das {{eventName}} sind bei uns eingegangen.')
+          .replace('deine Nennung', 'deine Nennungen'),
+        preheader: preheader?.replace('deine Nennung', 'deine Nennungen')
+      };
+    }
+    if (templateKey === 'email_confirmation_reminder') {
+      return {
+        bodyTextTemplate: bodyTextTemplate
+          .replace(
+            'Folgende Nennung für das {{eventName}} ist noch nicht bestätigt.',
+            'Folgende Nennungen für das {{eventName}} sind noch nicht bestätigt.'
+          )
+          .replace('deine Nennung für das {{eventName}} ist noch nicht bestätigt.', 'deine Nennungen für das {{eventName}} sind noch nicht bestätigt.')
+          .replace(/deine Nennung/g, 'deine Nennungen'),
+        preheader: preheader?.replace('deine Nennung', 'deine Nennungen')
+      };
+    }
+  }
+  if (locale === 'en') {
+    if (templateKey !== 'registration_received' && templateKey !== 'email_confirmation_reminder') {
+      return { bodyTextTemplate, preheader };
+    }
+    return {
+      bodyTextTemplate: bodyTextTemplate.replace(/\byour entry\b/g, 'your entries'),
+      preheader
+    };
+  }
+  if (locale === 'cs') {
+    if (templateKey !== 'registration_received' && templateKey !== 'email_confirmation_reminder') {
+      return { bodyTextTemplate, preheader };
+    }
+    return {
+      bodyTextTemplate: bodyTextTemplate
+        .replace(/vaši přihlášku/g, 'vaše přihlášky')
+        .replace(/vaše přihláška/g, 'vaše přihlášky'),
+      preheader
+    };
+  }
+  if (locale === 'pl') {
+    if (templateKey !== 'registration_received' && templateKey !== 'email_confirmation_reminder') {
+      return { bodyTextTemplate, preheader };
+    }
+    return {
+      bodyTextTemplate: bodyTextTemplate
+        .replace(/Twoje zgłoszenie/g, 'Twoje zgłoszenia')
+        .replace(/Twojego zgłoszenia/g, 'Twoich zgłoszeń'),
+      preheader
+    };
+  }
+  return { bodyTextTemplate, preheader };
+};
+
 export const renderMailContract = (input: RenderMailContractInput): RenderMailContractResult => {
   const warnings: string[] = [];
   const eventName = isPresentValue(input.data.eventName) ? toStringValue(input.data.eventName).trim() : null;
   const locale = resolveMailLocale(input.data);
   const chromeCopy = getMailChromeCopy(locale);
+  const localizedProcessCopy =
+    input.templateKey === 'registration_received' ||
+    input.templateKey === 'email_confirmation_reminder' ||
+    input.templateKey === 'accepted_open_payment' ||
+    input.templateKey === 'accepted_paid_completed' ||
+    input.templateKey === 'payment_reminder' ||
+    input.templateKey === 'rejected'
+      ? getProcessTemplateCopy(input.templateKey, locale)
+      : null;
+  const multipleEntries = hasMultipleEntries(input.data);
+  const adjustedProcessCopy =
+    localizedProcessCopy && multipleEntries
+      ? (() => {
+          const localized = localizeMultiEntryCopy(
+            input.templateKey,
+            locale,
+            localizedProcessCopy.bodyTextTemplate,
+            localizedProcessCopy.preheader
+          );
+          return {
+            ...localizedProcessCopy,
+            bodyTextTemplate: localized.bodyTextTemplate,
+            preheader: localized.preheader ?? localizedProcessCopy.preheader
+          };
+        })()
+      : localizedProcessCopy;
   const templateData: TemplateData = {
     ...input.data,
     locale,
     fallbackGreeting: isPresentValue(input.data.fallbackGreeting) ? input.data.fallbackGreeting : chromeCopy.fallbackGreeting,
+    headerTitle:
+      isPresentValue(input.data.headerTitle) ? input.data.headerTitle : adjustedProcessCopy?.headerTitle ?? input.data.headerTitle,
+    preheader:
+      isPresentValue(input.data.preheader) ? input.data.preheader : adjustedProcessCopy?.preheader ?? input.data.preheader,
     ...(eventName ? { eventNameWithArticle: withDefaultEventArticle(eventName) } : {})
   };
   const required = REQUIRED_PLACEHOLDERS_BY_TEMPLATE[input.templateKey] ?? [];
   const missing = required.filter((name) => !isPresentValue(templateData[name]));
 
-  const subject = renderString(input.subjectTemplate, templateData, false);
-  const bodyText = renderString(input.bodyTextTemplate, templateData, false);
+  const subjectTemplate = adjustedProcessCopy?.subjectTemplate ?? input.subjectTemplate;
+  const bodyTextTemplate = adjustedProcessCopy?.bodyTextTemplate ?? input.bodyTextTemplate;
+  const subject = renderString(subjectTemplate, templateData, false);
+  const bodyText = renderString(bodyTextTemplate, templateData, false);
   const htmlTemplateRaw = (input.bodyHtmlTemplate ?? '').trim();
   const htmlTemplateNormalized = normalizeHtmlTemplateSource(htmlTemplateRaw);
   const htmlSource = CANONICAL_LAYOUT_ONLY_TEMPLATES.has(input.templateKey) ? '' : htmlTemplateNormalized;

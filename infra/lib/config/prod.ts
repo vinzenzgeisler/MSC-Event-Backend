@@ -7,7 +7,7 @@ export const prodConfig: StageConfig = {
   cognitoLogoutUrls: [],
   cognitoDomainPrefix: 'dreiecksrennen-prod-auth',
   sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
-  publicVerifyBaseUrl: '',
+  publicVerifyBaseUrl: 'https://event.msc-oberlausitzer-dreilaendereck.de/anmeldung/verify',
   assetsCorsAllowedOrigins: [],
   devCleanupEnabled: false,
   env: {

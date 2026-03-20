@@ -5,12 +5,12 @@ export type DevProfile = 'idle' | 'test';
 const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrationRunner' | 'apiInVpc' | 'dbConnectivityMode' | 'dbUseIamAuth' | 'dbPublicAccess'> = {
   stage: 'dev',
   prefix: 'dreiecksrennen-dev',
-  cognitoCallbackUrls: ['http://localhost:5173/admin/login', 'https://msc-oberlausitzer-dreilaendereck.de/admin/login'],
-  cognitoLogoutUrls: ['http://localhost:5173/admin/login', 'https://msc-oberlausitzer-dreilaendereck.de/admin/login'],
+  cognitoCallbackUrls: ['http://localhost:5173/admin/login', 'https://event.msc-oberlausitzer-dreilaendereck.de/admin/login'],
+  cognitoLogoutUrls: ['http://localhost:5173/admin/login', 'https://event.msc-oberlausitzer-dreilaendereck.de/admin/login'],
   cognitoDomainPrefix: 'dreiecksrennen-dev-auth',
   sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
-  publicVerifyBaseUrl: 'https://msc-oberlausitzer-dreilaendereck.de/anmeldung/verify',
-  assetsCorsAllowedOrigins: ['https://msc-oberlausitzer-dreilaendereck.de', 'http://localhost:5173', 'http://localhost:4173'],
+  publicVerifyBaseUrl: 'https://event.msc-oberlausitzer-dreilaendereck.de/anmeldung/verify',
+  assetsCorsAllowedOrigins: ['https://event.msc-oberlausitzer-dreilaendereck.de', 'http://localhost:5173', 'http://localhost:4173'],
   devCleanupEnabled: false,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,

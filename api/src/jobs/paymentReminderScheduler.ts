@@ -1,71 +1,57 @@
-import { and, eq } from 'drizzle-orm';
-import { createHash } from 'node:crypto';
+import { and, eq, sql } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { emailOutbox, invoice, person } from '../db/schema';
-import { writeAuditLog } from '../audit/log';
-import { getTemplateVersion } from '../mail/templateStore';
+import { entry, invoice } from '../db/schema';
+import { DuplicateRequestError, queuePaymentReminders } from '../routes/adminMail';
 
-const getTemplateId = () => {
-  const templateId = process.env.PAYMENT_REMINDER_TEMPLATE_ID;
-  if (!templateId) {
-    throw new Error('PAYMENT_REMINDER_TEMPLATE_ID is not set');
-  }
-  return templateId;
+type ReminderCandidateRow = {
+  eventId: string;
+  entryId: string;
 };
 
-const getSubject = () => {
-  const subject = process.env.PAYMENT_REMINDER_SUBJECT;
-  if (!subject) {
-    throw new Error('PAYMENT_REMINDER_SUBJECT is not set');
-  }
-  return subject;
+const listReminderCandidates = async (): Promise<ReminderCandidateRow[]> => {
+  const db = await getDb();
+  return db
+    .select({
+      eventId: entry.eventId,
+      entryId: entry.id
+    })
+    .from(entry)
+    .innerJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+    .where(
+      and(
+        sql`${entry.deletedAt} is null`,
+        eq(entry.acceptanceStatus, 'accepted'),
+        eq(invoice.paymentStatus, 'due')
+      )
+    );
 };
 
 export const handler = async () => {
-  const db = await getDb();
-  const templateId = getTemplateId();
-  const subject = getSubject();
-  const template = await getTemplateVersion(templateId);
-  if (!template) {
-    throw new Error(`Template not found: ${templateId}`);
-  }
+  const rows = await listReminderCandidates();
+  let queued = 0;
+  let skipped = 0;
 
-  const rows = await db
-    .select({ email: person.email, eventId: invoice.eventId })
-    .from(invoice)
-    .innerJoin(person, eq(invoice.driverPersonId, person.id))
-    .where(and(eq(invoice.paymentStatus, 'due')));
-
-  const targets = rows.filter((row) => row.email);
-  if (targets.length === 0) {
-    return { queued: 0 };
-  }
-
-  await db.insert(emailOutbox).values(
-    targets.map((target) => ({
-      eventId: target.eventId,
-      toEmail: target.email as string,
-      subject,
-      templateId,
-      templateVersion: template.version,
-      templateData: null,
-      status: 'queued',
-      sendAfter: new Date(),
-      idempotencyKey: createHash('sha256')
-        .update(JSON.stringify({ source: 'scheduler', eventId: target.eventId, email: target.email, templateId }))
-        .digest('hex')
-    }))
-  );
-
-  await writeAuditLog(db as never, {
-    eventId: null,
-    actorUserId: 'system',
-    action: 'payment_reminders_queued',
-    entityType: 'email_outbox_batch',
-    payload: {
-      queued: targets.length
+  for (const row of rows) {
+    try {
+      const result = await queuePaymentReminders(
+        {
+          eventId: row.eventId,
+          entryId: row.entryId,
+          allowDuplicate: false,
+          templateId: 'payment_reminder'
+        },
+        null
+      );
+      queued += result.queued;
+      skipped += result.skipped;
+    } catch (error) {
+      if (error instanceof DuplicateRequestError) {
+        skipped += 1;
+        continue;
+      }
+      throw error;
     }
-  });
+  }
 
-  return { queued: targets.length };
+  return { queued, skipped };
 };

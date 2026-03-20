@@ -43,6 +43,14 @@ const resolveNationalityLocale = (value: unknown): SupportedMailLocale | null =>
   return NATIONALITY_TO_LOCALE[normalized] ?? null;
 };
 
+const hasUnmappedNationalityCandidate = (value: unknown): boolean => {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const normalized = normalizeLocaleCandidate(value);
+  return normalized.length > 0 && !(normalized in NATIONALITY_TO_LOCALE);
+};
+
 export const resolveMailLocale = (data: Record<string, unknown>, defaultLocale: SupportedMailLocale = 'de'): SupportedMailLocale => {
   const explicit =
     normalizeMailLocale(data.locale) ??
@@ -57,6 +65,13 @@ export const resolveMailLocale = (data: Record<string, unknown>, defaultLocale: 
     resolveNationalityLocale(data.country);
   if (nationality) {
     return nationality;
+  }
+  if (
+    hasUnmappedNationalityCandidate(data.nationality) ||
+    hasUnmappedNationalityCandidate(data.countryCode) ||
+    hasUnmappedNationalityCandidate(data.country)
+  ) {
+    return 'en';
   }
   return defaultLocale;
 };
@@ -173,6 +188,7 @@ type ProcessTemplateKey =
   | 'registration_received'
   | 'email_confirmation_reminder'
   | 'accepted_open_payment'
+  | 'payment_reminder'
   | 'accepted_paid_completed'
   | 'rejected';
 
@@ -184,8 +200,8 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Wir haben deine Nennung erhalten',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'deine Nennung für {{eventName}} ist bei uns eingegangen. Bitte bestätige jetzt deine E-Mail-Adresse über den gelben Button.\n\n' +
-        'Danach prüfen wir deine Unterlagen und melden uns mit den nächsten Schritten zur Veranstaltung.'
+        'deine Nennung für das {{eventName}} ist bei uns eingegangen. Bitte bestätige jetzt deine E-Mail-Adresse über den gelben Button.\n\n' +
+        '{{registrationNextStepText}}'
     },
     email_confirmation_reminder: {
       subjectTemplate: 'Erinnerung: E-Mail bestätigen - {{eventName}}',
@@ -193,7 +209,8 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Bitte bestätige deine E-Mail-Adresse',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'deine Nennung für {{eventName}} ist noch nicht bestätigt. Bitte bestätige deine E-Mail-Adresse jetzt.\n\n' +
+        'deine Nennung für das {{eventName}} ist noch nicht bestätigt. Bitte bestätige deine E-Mail-Adresse jetzt.\n\n' +
+        '{{registrationNextStepText}}\n\n' +
         'Ohne Bestätigung können wir deine Nennung nicht abschließend bearbeiten.'
     },
     accepted_open_payment: {
@@ -202,8 +219,11 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Deine Nennung ist zugelassen',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'deine Nennung für {{eventName}} wurde zugelassen. Aktuell ist noch ein Betrag offen: {{amountOpen}}.\n\n' +
-        'Die Nennbestätigung findest du im Anhang als PDF. Danach ist dein Teilnahmeprozess vollständig vorbereitet.'
+        'Folgende Nennung wurde für das {{eventName}} zugelassen:\n{{acceptedEntrySummaryText}}\n\n' +
+        '{{entryScopeHint}}\n\n' +
+        '{{paymentInstructionText}}\n\n' +
+        '{{combinedTransferHint}}\n\n' +
+        'Die angehängte Nennbestätigung enthält alle weiteren Angaben zur Zulassung.'
     },
     accepted_paid_completed: {
       subjectTemplate: 'Nennung vollständig - {{eventName}}',
@@ -211,8 +231,17 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Deine Nennung ist vollständig abgeschlossen',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'vielen Dank, deine Zahlung ist eingegangen und deine Nennung für {{eventName}} ist vollständig abgeschlossen.\n\n' +
-        'Wir freuen uns auf deine Teilnahme an der Veranstaltung.'
+        'vielen Dank, deine Zahlung ist vollständig eingegangen und deine Nennung für das {{eventName}} ist jetzt komplett abgeschlossen.\n\n' +
+        'Damit ist alles erledigt. Du kannst dich jetzt auf die Veranstaltung freuen.'
+    },
+    payment_reminder: {
+      subjectTemplate: 'Zahlungserinnerung - {{eventName}}',
+      headerTitle: 'Zahlungserinnerung',
+      preheader: 'Bitte schließe deine Zahlung ab',
+      bodyTextTemplate:
+        '{{fallbackGreeting}} {{driverName}},\n\n' +
+        'für deine zugelassene Nennung zum {{eventName}} ist aktuell noch ein Betrag offen.\n\n' +
+        '{{paymentInstructionText}}'
     },
     rejected: {
       subjectTemplate: 'Status deiner Nennung - {{eventName}}',
@@ -220,7 +249,8 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Aktueller Stand zu deiner Nennung',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'leider können wir deine Nennung für {{eventName}} aktuell nicht berücksichtigen.\n\n' +
+        'Folgende Nennung können wir für das {{eventName}} aktuell leider nicht berücksichtigen:\n{{rejectedEntrySummaryText}}\n\n' +
+        '{{rejectionScopeHint}}\n\n' +
         'Wenn du Rückfragen hast, antworte einfach auf diese E-Mail.'
     }
   },
@@ -231,8 +261,8 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'We have received your entry',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'we have received your entry for {{eventName}}. Please confirm your email address using the yellow button.\n\n' +
-        'After that, we will review your documents and send you the next steps for the event.'
+        'we have received your entry for the {{eventName}}. Please confirm your email address using the yellow button.\n\n' +
+        '{{registrationNextStepText}}'
     },
     email_confirmation_reminder: {
       subjectTemplate: 'Reminder: confirm your email - {{eventName}}',
@@ -240,7 +270,8 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Please confirm your email address',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'your entry for {{eventName}} is still unconfirmed. Please confirm your email address now.\n\n' +
+        'your entry for the {{eventName}} is still unconfirmed. Please confirm your email address now.\n\n' +
+        '{{registrationNextStepText}}\n\n' +
         'Without confirmation, we cannot finish processing your entry.'
     },
     accepted_open_payment: {
@@ -249,8 +280,11 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Your entry has been accepted',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'your entry for {{eventName}} has been accepted. There is still an open amount: {{amountOpen}}.\n\n' +
-        'Please find your confirmation document attached as PDF. Once completed, your participation process is fully prepared.'
+        'The following entry has been accepted for the {{eventName}}:\n{{acceptedEntrySummaryText}}\n\n' +
+        '{{entryScopeHint}}\n\n' +
+        '{{paymentInstructionText}}\n\n' +
+        '{{combinedTransferHint}}\n\n' +
+        'The attached PDF entry confirmation contains all further details regarding your acceptance.'
     },
     accepted_paid_completed: {
       subjectTemplate: 'Registration completed - {{eventName}}',
@@ -258,8 +292,17 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Your entry is fully completed',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'thank you, we have received your payment and your entry for {{eventName}} is fully completed.\n\n' +
-        'We are looking forward to your participation in the event.'
+        'thank you, we have received your payment in full and your entry for the {{eventName}} is now fully completed.\n\n' +
+        'Everything is settled. You can now look forward to the event.'
+    },
+    payment_reminder: {
+      subjectTemplate: 'Payment reminder - {{eventName}}',
+      headerTitle: 'Payment reminder',
+      preheader: 'Please complete your payment',
+      bodyTextTemplate:
+        '{{fallbackGreeting}} {{driverName}},\n\n' +
+        'there is still an outstanding amount for your accepted entry to the {{eventName}}.\n\n' +
+        '{{paymentInstructionText}}'
     },
     rejected: {
       subjectTemplate: 'Status update for your registration - {{eventName}}',
@@ -267,7 +310,8 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Current status of your entry',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'unfortunately we cannot accept your entry for {{eventName}} at this time.\n\n' +
+        'Unfortunately, we cannot accept the following entry for the {{eventName}} at this time:\n{{rejectedEntrySummaryText}}\n\n' +
+        '{{rejectionScopeHint}}\n\n' +
         'If you have any questions, simply reply to this email.'
     }
   },
@@ -278,8 +322,8 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Vaši přihlášku jsme obdrželi',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'obdrželi jsme vaši přihlášku na {{eventName}}. Potvrďte prosím svou e-mailovou adresu pomocí tlačítka.\n\n' +
-        'Poté zkontrolujeme vaše podklady a pošleme další kroky k akci.'
+        'obdrželi jsme vaši přihlášku pro {{eventName}}. Potvrďte prosím svou e-mailovou adresu pomocí tlačítka.\n\n' +
+        '{{registrationNextStepText}}'
     },
     email_confirmation_reminder: {
       subjectTemplate: 'Připomínka: potvrďte e-mail - {{eventName}}',
@@ -287,7 +331,8 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Potvrďte prosím svůj e-mail',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'vaše přihláška na {{eventName}} ještě není potvrzena. Potvrďte prosím svůj e-mail nyní.\n\n' +
+        'vaše přihláška pro {{eventName}} ještě není potvrzena. Potvrďte prosím svůj e-mail nyní.\n\n' +
+        '{{registrationNextStepText}}\n\n' +
         'Bez potvrzení nelze přihlášku finálně zpracovat.'
     },
     accepted_open_payment: {
@@ -296,8 +341,11 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Vaše přihláška byla přijata',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'vaše přihláška na {{eventName}} byla přijata. Stále zbývá uhradit částku: {{amountOpen}}.\n\n' +
-        'V příloze najdete potvrzení přihlášky ve formátu PDF. Poté bude vaše účast kompletně připravena.'
+        'Pro {{eventName}} byla přijata tato přihláška:\n{{acceptedEntrySummaryText}}\n\n' +
+        '{{entryScopeHint}}\n\n' +
+        '{{paymentInstructionText}}\n\n' +
+        '{{combinedTransferHint}}\n\n' +
+        'Přiložené PDF potvrzení přihlášky obsahuje všechny další podrobnosti o přijetí.'
     },
     accepted_paid_completed: {
       subjectTemplate: 'Přihláška dokončena - {{eventName}}',
@@ -305,8 +353,17 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Vaše přihláška je kompletní',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'děkujeme, platba byla přijata a vaše přihláška na {{eventName}} je kompletní.\n\n' +
-        'Těšíme se na vaši účast na akci.'
+        'děkujeme, vaše platba byla plně přijata a vaše přihláška pro {{eventName}} je nyní kompletní.\n\n' +
+        'Tím je vše vyřízeno. Na akci se nyní můžete těšit.'
+    },
+    payment_reminder: {
+      subjectTemplate: 'Připomínka platby - {{eventName}}',
+      headerTitle: 'Připomínka platby',
+      preheader: 'Prosíme o dokončení platby',
+      bodyTextTemplate:
+        '{{fallbackGreeting}} {{driverName}},\n\n' +
+        'u vaší přijaté přihlášky pro {{eventName}} je stále evidována otevřená částka.\n\n' +
+        '{{paymentInstructionText}}'
     },
     rejected: {
       subjectTemplate: 'Stav vaší přihlášky - {{eventName}}',
@@ -314,7 +371,8 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Aktuální stav vaší přihlášky',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'bohužel nyní nemůžeme vaši přihlášku na {{eventName}} přijmout.\n\n' +
+        'Bohužel nyní nemůžeme pro {{eventName}} přijmout tuto přihlášku:\n{{rejectedEntrySummaryText}}\n\n' +
+        '{{rejectionScopeHint}}\n\n' +
         'V případě dotazů stačí odpovědět na tento e-mail.'
     }
   },
@@ -326,7 +384,7 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
         'otrzymaliśmy Twoje zgłoszenie na {{eventName}}. Potwierdź proszę adres e-mail przyciskiem.\n\n' +
-        'Następnie zweryfikujemy Twoje dokumenty i przekażemy kolejne kroki dotyczące wydarzenia.'
+        '{{registrationNextStepText}}'
     },
     email_confirmation_reminder: {
       subjectTemplate: 'Przypomnienie: potwierdź e-mail - {{eventName}}',
@@ -335,6 +393,7 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
         'Twoje zgłoszenie na {{eventName}} nadal nie jest potwierdzone. Potwierdź teraz adres e-mail.\n\n' +
+        '{{registrationNextStepText}}\n\n' +
         'Bez potwierdzenia nie możemy zakończyć procesu zgłoszenia.'
     },
     accepted_open_payment: {
@@ -343,8 +402,11 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Twoje zgłoszenie zostało zaakceptowane',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'Twoje zgłoszenie na {{eventName}} zostało zaakceptowane. Pozostała kwota do zapłaty: {{amountOpen}}.\n\n' +
-        'W załączniku znajdziesz potwierdzenie zgłoszenia w PDF. Po opłaceniu proces uczestnictwa będzie kompletny.'
+        'Na {{eventName}} zaakceptowano następujące zgłoszenie:\n{{acceptedEntrySummaryText}}\n\n' +
+        '{{entryScopeHint}}\n\n' +
+        '{{paymentInstructionText}}\n\n' +
+        '{{combinedTransferHint}}\n\n' +
+        'Załączone potwierdzenie PDF zawiera wszystkie dalsze informacje dotyczące akceptacji.'
     },
     accepted_paid_completed: {
       subjectTemplate: 'Zgłoszenie zakończone - {{eventName}}',
@@ -352,8 +414,17 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Twoje zgłoszenie jest kompletne',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'dziękujemy, płatność została zaksięgowana, a Twoje zgłoszenie na {{eventName}} jest zakończone.\n\n' +
-        'Cieszymy się na Twój udział w wydarzeniu.'
+        'dziękujemy, Twoja płatność została w pełni zaksięgowana, a Twoje zgłoszenie na {{eventName}} jest teraz całkowicie zakończone.\n\n' +
+        'Wszystko jest już załatwione. Możesz teraz cieszyć się oczekiwaniem na wydarzenie.'
+    },
+    payment_reminder: {
+      subjectTemplate: 'Przypomnienie o płatności - {{eventName}}',
+      headerTitle: 'Przypomnienie o płatności',
+      preheader: 'Prosimy o dokończenie płatności',
+      bodyTextTemplate:
+        '{{fallbackGreeting}} {{driverName}},\n\n' +
+        'dla Twojego zaakceptowanego zgłoszenia na {{eventName}} nadal widnieje otwarta kwota.\n\n' +
+        '{{paymentInstructionText}}'
     },
     rejected: {
       subjectTemplate: 'Status Twojego zgłoszenia - {{eventName}}',
@@ -361,7 +432,8 @@ const PROCESS_COPY: Record<SupportedMailLocale, Record<ProcessTemplateKey, Proce
       preheader: 'Aktualny status Twojego zgłoszenia',
       bodyTextTemplate:
         '{{fallbackGreeting}} {{driverName}},\n\n' +
-        'niestety obecnie nie możemy przyjąć Twojego zgłoszenia na {{eventName}}.\n\n' +
+        'Niestety obecnie nie możemy przyjąć na {{eventName}} następującego zgłoszenia:\n{{rejectedEntrySummaryText}}\n\n' +
+        '{{rejectionScopeHint}}\n\n' +
         'W razie pytań po prostu odpowiedz na tę wiadomość.'
     }
   }

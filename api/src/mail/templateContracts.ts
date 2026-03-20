@@ -90,6 +90,8 @@ const CAMPAIGN_CTA_FIELDS: ComposerField[] = [
 
 const CAMPAIGN_ALLOWED_PLACEHOLDERS = [
   'eventName',
+  'locale',
+  'preheader',
   'firstName',
   'lastName',
   'driverName',
@@ -108,7 +110,9 @@ const CAMPAIGN_ALLOWED_PLACEHOLDERS = [
   'heroSubtitle',
   'highlights',
   'logoUrl',
-  'vehicleLabel'
+  'vehicleLabel',
+  'headerTitle',
+  'fallbackGreeting'
 ];
 
 const makeCampaignContract = (overrides?: {
@@ -155,9 +159,9 @@ const makeProcessContract = (overrides?: {
     requiredPlaceholders: overrides?.requiredPlaceholders ?? []
   },
   renderOptions: {
-    showBadgeDefault: overrides?.showBadgeDefault ?? true,
-    defaultMailLabel: overrides?.defaultMailLabel ?? 'Prozessmail',
-    includeEntryContextDefault: overrides?.includeEntryContextDefault ?? false
+    showBadgeDefault: overrides?.showBadgeDefault ?? false,
+    defaultMailLabel: overrides?.defaultMailLabel ?? null,
+    includeEntryContextDefault: overrides?.includeEntryContextDefault ?? true
   }
 });
 
@@ -171,9 +175,9 @@ const PROCESS_DEFAULT_CONTRACT: TemplateContract = {
     requiredPlaceholders: []
   },
   renderOptions: {
-    showBadgeDefault: true,
-    defaultMailLabel: 'Prozessmail',
-    includeEntryContextDefault: false
+    showBadgeDefault: false,
+    defaultMailLabel: null,
+    includeEntryContextDefault: true
   }
 };
 
@@ -263,14 +267,25 @@ const CONTRACTS: Record<string, TemplateContract> = {
     ],
     includeEntryContextDefault: true
   }),
-  email_confirmation: makeCampaignContract({
-    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.email_confirmation ?? [],
-    includeCtaFields: false,
-    includeEntryContextDefault: false
+  preselection: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.preselection ?? [],
+    includeEntryContextDefault: true
   }),
   accepted_open_payment: makeProcessContract({
     requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.accepted_open_payment ?? [],
     includeEntryContextDefault: true
+  }),
+  accepted_paid_completed: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.accepted_paid_completed ?? [],
+    includeEntryContextDefault: true
+  }),
+  email_confirmation_reminder: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.email_confirmation_reminder ?? [],
+    includeEntryContextDefault: true
+  }),
+  email_confirmation: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.email_confirmation ?? [],
+    includeEntryContextDefault: false
   }),
   payment_reminder: makeProcessContract({
     requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.payment_reminder ?? [],
@@ -282,13 +297,13 @@ const CONTRACTS: Record<string, TemplateContract> = {
   }),
   registration_received: makeProcessContract({
     requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.registration_received ?? [],
-    includeEntryContextDefault: false,
+    includeEntryContextDefault: true,
     showBadgeDefault: false,
     defaultMailLabel: null
   }),
   codriver_info: makeProcessContract({
     requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.codriver_info ?? [],
-    includeEntryContextDefault: false,
+    includeEntryContextDefault: true,
     showBadgeDefault: false,
     defaultMailLabel: null
   })

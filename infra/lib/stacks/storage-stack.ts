@@ -1,6 +1,8 @@
 import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
+import * as path from 'path';
 import { StageConfig } from '../config/types';
 
 interface StorageStackProps extends StackProps {
@@ -39,6 +41,30 @@ export class StorageStack extends Stack {
             ]
           }
         : {})
+    });
+
+    new s3deploy.BucketDeployment(this, 'MailLogoDeployment', {
+      destinationBucket: this.assetsBucket,
+      destinationKeyPrefix: 'public/mail',
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../../assets/mail-logo'))],
+      prune: false,
+      retainOnDelete: true
+    });
+
+    new s3deploy.BucketDeployment(this, 'MailAttachmentsDeployment', {
+      destinationBucket: this.assetsBucket,
+      destinationKeyPrefix: 'public/mail/attachments',
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../../assets/mail-attachments'))],
+      prune: false,
+      retainOnDelete: true
+    });
+
+    new s3deploy.BucketDeployment(this, 'MailFontsDeployment', {
+      destinationBucket: this.assetsBucket,
+      destinationKeyPrefix: 'public/mail/fonts',
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../../assets/mail-fonts'))],
+      prune: false,
+      retainOnDelete: true
     });
 
     this.documentsBucket = new s3.Bucket(this, 'DocumentsBucket', {

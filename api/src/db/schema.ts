@@ -13,6 +13,7 @@ import {
   uniqueIndex,
   uuid
 } from 'drizzle-orm/pg-core';
+import type { EntryConfirmationConfig } from '../domain/entryConfirmationConfig';
 
 export const event = pgTable(
   'event',
@@ -27,6 +28,7 @@ export const event = pgTable(
     registrationCloseAt: timestamp('registration_close_at', { withTimezone: true }),
     contactEmail: text('contact_email'),
     websiteUrl: text('website_url'),
+    entryConfirmationConfig: jsonb('entry_confirmation_config').$type<EntryConfirmationConfig>().notNull().default(sql`'{}'::jsonb`),
     openedAt: timestamp('opened_at', { withTimezone: true }),
     closedAt: timestamp('closed_at', { withTimezone: true }),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
@@ -38,6 +40,20 @@ export const event = pgTable(
     singleCurrentEvent: uniqueIndex('event_single_current_unique')
       .on(table.isCurrent)
       .where(sql`${table.isCurrent} = true`)
+  })
+);
+
+export const appConfig = pgTable(
+  'app_config',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    configKey: text('config_key').notNull(),
+    payload: jsonb('payload').notNull().default(sql`'{}'::jsonb`),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: text('updated_by')
+  },
+  (table) => ({
+    configKeyUnique: uniqueIndex('app_config_key_unique').on(table.configKey)
   })
 );
 
@@ -167,6 +183,7 @@ export const entry = pgTable(
     consentVersion: text('consent_version'),
     consentCapturedAt: timestamp('consent_captured_at', { withTimezone: true }),
     entryFeeCents: integer('entry_fee_cents').notNull().default(0),
+    orgaCode: text('orga_code'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
@@ -194,7 +211,8 @@ export const entry = pgTable(
       .where(sql`${table.startNumberNorm} is not null and ${table.deletedAt} is null`),
     backupOfEntryIndex: index('entry_backup_of_entry_idx').on(table.backupOfEntryId),
     backupVehicleIndex: index('entry_backup_vehicle_idx').on(table.backupVehicleId),
-    registrationGroupIndex: index('entry_registration_group_idx').on(table.registrationGroupId)
+    registrationGroupIndex: index('entry_registration_group_idx').on(table.registrationGroupId),
+    orgaCodeIndex: index('entry_orga_code_idx').on(table.orgaCode)
   })
 );
 

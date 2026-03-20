@@ -19,8 +19,10 @@ import {
 } from '../db/schema';
 import { getPresignedAssetsUploadUrl, doesAssetObjectExist } from '../docs/storage';
 import { normalizeStartNumber } from '../domain/startNumber';
+import { buildOrgaCode } from '../domain/orgaCode';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { DuplicateRequestError, queueLifecycleMail, queueMail } from './adminMail';
+import { recalculateInvoices } from './adminFinance';
 
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const nonEmptySchema = z.string().trim().min(1);
@@ -198,9 +200,7 @@ const vehicleInputSchema = z
       .optional(),
     displacementCcm: z
       .preprocess(parseNumericDigits, z.number().int().min(10).max(99999)),
-    engineType: nonEmptySchema,
     cylinders: z.preprocess(parseCylinders, z.number().int().min(1).max(99)),
-    brakes: nonEmptySchema,
     vehicleHistory: nonEmptySchema,
     ownerName: nonEmptySchema.optional(),
     startNumberRaw: z.string().regex(/^[a-zA-Z0-9]{1,6}$/).optional(),
@@ -449,7 +449,8 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         return {
           replay: true as const,
           response: parsedReplay.data,
-          eventName: null as string | null
+          eventName: null as string | null,
+          driverPersonId: null as string | null
         };
       }
 
@@ -531,7 +532,8 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       const eventRows = await tx
         .select({
           id: event.id,
-          name: event.name
+          name: event.name,
+          entryConfirmationConfig: event.entryConfirmationConfig
         })
         .from(event)
         .where(eq(event.id, input.eventId))
@@ -633,9 +635,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
               model: vehicleInput.model,
               year: vehicleInput.year ?? null,
               displacementCcm: vehicleInput.displacementCcm,
-              engineType: vehicleInput.engineType,
               cylinders: vehicleInput.cylinders,
-              brakes: vehicleInput.brakes,
               ownerName: vehicleInput.ownerName ?? null,
               vehicleHistory: vehicleInput.vehicleHistory,
               startNumberRaw: resolvedStartNumberRaw,
@@ -681,6 +681,12 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
           backupOfEntryId = backup.id;
         }
 
+        const orgaCode = buildOrgaCode({
+          eventId: input.eventId,
+          driverPersonId: driver.id,
+          prefix: currentEvent.entryConfirmationConfig?.orgaCodePrefix ?? null
+        });
+
         const [createdEntry] = await tx
           .insert(entry)
           .values({
@@ -707,6 +713,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
             consentMediaAccepted: input.consent.mediaAccepted,
             consentVersion: input.consent.consentVersion,
             consentCapturedAt: new Date(input.consent.consentCapturedAt),
+            orgaCode,
             createdAt: now,
             updatedAt: now
           })
@@ -791,7 +798,8 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       return {
         replay: false as const,
         response,
-        eventName: currentEvent.name
+        eventName: currentEvent.name,
+        driverPersonId: driver.id
       };
     });
 
@@ -804,6 +812,16 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         // Do not fail replay responses because codriver info mail is optional.
       }
       return created.response;
+    }
+
+    if (created.driverPersonId) {
+      await recalculateInvoices(
+        input.eventId,
+        {
+          driverPersonId: created.driverPersonId
+        },
+        null
+      );
     }
 
     const primaryEntryId = created.response.entryIds[0];

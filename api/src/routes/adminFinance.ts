@@ -50,6 +50,7 @@ type EntryForPricing = {
   eventId: string;
   driverPersonId: string;
   classId: string;
+  acceptanceStatus: string;
   createdAt: Date;
 };
 
@@ -61,13 +62,28 @@ const loadPricingInputs = async (eventId: string, driverPersonId?: string): Prom
       eventId: entry.eventId,
       driverPersonId: entry.driverPersonId,
       classId: entry.classId,
+      acceptanceStatus: entry.acceptanceStatus,
       createdAt: entry.createdAt
     })
     .from(entry)
-    .where(driverPersonId ? and(eq(entry.eventId, eventId), eq(entry.driverPersonId, driverPersonId)) : eq(entry.eventId, eventId))
+    .where(
+      driverPersonId
+        ? and(eq(entry.eventId, eventId), eq(entry.driverPersonId, driverPersonId), sql`${entry.deletedAt} is null`)
+        : and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`)
+    )
     .orderBy(asc(entry.driverPersonId), asc(entry.createdAt));
   return query;
 };
+
+const buildEmptySnapshot = (earlyDeadline: Date, lateFeeCents: number, secondVehicleDiscountCents: number) => ({
+  ruleVersion: 1,
+  generatedAt: new Date().toISOString(),
+  earlyDeadline: earlyDeadline.toISOString(),
+  lateFeeCents,
+  secondVehicleDiscountCents,
+  lines: [],
+  totalCents: 0
+});
 
 export const putPricingRules = async (eventId: string, input: PricingRulesInput, actorUserId: string | null) => {
   await assertEventStatusAllowed(eventId, ['draft', 'open', 'closed']);
@@ -167,7 +183,7 @@ export const getPricingRules = async (eventId: string) => {
   };
 };
 
-const buildPricingSnapshot = (
+export const buildPricingSnapshot = (
   rows: EntryForPricing[],
   classFeeByClassId: Map<string, number>,
   earlyDeadline: Date,
@@ -182,7 +198,8 @@ const buildPricingSnapshot = (
   }
 
   return Array.from(byDriver.entries()).map(([driverPersonId, entries]) => {
-    const lines = entries.map((current, idx) => {
+    const chargeableEntries = entries.filter((current) => current.acceptanceStatus === 'accepted');
+    const lines = chargeableEntries.map((current, idx) => {
       const baseFee = classFeeByClassId.get(current.classId) ?? 0;
       const lateFee = current.createdAt > earlyDeadline ? lateFeeCents : 0;
       const secondVehicleDiscount = idx >= 1 ? secondVehicleDiscountCents : 0;
@@ -203,11 +220,7 @@ const buildPricingSnapshot = (
       driverPersonId,
       totalCents,
       snapshot: {
-        ruleVersion: 1,
-        generatedAt: new Date().toISOString(),
-        earlyDeadline: earlyDeadline.toISOString(),
-        lateFeeCents,
-        secondVehicleDiscountCents,
+        ...buildEmptySnapshot(earlyDeadline, lateFeeCents, secondVehicleDiscountCents),
         lines,
         totalCents
       }
@@ -254,9 +267,19 @@ export const recalculateInvoices = async (eventId: string, input: RecalcInput, a
     rules.lateFeeCents,
     rules.secondVehicleDiscountCents
   );
+  const normalizedComputed =
+    driverPersonId && computed.length === 0
+      ? [
+          {
+            driverPersonId,
+            totalCents: 0,
+            snapshot: buildEmptySnapshot(rules.earlyDeadline, rules.lateFeeCents, rules.secondVehicleDiscountCents)
+          }
+        ]
+      : computed;
 
   const now = new Date();
-  for (const row of computed) {
+  for (const row of normalizedComputed) {
     await db
       .insert(invoice)
       .values({
@@ -285,12 +308,12 @@ export const recalculateInvoices = async (eventId: string, input: RecalcInput, a
     action: 'invoices_recalculated',
     entityType: 'invoice_batch',
     payload: {
-      recalculated: computed.length,
+      recalculated: normalizedComputed.length,
       scopedDriverPersonId: driverPersonId ?? null
     }
   });
 
-  return { recalculated: computed.length };
+  return { recalculated: normalizedComputed.length };
 };
 
 export const listInvoices = async (filters: ListInvoiceFilters) => {

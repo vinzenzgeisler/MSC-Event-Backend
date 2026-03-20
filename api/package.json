@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/handler.js",
-    "test": "npm run build && node tests/lifecycle-mail.test.js && node tests/mail-rendering-contract.test.js && node tests/entry-confirmation-pdf.test.js && node tests/admin-iam.test.js",
+    "test": "npm run build && node tests/lifecycle-mail.test.js && node tests/mail-rendering-contract.test.js && node tests/pricing-snapshot.test.js && node tests/orga-code.test.js && node tests/payment-reference.test.js && node tests/payment-reminder-schedule.test.js && node tests/entry-confirmation-pdf.test.js && node tests/admin-iam.test.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/run-sql-migrations.js",
     "db:migrate:drizzle": "drizzle-kit migrate",
@@ -25,11 +25,13 @@
     "drizzle-orm": "^0.33.0",
     "pdfkit": "^0.15.0",
     "pg": "^8.12.0",
+    "qrcode": "^1.5.4",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/pdfkit": "^0.17.4",
     "@types/pg": "^8.11.6",
+    "@types/qrcode": "^1.5.6",
     "drizzle-kit": "^0.24.0",
     "typescript": "^5.4.5"
   }

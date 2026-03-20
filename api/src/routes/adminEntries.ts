@@ -7,6 +7,7 @@ import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/sto
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
+import { recalculateInvoices } from './adminFinance';
 import { queueLifecycleMail } from './adminMail';
 
 const listEntriesQuerySchema = z.object({
@@ -179,6 +180,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
         ilike(person.firstName, pattern),
         ilike(person.lastName, pattern),
         ilike(person.email, pattern),
+        ilike(entry.orgaCode, pattern),
         ilike(entry.startNumberNorm, pattern),
         sql`lower(trim(coalesce(${person.firstName}, '') || ' ' || coalesce(${person.lastName}, ''))) like lower(${pattern})`
       ) as SQL<unknown>;
@@ -206,6 +208,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       techCheckedAt: entry.techCheckedAt,
       techCheckedBy: entry.techCheckedBy,
       startNumberNorm: entry.startNumberNorm,
+      orgaCode: entry.orgaCode,
       confirmationMailSentAt: entry.confirmationMailSentAt,
       confirmationMailVerifiedAt: entry.confirmationMailVerifiedAt,
       deletedAt: entry.deletedAt,
@@ -291,6 +294,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       techCheckedAt: entry.techCheckedAt,
       techCheckedBy: entry.techCheckedBy,
       startNumberNorm: entry.startNumberNorm,
+      orgaCode: entry.orgaCode,
       isBackupVehicle: entry.isBackupVehicle,
       backupOfEntryId: entry.backupOfEntryId,
       createdAt: entry.createdAt,
@@ -563,7 +567,8 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
     .select({
       id: entry.id,
       eventId: entry.eventId,
-      acceptanceStatus: entry.acceptanceStatus
+      acceptanceStatus: entry.acceptanceStatus,
+      driverPersonId: entry.driverPersonId
     })
     .from(entry)
     .where(eq(entry.id, entryId))
@@ -595,6 +600,14 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
       to: input.acceptanceStatus
     }
   });
+
+  await recalculateInvoices(
+    existing.eventId,
+    {
+      driverPersonId: existing.driverPersonId
+    },
+    actorUserId
+  );
 
   const shouldQueueLifecycleMail = input.sendLifecycleMail && input.acceptanceStatus !== 'shortlist';
   if (shouldQueueLifecycleMail) {
@@ -1167,7 +1180,7 @@ export const deleteEntry = async (
     typeof normalizedDeleteReasonRaw === 'string' ? (normalizedDeleteReasonRaw.trim().length > 0 ? normalizedDeleteReasonRaw.trim() : null) : null;
   const resolvedActorDisplay = actorDisplay && actorDisplay.trim().length > 0 ? actorDisplay.trim() : actorUserId;
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const rows = await tx
       .select({
         id: entry.id,
@@ -1284,9 +1297,32 @@ export const deleteEntry = async (
       deletedEntryId: entryId,
       deletedReason: normalizedDeleteReason,
       deletedByUserId: actorUserId,
-      deletedByDisplay: resolvedActorDisplay
+      deletedByDisplay: resolvedActorDisplay,
+      eventId: existing.eventId,
+      driverPersonId: existing.driverPersonId
     };
   });
+
+  if (result?.eventId && result?.driverPersonId) {
+    await recalculateInvoices(
+      result.eventId,
+      {
+        driverPersonId: result.driverPersonId
+      },
+      actorUserId
+    );
+  }
+
+  if (!result) {
+    return null;
+  }
+
+  return {
+    deletedEntryId: result.deletedEntryId,
+    deletedReason: result.deletedReason,
+    deletedByUserId: result.deletedByUserId,
+    deletedByDisplay: result.deletedByDisplay
+  };
 };
 
 export const restoreEntry = async (entryId: string, actorUserId: string | null) => {
@@ -1295,6 +1331,7 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
     .select({
       id: entry.id,
       eventId: entry.eventId,
+      driverPersonId: entry.driverPersonId,
       registrationGroupId: entry.registrationGroupId,
       deletedAt: entry.deletedAt
     })
@@ -1347,6 +1384,14 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
     entityType: 'entry',
     entityId: entryId
   });
+
+  await recalculateInvoices(
+    existing.eventId,
+    {
+      driverPersonId: existing.driverPersonId
+    },
+    actorUserId
+  );
 
   return { restoredEntryId: entryId };
 };

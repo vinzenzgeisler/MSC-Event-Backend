@@ -19,6 +19,11 @@ import {
   validateUpdateEventInput
 } from './routes/adminEvents';
 import {
+  getEntryConfirmationDefaults,
+  patchEntryConfirmationDefaults,
+  validatePatchEntryConfirmationDefaultsInput
+} from './routes/adminConfig';
+import {
   createClass,
   deleteClass,
   listClassesByEventWithQuery,
@@ -623,6 +628,38 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, event: current });
     } catch (error) {
       return errorJson(500, 'Get current event failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/config/entry-confirmation-defaults') {
+    if (!adminAuth || !hasAnyGroup(adminAuth, ['admin'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const result = await getEntryConfirmationDefaults();
+      return json(200, { ok: true, ...result });
+    } catch {
+      return errorJson(500, 'Get entry confirmation defaults failed');
+    }
+  }
+
+  if (method === 'PATCH' && path === '/admin/config/entry-confirmation-defaults') {
+    if (!adminAuth || !hasAnyGroup(adminAuth, ['admin'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validatePatchEntryConfirmationDefaultsInput(payload);
+      const updated = await patchEntryConfirmationDefaults(input, adminAuth.sub);
+      return json(200, { ok: true, ...updated });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Update entry confirmation defaults failed');
     }
   }
 

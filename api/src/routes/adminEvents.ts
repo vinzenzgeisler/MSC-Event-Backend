@@ -1,9 +1,11 @@
 import { and, desc, eq, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/client';
-import { event } from '../db/schema';
+import { entry, event } from '../db/schema';
 import { writeAuditLog } from '../audit/log';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
+import { entryConfirmationConfigSchema } from '../domain/entryConfirmationConfig';
+import { buildOrgaCode } from '../domain/orgaCode';
 
 const eventStatusSchema = z.enum(['draft', 'open', 'closed', 'archived']);
 
@@ -15,6 +17,7 @@ const createEventSchema = z.object({
   registrationCloseAt: z.string().datetime().optional(),
   contactEmail: z.string().email().optional(),
   websiteUrl: z.string().url().optional(),
+  entryConfirmationConfig: entryConfirmationConfigSchema.optional(),
   status: eventStatusSchema.default('draft')
 });
 
@@ -35,13 +38,43 @@ const updateEventSchema = z
     registrationOpenAt: z.string().datetime().nullable().optional(),
     registrationCloseAt: z.string().datetime().nullable().optional(),
     contactEmail: z.string().email().nullable().optional(),
-    websiteUrl: z.string().url().nullable().optional()
+    websiteUrl: z.string().url().nullable().optional(),
+    entryConfirmationConfig: entryConfirmationConfigSchema.optional()
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'Provide at least one field to update.' });
 
 type CreateEventInput = z.infer<typeof createEventSchema>;
 type ListEventsInput = z.infer<typeof listEventsSchema>;
 type UpdateEventInput = z.infer<typeof updateEventSchema>;
+
+const normalizePrefix = (value: string | null | undefined): string | null => {
+  const trimmed = (value ?? '').trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const refreshEventOrgaCodes = async (eventId: string, prefix: string | null) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: entry.id,
+      driverPersonId: entry.driverPersonId
+    })
+    .from(entry)
+    .where(eq(entry.eventId, eventId));
+
+  for (const row of rows) {
+    await db
+      .update(entry)
+      .set({
+        orgaCode: buildOrgaCode({
+          eventId,
+          driverPersonId: row.driverPersonId,
+          prefix
+        })
+      })
+      .where(eq(entry.id, row.id));
+  }
+};
 
 const ensureTransitionAllowed = (from: string, to: string) => {
   if (from === to) {
@@ -83,6 +116,7 @@ export const listEvents = async (input: ListEventsInput) => {
       registrationCloseAt: event.registrationCloseAt,
       contactEmail: event.contactEmail,
       websiteUrl: event.websiteUrl,
+      entryConfirmationConfig: event.entryConfirmationConfig,
       openedAt: event.openedAt,
       closedAt: event.closedAt,
       archivedAt: event.archivedAt,
@@ -121,6 +155,7 @@ export const getCurrentEvent = async () => {
       registrationCloseAt: event.registrationCloseAt,
       contactEmail: event.contactEmail,
       websiteUrl: event.websiteUrl,
+      entryConfirmationConfig: event.entryConfirmationConfig,
       openedAt: event.openedAt,
       closedAt: event.closedAt,
       archivedAt: event.archivedAt
@@ -136,6 +171,7 @@ export const createEvent = async (input: CreateEventInput, actorUserId: string |
   const db = await getDb();
   const now = new Date();
   const status = input.status;
+  const nextEntryConfirmationConfig = input.entryConfirmationConfig ?? {};
   const [created] = await db
     .insert(event)
     .values({
@@ -148,6 +184,7 @@ export const createEvent = async (input: CreateEventInput, actorUserId: string |
       registrationCloseAt: input.registrationCloseAt ? new Date(input.registrationCloseAt) : null,
       contactEmail: input.contactEmail ?? null,
       websiteUrl: input.websiteUrl ?? null,
+      entryConfirmationConfig: nextEntryConfirmationConfig,
       openedAt: status === 'open' ? now : null,
       closedAt: status === 'closed' ? now : null,
       archivedAt: status === 'archived' ? now : null,
@@ -158,6 +195,8 @@ export const createEvent = async (input: CreateEventInput, actorUserId: string |
   if (!created) {
     throw new Error('EVENT_CREATE_FAILED');
   }
+
+  await refreshEventOrgaCodes(created.id, normalizePrefix(nextEntryConfirmationConfig.orgaCodePrefix));
 
   await writeAuditLog(db as never, {
     eventId: created.id,
@@ -294,6 +333,8 @@ export const updateEvent = async (eventId: string, input: UpdateEventInput, acto
   }
 
   const now = new Date();
+  const nextEntryConfirmationConfig =
+    input.entryConfirmationConfig === undefined ? existing.entryConfirmationConfig : input.entryConfirmationConfig;
   const [updated] = await db
     .update(event)
     .set({
@@ -324,6 +365,8 @@ export const updateEvent = async (eventId: string, input: UpdateEventInput, acto
           : input.websiteUrl === null
             ? null
             : input.websiteUrl,
+      entryConfirmationConfig:
+        nextEntryConfirmationConfig,
       updatedAt: now
     })
     .where(eq(event.id, eventId))
@@ -339,6 +382,12 @@ export const updateEvent = async (eventId: string, input: UpdateEventInput, acto
       changedFields: Object.keys(input)
     }
   });
+
+  const previousPrefix = normalizePrefix(existing.entryConfirmationConfig?.orgaCodePrefix);
+  const nextPrefix = normalizePrefix(nextEntryConfirmationConfig?.orgaCodePrefix);
+  if (previousPrefix !== nextPrefix) {
+    await refreshEventOrgaCodes(eventId, nextPrefix);
+  }
 
   return updated ?? null;
 };

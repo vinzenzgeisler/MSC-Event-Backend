@@ -248,7 +248,7 @@ const appendDriverNoteHtml = (value: string, driverNote: string, noteTitle: stri
   if (value.toLowerCase().includes(driverNote.toLowerCase())) {
     return value;
   }
-  const noteHtml = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:14px 0 0 0;border:1px solid #DDE4EE;border-radius:10px;background:#F8FAFC;"><tr><td style="padding:12px 14px;"><div style="margin:0 0 6px 0;color:#254CA2;font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">${escapeHtml(noteTitle)}</div><div style="color:#0F1729;font-size:15px;line-height:1.55;">${escapeHtml(driverNote).replace(/\r?\n/g, '<br />')}</div></td></tr></table>`;
+  const noteHtml = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:14px 0 0 0;border:1px solid #DDE4EE;border-radius:10px;background:#F8FAFC;background-color:#F8FAFC;"><tr><td bgcolor="#F8FAFC" style="padding:12px 14px;background:#F8FAFC;background-color:#F8FAFC;"><div style="margin:0 0 6px 0;color:#254CA2;font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">${escapeHtml(noteTitle)}</div><div style="color:#0F1729;font-size:15px;line-height:1.55;">${escapeHtml(driverNote).replace(/\r?\n/g, '<br />')}</div></td></tr></table>`;
   return `${value}${noteHtml}`;
 };
 
@@ -484,8 +484,8 @@ const buildEntryContextCard = (
     .join('');
 
   return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="mail-entry" style="margin:0 0 14px 0;border:1px solid ${visual.entryBorder};border-radius:10px;background:${visual.entryBackground};">`,
-    `<tr><td style="padding:${compact ? '10px 12px' : '12px 14px'};">`,
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="mail-entry" style="margin:0 0 14px 0;border:1px solid ${visual.entryBorder};border-radius:10px;background:${visual.entryBackground};background-color:${visual.entryBackground};">`,
+    `<tr><td bgcolor="${visual.entryBackground}" style="padding:${compact ? '10px 12px' : '12px 14px'};background:${visual.entryBackground};background-color:${visual.entryBackground};">`,
     `<div style="margin:0 0 8px 0;color:${visual.entryLabelColor};font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(entryContextTitle)}</div>`,
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tbody>${rowHtml}</tbody></table>`,
     '</td></tr>',
@@ -495,12 +495,41 @@ const buildEntryContextCard = (
 
 const buildSectionCard = (title: string, bodyHtml: string): string =>
   [
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px 0;border:1px solid #DDE4EE;border-radius:10px;background:#FFFFFF;">',
-    '<tr><td style="padding:12px 14px;">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px 0;border:1px solid #DDE4EE;border-radius:10px;background:#FFFFFF;background-color:#FFFFFF;">',
+    '<tr><td bgcolor="#FFFFFF" style="padding:12px 14px;background:#FFFFFF;background-color:#FFFFFF;">',
     `<div style="margin:0 0 8px 0;color:#254CA2;font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">${escapeHtml(title)}</div>`,
     `<div style="color:#0F1729;font-size:15px;line-height:1.55;">${bodyHtml}</div>`,
     '</td></tr>',
     '</table>'
+  ].join('');
+
+const buildSpacer = (height: number): string =>
+  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td height="${height}" style="height:${height}px;line-height:${height}px;font-size:0;">&nbsp;</td></tr></table>`;
+
+const buildBulletproofButton = (url: string, label: string): string => {
+  const safeUrl = escapeHtml(url);
+  const safeLabel = escapeHtml(label);
+  return [
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 0 0;"><tr><td align="left">',
+    '<!--[if mso]>',
+    `<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${safeUrl}" style="height:40px;v-text-anchor:middle;width:220px;" arcsize="18%" strokecolor="#FACC15" fillcolor="#FACC15">`,
+    '<w:anchorlock/>',
+    `<center style="color:#0F172A;font-family:Segoe UI,Arial,sans-serif;font-size:14px;font-weight:700;">${safeLabel}</center>`,
+    '</v:roundrect>',
+    '<![endif]-->',
+    `<!--[if !mso]><!-- --><a class="mail-cta" href="${safeUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#FACC15;background-color:#FACC15;color:#0F172A;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:700;border:1px solid #FACC15;mso-hide:all;">${safeLabel}</a><!--<![endif]-->`,
+    '</td></tr></table>'
+  ].join('');
+};
+
+const buildAccentBar = (color: string): string =>
+  [
+    '<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:14px;"><tr><td>',
+    '<!--[if mso]>',
+    `<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" style="width:86px;height:4px;v-text-anchor:middle;" arcsize="100%" stroked="f" fillcolor="${color}"><w:anchorlock/><center style="font-size:0;line-height:0;">&nbsp;</center></v:roundrect>`,
+    '<![endif]-->',
+    `<!--[if !mso]><!-- --><div style="width:86px;height:4px;background:${color};background-color:${color};border-radius:999px;font-size:0;line-height:0;"></div><!--<![endif]-->`,
+    '</td></tr></table>'
   ].join('');
 
 const buildStructuredSections = (data: TemplateData, locale: SupportedMailLocale): { html: string; text: string } => {
@@ -730,9 +759,9 @@ const buildHtmlDocument = (input: {
       input.templateKey === 'email_confirmation' ||
       input.templateKey === 'email_confirmation_reminder'
     ) && input.verificationUrl
-      ? `<p style="margin:18px 0 0 0;"><a class="mail-cta" href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#FACC15;color:#0F172A;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:700;">${verificationCtaLabel}</a></p><p style="margin:10px 0 0 0;color:#64748B;font-size:12px;line-height:1.5;">${escapeHtml(copy.ctaFallbackPrefix)} <a href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;">${escapeHtml(input.verificationUrl)}</a></p>`
+      ? `${buildBulletproofButton(input.verificationUrl, verificationCtaLabel)}<p style="margin:10px 0 0 0;color:#64748B;font-size:12px;line-height:1.5;">${escapeHtml(copy.ctaFallbackPrefix)} <a href="${escapeHtml(input.verificationUrl)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;">${escapeHtml(input.verificationUrl)}</a></p>`
       : isCampaignTemplate(input.templateKey) && campaignCtaUrl
-        ? `<p style="margin:18px 0 0 0;"><a class="mail-cta" href="${escapeHtml(campaignCtaUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#FACC15;color:#0F172A;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:700;">${escapeHtml(campaignCtaText)}</a></p><p style="margin:10px 0 0 0;color:#64748B;font-size:12px;line-height:1.5;">${escapeHtml(copy.ctaFallbackPrefix)} <a href="${escapeHtml(campaignCtaUrl)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;">${escapeHtml(campaignCtaUrl)}</a></p>`
+        ? `${buildBulletproofButton(campaignCtaUrl, campaignCtaText)}<p style="margin:10px 0 0 0;color:#64748B;font-size:12px;line-height:1.5;">${escapeHtml(copy.ctaFallbackPrefix)} <a href="${escapeHtml(campaignCtaUrl)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;">${escapeHtml(campaignCtaUrl)}</a></p>`
         : '';
 
   const sectionsHtml = !input.hasContentOverride && isCampaignTemplate(input.templateKey) ? input.structuredSectionsHtml : '';
@@ -769,6 +798,8 @@ const buildHtmlDocument = (input: {
     '<meta name="x-apple-disable-message-reformatting" />',
     `<title>${escapeHtml(input.subjectRendered)}</title>`,
     '<style>',
+    'table,td{mso-table-lspace:0pt !important;mso-table-rspace:0pt !important;}',
+    'img{-ms-interpolation-mode:bicubic;}',
     '@media only screen and (max-width:640px){',
     '  .mail-wrapper{padding:12px 8px !important;}',
     '  .mail-hero,.mail-content,.mail-footer{padding:16px !important;}',
@@ -783,15 +814,15 @@ const buildHtmlDocument = (input: {
     hiddenPreheader,
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="mail-wrapper" style="width:100%;background:#F8FAFC;padding:24px 12px;">',
     '<tr><td align="center">',
-    '<table role="presentation" width="640" cellpadding="0" cellspacing="0" class="mail-card" style="width:100%;max-width:640px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:14px;">',
-    '<tr><td class="mail-hero" style="background:linear-gradient(90deg,#172554 0%,#1E3A8A 55%,#1E40AF 100%);padding:24px 26px;color:#FFFFFF;">',
+    '<table role="presentation" width="640" cellpadding="0" cellspacing="0" class="mail-card" style="width:100%;max-width:640px;background:#FFFFFF;background-color:#FFFFFF;border:1px solid #E2E8F0;border-radius:14px;">',
+    '<tr><td class="mail-hero" bgcolor="#1E3A8A" style="background:#1E3A8A;background-color:#1E3A8A;background-image:linear-gradient(90deg,#172554 0%,#1E3A8A 55%,#1E40AF 100%);padding:24px 26px;color:#FFFFFF;">',
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>',
     logoHtml ? `<td valign="middle" style="width:36px;padding:0 8px 0 0;">${logoHtml}</td>` : '',
     `<td valign="middle" style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;opacity:.9;">${escapeHtml(brandName)}</td>`,
     `<td valign="middle" align="right">${headerRight}</td>`,
     '</tr></table>',
     `<div class="mail-title" style="margin-top:14px;font-size:28px;line-height:1.22;font-weight:700;">${escapeHtml(eventName)}</div>`,
-    `<div style="margin-top:12px;height:4px;width:86px;background:${visual.accentLine};border-radius:999px;"></div>`,
+    buildAccentBar(visual.accentLine),
     contract.scope === 'process' ? processHeaderLine : campaignPreheaderLine,
     '</td></tr>',
     heroImageUrl
@@ -799,12 +830,13 @@ const buildHtmlDocument = (input: {
       : '',
     '<tr><td class="mail-content" style="padding:24px 26px;font-size:15px;line-height:1.72;">',
     entryContextHtml,
+    entryContextHtml ? buildSpacer(8) : '',
     sectionsHtml,
     `<div class="mail-body">${input.bodyHtmlRendered}</div>`,
     ctaBlock,
     signoffHtml,
     '</td></tr>',
-    `<tr><td class="mail-footer" style="border-top:1px solid #E2E8F0;background:#F8FAFC;padding:14px 26px;font-size:12px;line-height:1.5;color:#64748B;">${dateHtml}${contactHtml}${replyHintHtml}${legalLinks}</td></tr>`,
+    `<tr><td class="mail-footer" bgcolor="#F8FAFC" style="border-top:1px solid #E2E8F0;background:#F8FAFC;background-color:#F8FAFC;padding:14px 26px;font-size:12px;line-height:1.5;color:#64748B;">${dateHtml}${contactHtml}${replyHintHtml}${legalLinks}</td></tr>`,
     '</table>',
     '</td></tr>',
     '</table>',

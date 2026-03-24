@@ -23,6 +23,19 @@ export const uploadPdf = async (key: string, body: Buffer) => {
   await uploadFile(key, body, 'application/pdf');
 };
 
+export const uploadAssetFile = async (key: string, body: Buffer, contentType: string) => {
+  const client = getS3Client();
+  const bucket = getAssetsBucket();
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType
+    })
+  );
+};
+
 export const uploadFile = async (key: string, body: Buffer, contentType: string) => {
   const client = getS3Client();
   const bucket = getDocumentsBucket();

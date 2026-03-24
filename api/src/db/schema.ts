@@ -672,3 +672,68 @@ export const documentGenerationJob = pgTable(
     statusIndex: index('document_generation_job_status_idx').on(table.status)
   })
 );
+
+export const aiMessageSource = pgTable(
+  'ai_message_source',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    source: text('source').notNull().default('imap'),
+    mailboxKey: text('mailbox_key').notNull(),
+    externalMessageId: text('external_message_id').notNull(),
+    imapUid: integer('imap_uid'),
+    fromEmail: text('from_email'),
+    fromName: text('from_name'),
+    toEmail: text('to_email'),
+    subject: text('subject'),
+    receivedAt: timestamp('received_at', { withTimezone: true }),
+    eventId: uuid('event_id').references(() => event.id, { onDelete: 'set null' }),
+    entryId: uuid('entry_id').references(() => entry.id, { onDelete: 'set null' }),
+    rawS3Key: text('raw_s3_key'),
+    textContent: text('text_content').notNull(),
+    normalizedContent: text('normalized_content'),
+    status: text('status').notNull().default('imported'),
+    aiSummary: text('ai_summary'),
+    aiCategory: text('ai_category'),
+    aiLastProcessedAt: timestamp('ai_last_processed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    sourceCheck: check('ai_message_source_source_check', sql`${table.source} in ('imap', 'manual')`),
+    statusCheck: check('ai_message_source_status_check', sql`${table.status} in ('imported', 'processed', 'archived')`),
+    sourceMessageUnique: uniqueIndex('ai_message_source_unique_source_message').on(table.source, table.mailboxKey, table.externalMessageId),
+    mailboxReceivedIndex: index('ai_message_source_mailbox_received_idx').on(table.mailboxKey, table.receivedAt),
+    eventIndex: index('ai_message_source_event_idx').on(table.eventId, table.createdAt),
+    entryIndex: index('ai_message_source_entry_idx').on(table.entryId, table.createdAt)
+  })
+);
+
+export const aiDraft = pgTable(
+  'ai_draft',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    taskType: text('task_type').notNull(),
+    status: text('status').notNull().default('draft'),
+    eventId: uuid('event_id').references(() => event.id, { onDelete: 'set null' }),
+    entryId: uuid('entry_id').references(() => entry.id, { onDelete: 'set null' }),
+    messageId: uuid('message_id').references(() => aiMessageSource.id, { onDelete: 'set null' }),
+    title: text('title'),
+    promptVersion: text('prompt_version').notNull().default('v1'),
+    modelId: text('model_id'),
+    inputSnapshot: jsonb('input_snapshot').notNull().default(sql`'{}'::jsonb`),
+    outputPayload: jsonb('output_payload').notNull().default(sql`'{}'::jsonb`),
+    warnings: jsonb('warnings').notNull().default(sql`'[]'::jsonb`),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    taskTypeCheck: check(
+      'ai_draft_task_type_check',
+      sql`${table.taskType} in ('reply_suggestion', 'event_report', 'speaker_text')`
+    ),
+    statusCheck: check('ai_draft_status_check', sql`${table.status} in ('draft', 'reviewed', 'archived')`),
+    taskCreatedIndex: index('ai_draft_task_created_idx').on(table.taskType, table.createdAt),
+    eventIndex: index('ai_draft_event_idx').on(table.eventId, table.createdAt)
+  })
+);

@@ -123,6 +123,18 @@ import {
 } from './routes/adminMail';
 import { getDashboardSummary, validateDashboardSummaryQuery } from './routes/adminDashboard';
 import {
+  generateAiEventReport,
+  generateAiSpeakerText,
+  listAiMessages,
+  saveAiDraft,
+  suggestReplyForMessage,
+  validateGenerateEventReportInput,
+  validateGenerateSpeakerTextInput,
+  validateListAiMessagesInput,
+  validateSaveAiDraftInput,
+  validateSuggestReplyInput
+} from './routes/adminAi';
+import {
   createTechCheckBatchDocument,
   createTechCheckDocument,
   createWaiverBatchDocument,
@@ -2319,6 +2331,126 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, error.message);
       }
       return errorJson(500, 'List outbox failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/ai/messages') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const query = validateListAiMessagesInput(event.queryStringParameters ?? {});
+      const messages = await listAiMessages(query);
+      return json(200, { ok: true, messages });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      return errorJson(500, 'List AI messages failed');
+    }
+  }
+
+  const aiReplyMatch = path.match(/^\/admin\/ai\/messages\/([^/]+)\/suggest-reply$/);
+  if (method === 'POST' && aiReplyMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateSuggestReplyInput(payload);
+      const result = await suggestReplyForMessage(aiReplyMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'AI message not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'AI_MODEL_NOT_CONFIGURED') {
+        return errorJson(503, 'AI model not configured', undefined, 'AI_MODEL_NOT_CONFIGURED');
+      }
+      return errorJson(500, 'Generate reply suggestion failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/ai/reports/generate') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateGenerateEventReportInput(payload);
+      const result = await generateAiEventReport(input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Event not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'AI_MODEL_NOT_CONFIGURED') {
+        return errorJson(503, 'AI model not configured', undefined, 'AI_MODEL_NOT_CONFIGURED');
+      }
+      return errorJson(500, 'Generate AI event report failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/ai/speaker/generate') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateGenerateSpeakerTextInput(payload);
+      const result = await generateAiSpeakerText(input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Speaker context not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'AI_MODEL_NOT_CONFIGURED') {
+        return errorJson(503, 'AI model not configured', undefined, 'AI_MODEL_NOT_CONFIGURED');
+      }
+      return errorJson(500, 'Generate AI speaker text failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/ai/drafts') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateSaveAiDraftInput(payload);
+      const result = await saveAiDraft(input, auth.sub);
+      return json(200, { ok: true, draft: result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Save AI draft failed');
     }
   }
 

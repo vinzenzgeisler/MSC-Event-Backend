@@ -54,6 +54,7 @@ export class ApiStack extends Stack {
       throw new Error('DataStack API Lambda security group is missing for VPC mode.');
     }
     const dbSecretArn = props.dataStack.dbSecret.secretArn;
+    const aiInboxImapSecretArn = props.config.aiInboxImapSecretArn?.trim() || '';
     const dbHost = props.dataStack.dbInstance.instanceEndpoint.hostname;
     const dbPort = props.dataStack.dbInstance.instanceEndpoint.port.toString();
     const dbRegion = Stack.of(this).region;
@@ -113,6 +114,8 @@ export class ApiStack extends Stack {
         COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
         COGNITO_USER_POOL_ID: props.authStack.userPool.userPoolId,
         SES_FROM_EMAIL: sesFromEmail,
+        AI_BEDROCK_MODEL_ID: props.config.aiBedrockModelId ?? '',
+        AI_BEDROCK_REGION: Stack.of(this).region,
         PUBLIC_VERIFY_BASE_URL: publicVerifyBaseUrl,
         MAIL_PUBLIC_BASE_URL: mailPublicBaseUrl,
         NENNUNGSTOOL_URL: mailPublicBaseUrl
@@ -200,6 +203,40 @@ export class ApiStack extends Stack {
       ...lambdaVpcConfig
     });
 
+    const mailInboxPoller = new NodejsFunction(this, 'MailInboxPoller', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(__dirname, '../../../api/src/jobs/mailInboxPoller.ts'),
+      handler: 'handler',
+      functionName: `${props.config.prefix}-mail-inbox-poller`,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(45),
+      environment: {
+        STAGE: props.config.stage,
+        DB_SECRET_ARN: dbSecretArn,
+        DB_HOST: dbHost,
+        DB_PORT: dbPort,
+        DB_NAME: props.config.dbName,
+        DB_USER: dbUser,
+        DB_REGION: dbRegion,
+        DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+        DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+        DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+        DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+        ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
+        AI_INBOX_IMAP_SECRET_ARN: aiInboxImapSecretArn,
+        AI_INBOX_IMAP_MAILBOX: props.config.aiInboxImapMailbox ?? 'INBOX',
+        AI_INBOX_IMAP_MAILBOX_KEY: props.config.aiInboxImapMailboxKey ?? `${props.config.prefix}-imap`,
+        AI_INBOX_POLL_BATCH_SIZE: '10'
+      },
+      bundling: {
+        target: 'node20',
+        sourceMap: true,
+        minify: false
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+      ...lambdaVpcConfig
+    });
+
     apiHandler.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['secretsmanager:GetSecretValue'],
@@ -207,7 +244,7 @@ export class ApiStack extends Stack {
       })
     );
 
-    [apiHandler, emailWorker, privacyRetentionWorker].forEach((fn) => {
+    [apiHandler, emailWorker, privacyRetentionWorker, mailInboxPoller].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['rds-db:connect'],
@@ -230,6 +267,19 @@ export class ApiStack extends Stack {
         })
       );
     });
+
+    mailInboxPoller.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [props.storageStack.assetsBucket.bucketArn]
+      })
+    );
+    mailInboxPoller.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:GetObject', 's3:PutObject'],
+        resources: [`${props.storageStack.assetsBucket.bucketArn}/*`]
+      })
+    );
 
     emailWorker.addToRolePolicy(
       new iam.PolicyStatement({
@@ -267,6 +317,13 @@ export class ApiStack extends Stack {
 
     apiHandler.addToRolePolicy(
       new iam.PolicyStatement({
+        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+        resources: ['*']
+      })
+    );
+
+    apiHandler.addToRolePolicy(
+      new iam.PolicyStatement({
         actions: [
           'cognito-idp:ListUsers',
           'cognito-idp:AdminGetUser',
@@ -281,7 +338,7 @@ export class ApiStack extends Stack {
       })
     );
 
-    [emailWorker, privacyRetentionWorker].forEach((fn) => {
+    [emailWorker, privacyRetentionWorker, mailInboxPoller].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['secretsmanager:GetSecretValue'],
@@ -289,6 +346,15 @@ export class ApiStack extends Stack {
         })
       );
     });
+
+    if (aiInboxImapSecretArn) {
+      mailInboxPoller.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['secretsmanager:GetSecretValue'],
+          resources: [aiInboxImapSecretArn]
+        })
+      );
+    }
 
     new events.Rule(this, 'EmailWorkerSchedule', {
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
@@ -298,6 +364,11 @@ export class ApiStack extends Stack {
     new events.Rule(this, 'PrivacyRetentionSchedule', {
       schedule: events.Schedule.rate(cdk.Duration.hours(24)),
       targets: [new targets.LambdaFunction(privacyRetentionWorker)]
+    });
+
+    new events.Rule(this, 'MailInboxPollerSchedule', {
+      schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+      targets: [new targets.LambdaFunction(mailInboxPoller)]
     });
 
     const integration = new SharedPermissionHttpLambdaIntegration('ApiIntegration', apiHandler);
@@ -790,6 +861,41 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/admin/mail/outbox',
       methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/ai/messages',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/ai/messages/{id}/suggest-reply',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/ai/reports/generate',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/ai/speaker/generate',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/ai/drafts',
+      methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
     });

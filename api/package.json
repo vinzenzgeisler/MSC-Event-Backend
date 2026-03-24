@@ -15,6 +15,7 @@
     "media:restore-vehicle-image-keys": "node scripts/restore-vehicle-image-keys.js"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.933.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.933.0",
     "@aws-sdk/client-s3": "^3.645.0",
     "@aws-sdk/client-secrets-manager": "^3.645.0",

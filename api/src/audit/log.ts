@@ -34,6 +34,11 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   lifecycle_email_queued: ['entryId', 'eventType', 'templateId', 'templateVersion'],
   broadcast_queued: ['queued', 'templateId', 'templateVersion'],
   email_outbox_retry_requested: ['previousStatus'],
+  ai_message_imported: ['messageId', 'source', 'mailboxKey', 'eventId', 'entryId'],
+  ai_message_reply_generated: ['messageId', 'category', 'confidence'],
+  ai_report_generated: ['eventId', 'format', 'length'],
+  ai_speaker_text_generated: ['eventId', 'entryId', 'classId', 'mode'],
+  ai_draft_saved: ['draftId', 'taskType', 'status', 'eventId', 'entryId', 'messageId'],
   public_entry_created: ['registrationStatus', 'registrationGroupId'],
   public_entry_verified: ['registrationStatus', 'registrationGroupId'],
   privacy_retention_run: ['windowStart', 'windowEnd', 'deletedRows', 'errors']

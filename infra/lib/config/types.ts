@@ -5,6 +5,10 @@ export interface StageConfig {
   cognitoLogoutUrls: string[];
   cognitoDomainPrefix: string;
   sesFromEmail: string;
+  aiBedrockModelId?: string;
+  aiInboxImapSecretArn?: string;
+  aiInboxImapMailbox?: string;
+  aiInboxImapMailboxKey?: string;
   publicVerifyBaseUrl: string;
   assetsCorsAllowedOrigins: string[];
   devCleanupEnabled: boolean;

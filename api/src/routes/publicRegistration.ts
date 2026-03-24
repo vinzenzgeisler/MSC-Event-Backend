@@ -17,7 +17,8 @@ import {
   vehicle,
   vehicleImageUpload
 } from '../db/schema';
-import { getPresignedAssetsUploadUrl, doesAssetObjectExist } from '../docs/storage';
+import { getPresignedAssetsUploadUrl, getAssetObjectBuffer, getAssetObjectMetadata } from '../docs/storage';
+import { validateImageBuffer } from '../domain/imageValidation';
 import { normalizeStartNumber } from '../domain/startNumber';
 import { buildOrgaCode } from '../domain/orgaCode';
 import { isPgUniqueViolation } from '../http/dbErrors';
@@ -205,7 +206,8 @@ const vehicleInputSchema = z
     ownerName: nonEmptySchema.optional(),
     startNumberRaw: z.string().regex(/^[a-zA-Z0-9]{1,6}$/).optional(),
     imageS3Key: z.string().optional(),
-    imageUploadId: z.string().uuid().optional()
+    imageUploadId: z.string().uuid().optional(),
+    imageUploadToken: z.string().uuid().optional()
   })
   .superRefine((value, ctx) => {
     // Public clients must reference finalized uploads by id; direct S3 keys are not accepted.
@@ -214,6 +216,13 @@ const vehicleInputSchema = z
         code: z.ZodIssueCode.custom,
         path: ['imageS3Key'],
         message: 'imageS3Key is not allowed; use imageUploadId from /public/uploads/vehicle-image/finalize'
+      });
+    }
+    if ((value.imageUploadId && !value.imageUploadToken) || (!value.imageUploadId && value.imageUploadToken)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['imageUploadToken'],
+        message: 'imageUploadId and imageUploadToken must be provided together'
       });
     }
   });
@@ -321,7 +330,8 @@ const uploadInitSchema = z.object({
 });
 
 const uploadFinalizeSchema = z.object({
-  uploadId: z.string().uuid()
+  uploadId: z.string().uuid(),
+  uploadToken: z.string().uuid()
 });
 
 type CreateEntryInput = z.infer<typeof createEntrySchema>;
@@ -337,6 +347,11 @@ type CreateBatchInput = z.infer<typeof createBatchSchema>;
 type CreateBatchWithoutIdempotencyInput = z.infer<typeof createBatchWithoutIdempotencySchema>;
 type CreateBatchInternalInput = z.infer<typeof createBatchInternalSchema>;
 type BatchResponse = z.infer<typeof batchResponseSchema>;
+
+const VEHICLE_IMAGE_MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024;
+const VEHICLE_IMAGE_MAX_DIMENSION_PIXELS = 6000;
+
+const hashUploadToken = (token: string): string => createHash('sha256').update(token).digest('hex');
 
 const buildEmergencyContactName = (input: Partial<DriverInput>): string | null => {
   if (input.emergencyContactName) {
@@ -562,6 +577,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       }
 
       const entryIds: string[] = [];
+      const seenUploadIds = new Set<string>();
       for (const item of input.entries) {
         const normalizedStartNumber = normalizeStartNumber(item.startNumber);
         if (!normalizedStartNumber) {
@@ -604,24 +620,40 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         }
 
         const resolveVehicleImageS3Key = async (vehicleInput: VehicleInput): Promise<string | null> => {
-          if (!vehicleInput.imageUploadId) {
+          if (!vehicleInput.imageUploadId || !vehicleInput.imageUploadToken) {
             return null;
           }
-          const uploadRows = await tx
-            .select({
-              id: vehicleImageUpload.id,
-              eventId: vehicleImageUpload.eventId,
-              s3Key: vehicleImageUpload.s3Key,
-              status: vehicleImageUpload.status
-            })
-            .from(vehicleImageUpload)
-            .where(eq(vehicleImageUpload.id, vehicleInput.imageUploadId))
-            .limit(1);
-          const upload = uploadRows[0];
-          if (!upload || upload.eventId !== input.eventId || upload.status !== 'finalized') {
+          if (seenUploadIds.has(vehicleInput.imageUploadId)) {
             throw new Error('IMAGE_UPLOAD_INVALID');
           }
-          return upload.s3Key;
+          seenUploadIds.add(vehicleInput.imageUploadId);
+
+          const [consumedUpload] = await tx
+            .update(vehicleImageUpload)
+            .set({
+              consumedAt: now,
+              consumedByRegistrationGroupId: createdGroup.id,
+              updatedAt: now
+            })
+            .where(
+              and(
+                eq(vehicleImageUpload.id, vehicleInput.imageUploadId),
+                eq(vehicleImageUpload.eventId, input.eventId),
+                eq(vehicleImageUpload.status, 'finalized'),
+                eq(vehicleImageUpload.uploadTokenHash, hashUploadToken(vehicleInput.imageUploadToken)),
+                sql`${vehicleImageUpload.expiresAt} >= ${now}`,
+                sql`${vehicleImageUpload.consumedAt} is null`
+              )
+            )
+            .returning({
+              s3Key: vehicleImageUpload.s3Key
+            });
+
+          if (!consumedUpload) {
+            throw new Error('IMAGE_UPLOAD_INVALID');
+          }
+
+          return consumedUpload.s3Key;
         };
 
         const createVehicleRecord = async (vehicleInput: VehicleInput, resolvedStartNumberRaw: string | null) => {
@@ -1193,6 +1225,7 @@ export const initVehicleImageUpload = async (input: UploadInitInput) => {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 1000 * 60 * 15);
   const key = `uploads/${input.eventId}/vehicle-images/${randomUUID()}`;
+  const uploadToken = randomUUID();
 
   const [created] = await db
     .insert(vehicleImageUpload)
@@ -1200,6 +1233,7 @@ export const initVehicleImageUpload = async (input: UploadInitInput) => {
       eventId: input.eventId,
       s3Key: key,
       contentType: input.contentType,
+      uploadTokenHash: hashUploadToken(uploadToken),
       fileName: input.fileName ?? null,
       fileSizeBytes: input.fileSizeBytes,
       status: 'initiated',
@@ -1216,6 +1250,7 @@ export const initVehicleImageUpload = async (input: UploadInitInput) => {
   const upload = await getPresignedAssetsUploadUrl(key, input.contentType, 900);
   return {
     uploadId: created.id,
+    uploadToken,
     key,
     uploadUrl: upload.url,
     requiredHeaders: upload.requiredHeaders,
@@ -1232,6 +1267,9 @@ export const finalizeVehicleImageUpload = async (input: UploadFinalizeInput) => 
     throw new Error('UPLOAD_NOT_FOUND');
   }
   if (upload.status === 'finalized') {
+    if (upload.uploadTokenHash !== hashUploadToken(input.uploadToken)) {
+      throw new Error('UPLOAD_TOKEN_INVALID');
+    }
     return {
       uploadId: upload.id,
       imageS3Key: upload.s3Key,
@@ -1249,14 +1287,31 @@ export const finalizeVehicleImageUpload = async (input: UploadFinalizeInput) => 
     throw new Error('UPLOAD_EXPIRED');
   }
 
-  const exists = await doesAssetObjectExist(upload.s3Key);
-  if (!exists) {
+  if (upload.uploadTokenHash !== hashUploadToken(input.uploadToken)) {
+    throw new Error('UPLOAD_TOKEN_INVALID');
+  }
+
+  const [metadata, objectBuffer] = await Promise.all([getAssetObjectMetadata(upload.s3Key), getAssetObjectBuffer(upload.s3Key)]);
+  if (!metadata || !objectBuffer) {
     throw new Error('UPLOAD_OBJECT_MISSING');
+  }
+  if ((metadata.contentLength ?? objectBuffer.length) > VEHICLE_IMAGE_MAX_FILE_SIZE_BYTES) {
+    throw new Error('UPLOAD_FILE_TOO_LARGE');
+  }
+
+  const validatedImage = validateImageBuffer(objectBuffer, VEHICLE_IMAGE_MAX_FILE_SIZE_BYTES, VEHICLE_IMAGE_MAX_DIMENSION_PIXELS);
+  if (!validatedImage) {
+    throw new Error('UPLOAD_CONTENT_INVALID');
+  }
+  if (validatedImage.contentType !== upload.contentType) {
+    throw new Error('UPLOAD_CONTENT_TYPE_MISMATCH');
   }
 
   const [updated] = await db
     .update(vehicleImageUpload)
     .set({
+      contentType: validatedImage.contentType,
+      fileSizeBytes: validatedImage.byteLength,
       status: 'finalized',
       finalizedAt: now,
       updatedAt: now

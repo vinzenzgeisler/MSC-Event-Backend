@@ -463,11 +463,23 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'UPLOAD_NOT_FOUND') {
         return errorJson(404, 'Upload not found', undefined, 'UPLOAD_NOT_FOUND');
       }
+      if (error instanceof Error && error.message === 'UPLOAD_TOKEN_INVALID') {
+        return errorJson(422, 'Upload token is invalid', undefined, 'UPLOAD_TOKEN_INVALID');
+      }
       if (error instanceof Error && error.message === 'UPLOAD_EXPIRED') {
         return errorJson(409, 'Upload expired', undefined, 'UPLOAD_EXPIRED');
       }
       if (error instanceof Error && error.message === 'UPLOAD_OBJECT_MISSING') {
         return errorJson(409, 'Uploaded object not found', undefined, 'UPLOAD_OBJECT_MISSING');
+      }
+      if (error instanceof Error && error.message === 'UPLOAD_FILE_TOO_LARGE') {
+        return errorJson(422, 'Uploaded image exceeds the maximum allowed size', undefined, 'UPLOAD_FILE_TOO_LARGE');
+      }
+      if (error instanceof Error && error.message === 'UPLOAD_CONTENT_INVALID') {
+        return errorJson(422, 'Uploaded file is not a valid supported image', undefined, 'UPLOAD_CONTENT_INVALID');
+      }
+      if (error instanceof Error && error.message === 'UPLOAD_CONTENT_TYPE_MISMATCH') {
+        return errorJson(422, 'Uploaded image content does not match the declared file type', undefined, 'UPLOAD_CONTENT_TYPE_MISMATCH');
       }
       return errorJson(500, 'Upload finalize failed');
     }

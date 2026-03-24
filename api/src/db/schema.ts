@@ -632,11 +632,16 @@ export const vehicleImageUpload = pgTable(
       .references(() => event.id, { onDelete: 'cascade' }),
     s3Key: text('s3_key').notNull(),
     contentType: text('content_type').notNull(),
+    uploadTokenHash: text('upload_token_hash').notNull(),
     fileName: text('file_name'),
     fileSizeBytes: integer('file_size_bytes').notNull(),
     status: text('status').notNull().default('initiated'),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    consumedByRegistrationGroupId: uuid('consumed_by_registration_group_id').references(() => registrationGroup.id, {
+      onDelete: 'set null'
+    }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },

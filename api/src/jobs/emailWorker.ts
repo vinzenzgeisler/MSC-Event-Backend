@@ -27,6 +27,7 @@ type OutboxAttachmentRow = {
 type LifecycleCandidateRow = {
   event_id: string;
   entry_id: string;
+  registration_group_id: string | null;
 };
 
 type PaymentReminderCandidateRow = {
@@ -162,7 +163,10 @@ const queueEmailConfirmationReminders = async (limit: number, reminderDelayDays:
   const pool = await getPool();
   const result = await pool.query(
     `
-      select e.event_id, e.id as entry_id
+      select distinct on (coalesce(e.registration_group_id::text, e.id::text))
+        e.event_id,
+        e.id as entry_id,
+        e.registration_group_id
       from entry e
       inner join event ev on ev.id = e.event_id
       where e.deleted_at is null
@@ -176,7 +180,10 @@ const queueEmailConfirmationReminders = async (limit: number, reminderDelayDays:
           from email_outbox q
           where q.event_id = e.event_id
             and q.template_id = 'email_confirmation_reminder'
-            and q.template_data->>'entryId' = e.id::text
+            and (
+              (e.registration_group_id is not null and q.template_data->>'registrationGroupId' = e.registration_group_id::text)
+              or (e.registration_group_id is null and q.template_data->>'entryId' = e.id::text)
+            )
             and q.status in ('queued', 'sending')
         )
         and not exists (
@@ -184,10 +191,16 @@ const queueEmailConfirmationReminders = async (limit: number, reminderDelayDays:
           from email_outbox h
           where h.event_id = e.event_id
             and h.template_id = 'email_confirmation_reminder'
-            and h.template_data->>'entryId' = e.id::text
+            and (
+              (e.registration_group_id is not null and h.template_data->>'registrationGroupId' = e.registration_group_id::text)
+              or (e.registration_group_id is null and h.template_data->>'entryId' = e.id::text)
+            )
             and h.created_at >= now() - (($1 || ' days')::interval)
         )
-      order by e.confirmation_mail_sent_at asc
+      order by
+        coalesce(e.registration_group_id::text, e.id::text) asc,
+        e.confirmation_mail_sent_at asc,
+        e.created_at asc
       limit $2
     `,
     [String(reminderDelayDays), limit]

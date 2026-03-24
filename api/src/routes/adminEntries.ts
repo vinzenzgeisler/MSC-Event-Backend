@@ -5,6 +5,7 @@ import { getDb } from '../db/client';
 import { auditLog, document, entry, eventClass, invoice, invoicePayment, person, registrationGroup, vehicle } from '../db/schema';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
+import { deriveInvoicePaymentStatus } from '../domain/invoiceStatus';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 import { recalculateInvoices } from './adminFinance';
@@ -458,6 +459,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       registrationStatus: current.registrationStatus,
       acceptanceStatus: current.acceptanceStatus,
       startNumberNorm: current.startNumberNorm,
+      orgaCode: current.orgaCode,
       isBackupVehicle: current.isBackupVehicle,
       relatedEntryIds,
       vehicleLabel,
@@ -1009,7 +1011,7 @@ export const patchEntryPaymentStatus = async (
   const maxPaidAt = maxPaidAtRaw ? new Date(maxPaidAtRaw) : paidAt;
   const effectiveTotal = currentInvoice.totalCents ?? 0;
   const amountOpenCents = Math.max(0, effectiveTotal - paidAmountCents);
-  const effectiveStatus: 'paid' | 'due' = amountOpenCents === 0 ? 'paid' : 'due';
+  const effectiveStatus = deriveInvoicePaymentStatus(effectiveTotal, paidAmountCents);
 
   await db
     .update(invoice)
@@ -1129,7 +1131,7 @@ export const patchEntryPaymentAmounts = async (
     }
   }
 
-  const paymentStatus: 'paid' | 'due' = nextPaidAmountCents >= nextTotalCents ? 'paid' : 'due';
+  const paymentStatus = deriveInvoicePaymentStatus(nextTotalCents, nextPaidAmountCents);
   const amountOpenCents = Math.max(0, nextTotalCents - nextPaidAmountCents);
 
   await db

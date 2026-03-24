@@ -69,7 +69,7 @@ export class AuthStack extends Stack {
       preventUserExistenceErrors: true,
       accessTokenValidity: Duration.minutes(15),
       idTokenValidity: Duration.minutes(15),
-      refreshTokenValidity: Duration.days(1),
+      refreshTokenValidity: Duration.days(30),
       enableTokenRevocation: true
     });
 

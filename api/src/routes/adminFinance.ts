@@ -4,6 +4,7 @@ import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { classPricingRule, entry, event, eventClass, eventPricingRule, invoice, invoicePayment } from '../db/schema';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
+import { deriveInvoicePaymentStatus } from '../domain/invoiceStatus';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const classRuleSchema = z.object({
@@ -295,8 +296,8 @@ export const recalculateInvoices = async (eventId: string, input: RecalcInput, a
         set: {
           totalCents: row.totalCents,
           pricingSnapshot: row.snapshot,
-          paymentStatus: sql`case when ${invoice.paidAmountCents} >= ${row.totalCents} then 'paid' else 'due' end`,
-          paidAt: sql`case when ${invoice.paidAmountCents} >= ${row.totalCents} then ${invoice.paidAt} else null end`,
+          paymentStatus: sql`case when ${row.totalCents} > 0 and ${invoice.paidAmountCents} >= ${row.totalCents} then 'paid' else 'due' end`,
+          paidAt: sql`case when ${row.totalCents} > 0 and ${invoice.paidAmountCents} >= ${row.totalCents} then ${invoice.paidAt} else null end`,
           updatedAt: now
         }
       });
@@ -395,7 +396,7 @@ export const recordInvoicePayment = async (invoiceId: string, input: PaymentInpu
   const paidAmountCents = sumRows[0]?.paidAmountCents ?? 0;
   const maxPaidAtRaw = sumRows[0]?.maxPaidAt ?? null;
   const maxPaidAt = maxPaidAtRaw ? new Date(maxPaidAtRaw) : null;
-  const paymentStatus = paidAmountCents >= current.totalCents ? 'paid' : 'due';
+  const paymentStatus = deriveInvoicePaymentStatus(current.totalCents, paidAmountCents);
 
   const [updated] = await db
     .update(invoice)

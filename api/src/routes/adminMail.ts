@@ -2065,10 +2065,16 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     template.templateKey,
     template.templateVersion,
     email,
-    {
-      entryId: row.entryId,
-      eventType: input.eventType
-    }
+    template.templateKey === 'registration_received' || template.templateKey === 'email_confirmation_reminder'
+      ? {
+          registrationGroupId: row.registrationGroupId,
+          fallbackEntryId: row.entryId,
+          eventType: input.eventType
+        }
+      : {
+          entryId: row.entryId,
+          eventType: input.eventType
+        }
   );
 
   if (!input.allowDuplicate) {

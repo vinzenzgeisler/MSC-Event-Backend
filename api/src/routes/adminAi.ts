@@ -1,11 +1,17 @@
 import { z } from 'zod';
-import { listInboxMessages } from '../ai/inbox';
-import { generateEventReport, generateReplySuggestion, generateSpeakerText, saveGeneratedDraft } from '../ai/service';
+import { getInboxMessageDetail, listInboxMessages } from '../ai/inbox';
+import { generateEventReport, generateReplySuggestion, generateSpeakerText, listGeneratedDrafts, saveGeneratedDraft } from '../ai/service';
 
 const listMessagesSchema = z.object({
   eventId: z.string().uuid().optional(),
   status: z.enum(['imported', 'processed', 'archived']).optional(),
   limit: z.number().int().min(1).max(100).optional().default(25)
+});
+
+const listDraftsSchema = z.object({
+  taskType: z.enum(['reply_suggestion', 'event_report', 'speaker_text']).optional(),
+  eventId: z.string().uuid().optional(),
+  limit: z.number().int().min(1).max(100).optional().default(20)
 });
 
 const suggestReplySchema = z.object({
@@ -15,10 +21,14 @@ const suggestReplySchema = z.object({
 
 const eventReportSchema = z.object({
   eventId: z.string().uuid(),
-  format: z.enum(['website', 'social', 'summary']),
+  classId: z.string().uuid().optional(),
+  scope: z.enum(['event', 'class']).optional().default('event'),
+  formats: z.array(z.enum(['website', 'short_summary'])).min(1).max(2),
   tone: z.enum(['neutral', 'friendly', 'formal']).optional().default('neutral'),
   length: z.enum(['short', 'medium', 'long']).optional().default('medium'),
   highlights: z.array(z.string().min(1).max(280)).max(10).optional().default([])
+}).refine((value) => value.scope === 'event' || Boolean(value.classId), {
+  message: 'Provide classId when scope is class'
 });
 
 const speakerSchema = z
@@ -44,10 +54,24 @@ const saveDraftSchema = z.object({
   modelId: z.string().max(200).optional(),
   inputSnapshot: z.record(z.unknown()).optional(),
   outputPayload: z.record(z.unknown()),
-  warnings: z.array(z.string().max(280)).max(10).optional()
+  warnings: z
+    .array(
+      z.union([
+        z.string().max(280),
+        z.object({
+          code: z.string().min(1).max(80),
+          severity: z.enum(['low', 'medium', 'high']).optional().default('medium'),
+          message: z.string().min(1).max(400)
+        })
+      ])
+    )
+    .max(10)
+    .optional()
 });
 
 export const listAiMessages = async (query: z.infer<typeof listMessagesSchema>) => listInboxMessages(query);
+export const getAiMessage = async (messageId: string) => getInboxMessageDetail(messageId);
+export const listAiDraftHistory = async (query: z.infer<typeof listDraftsSchema>) => listGeneratedDrafts(query);
 
 export const suggestReplyForMessage = async (
   messageId: string,
@@ -68,6 +92,12 @@ export const validateListAiMessagesInput = (query: Record<string, string | undef
   listMessagesSchema.parse({
     eventId: query.eventId,
     status: query.status,
+    limit: query.limit === undefined ? undefined : Number(query.limit)
+  });
+export const validateListAiDraftsInput = (query: Record<string, string | undefined>) =>
+  listDraftsSchema.parse({
+    taskType: query.taskType,
+    eventId: query.eventId,
     limit: query.limit === undefined ? undefined : Number(query.limit)
   });
 

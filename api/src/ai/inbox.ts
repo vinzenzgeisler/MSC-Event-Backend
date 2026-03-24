@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { writeAuditLog } from '../audit/log';
-import { aiMessageSource, entry, event, person } from '../db/schema';
+import { aiMessageSource, entry, event, invoice, person } from '../db/schema';
 import { uploadAssetFile } from '../docs/storage';
 import { isPgUniqueViolation } from '../http/dbErrors';
 
@@ -189,4 +189,83 @@ export const listInboxMessages = async (query: { eventId?: string; status?: 'imp
     ...row,
     preview: row.textContent.slice(0, 280)
   }));
+};
+
+export const getInboxMessageDetail = async (messageId: string) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: aiMessageSource.id,
+      source: aiMessageSource.source,
+      mailboxKey: aiMessageSource.mailboxKey,
+      fromEmail: aiMessageSource.fromEmail,
+      fromName: aiMessageSource.fromName,
+      toEmail: aiMessageSource.toEmail,
+      subject: aiMessageSource.subject,
+      receivedAt: aiMessageSource.receivedAt,
+      eventId: aiMessageSource.eventId,
+      entryId: aiMessageSource.entryId,
+      status: aiMessageSource.status,
+      aiCategory: aiMessageSource.aiCategory,
+      aiSummary: aiMessageSource.aiSummary,
+      aiLastProcessedAt: aiMessageSource.aiLastProcessedAt,
+      textContent: aiMessageSource.textContent,
+      createdAt: aiMessageSource.createdAt,
+      eventName: event.name,
+      eventContactEmail: event.contactEmail,
+      registrationStatus: entry.registrationStatus,
+      acceptanceStatus: entry.acceptanceStatus,
+      orgaCode: entry.orgaCode,
+      paymentStatus: invoice.paymentStatus
+    })
+    .from(aiMessageSource)
+    .leftJoin(event, eq(aiMessageSource.eventId, event.id))
+    .leftJoin(entry, eq(aiMessageSource.entryId, entry.id))
+    .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+    .where(eq(aiMessageSource.id, messageId))
+    .limit(1);
+
+  const current = rows[0];
+  if (!current) {
+    return null;
+  }
+
+  return {
+    message: {
+      id: current.id,
+      source: current.source,
+      mailboxKey: current.mailboxKey,
+      fromEmail: current.fromEmail,
+      fromName: current.fromName,
+      toEmail: current.toEmail,
+      subject: current.subject,
+      receivedAt: current.receivedAt,
+      eventId: current.eventId,
+      entryId: current.entryId,
+      status: current.status,
+      aiCategory: current.aiCategory,
+      aiSummary: current.aiSummary,
+      aiLastProcessedAt: current.aiLastProcessedAt,
+      textContent: current.textContent,
+      createdAt: current.createdAt
+    },
+    basis: {
+      event: current.eventId
+        ? {
+            id: current.eventId,
+            name: current.eventName,
+            contactEmail: current.eventContactEmail
+          }
+        : null,
+      entry: current.entryId
+        ? {
+            id: current.entryId,
+            registrationStatus: current.registrationStatus,
+            acceptanceStatus: current.acceptanceStatus,
+            paymentStatus: current.paymentStatus,
+            orgaCode: current.orgaCode
+          }
+        : null
+    }
+  };
 };

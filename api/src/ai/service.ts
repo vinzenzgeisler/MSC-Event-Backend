@@ -42,6 +42,14 @@ const normalizeReplyCategory = (
   return 'sonstiges';
 };
 
+const warningSchema = z.object({
+  code: z.string().min(1).max(80),
+  severity: z.enum(['low', 'medium', 'high']).default('medium'),
+  message: z.string().min(1).max(400)
+});
+
+type AiWarning = z.infer<typeof warningSchema>;
+
 const replySuggestionSchema = z.object({
   summary: z.string().min(1).max(600),
   category: z.string().transform(normalizeReplyCategory),
@@ -102,6 +110,38 @@ const resolveLengthHint = (length: 'short' | 'medium' | 'long'): string => {
 };
 
 const AI_ASSISTANT_KNOWLEDGE_KEY = 'ai_assistant_knowledge';
+
+const withTaskEnvelope = <TResult extends Record<string, unknown>, TBasis extends Record<string, unknown> | null>(input: {
+  task: 'reply_suggestion' | 'event_report' | 'speaker_text';
+  result: TResult;
+  basis: TBasis;
+  warnings: AiWarning[];
+  confidence: 'low' | 'medium' | 'high';
+  modelId: string;
+  promptVersion?: string;
+}) => ({
+  task: input.task,
+  result: input.result,
+  basis: input.basis,
+  warnings: input.warnings,
+  review: {
+    required: true,
+    status: 'draft' as const,
+    confidence: input.confidence
+  },
+  meta: {
+    modelId: input.modelId,
+    promptVersion: input.promptVersion ?? 'v1',
+    generatedAt: new Date().toISOString()
+  }
+});
+
+const normalizeWarnings = (warnings: string[], fallbackCode: string): AiWarning[] =>
+  warnings.map((warning) => ({
+    code: fallbackCode,
+    severity: 'medium' as const,
+    message: warning
+  }));
 
 const toCompactArray = (values: Array<string | null | undefined>, limit = 8): string[] =>
   values
@@ -245,6 +285,49 @@ const loadEventReportContext = async (eventId: string) => {
     event: current,
     counts: counts[0] ?? { entriesTotal: 0, acceptedTotal: 0, paidTotal: 0 },
     classes: classRows
+  };
+};
+
+const loadClassReportContext = async (eventId: string, classId: string) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      eventId: event.id,
+      eventName: event.name,
+      classId: eventClass.id,
+      className: eventClass.name
+    })
+    .from(eventClass)
+    .innerJoin(event, eq(eventClass.eventId, event.id))
+    .where(and(eq(eventClass.eventId, eventId), eq(eventClass.id, classId)))
+    .limit(1);
+
+  const current = rows[0];
+  if (!current) {
+    return null;
+  }
+
+  const counts = await db
+    .select({
+      entriesTotal: sql<number>`count(*)::int`,
+      acceptedTotal: sql<number>`count(*) filter (where ${entry.acceptanceStatus} = 'accepted')::int`,
+      paidTotal: sql<number>`count(*) filter (where ${invoice.paymentStatus} = 'paid')::int`
+    })
+    .from(entry)
+    .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+    .where(and(eq(entry.eventId, eventId), eq(entry.classId, classId), sql`${entry.deletedAt} is null`))
+    .limit(1);
+
+  return {
+    event: {
+      id: current.eventId,
+      name: current.eventName
+    },
+    class: {
+      id: current.classId,
+      name: current.className
+    },
+    counts: counts[0] ?? { entriesTotal: 0, acceptedTotal: 0, paidTotal: 0 }
   };
 };
 
@@ -424,17 +507,72 @@ export const generateReplySuggestion = async (
     }
   });
 
+  const warnings = normalizeWarnings(generated.data.warnings ?? [], 'REVIEW_NOTE');
+  const missingDocumentWarning =
+    generated.data.category === 'unterlagen'
+      ? [
+          {
+            code: 'MISSING_DOCUMENT_DETAILS',
+            severity: 'medium' as const,
+            message: 'Es gibt keinen strukturierten Datensatz, welche Unterlagen konkret fehlen.'
+          }
+        ]
+      : [];
+
   return {
     messageId,
-    modelId: generated.modelId,
-    ...generated.data
+    ...withTaskEnvelope({
+      task: 'reply_suggestion',
+      result: {
+        summary: generated.data.summary,
+        category: generated.data.category,
+        replyDraft: generated.data.replyDraft,
+        analysis: {
+          intent: generated.data.category,
+          language: 'de'
+        }
+      },
+      basis: {
+        message: {
+          id: messageId,
+          subject: current.subject
+        },
+        event: current.eventId
+          ? {
+              id: current.eventId,
+              name: current.eventName,
+              contactEmail: current.eventContactEmail ?? entryConfirmationConfig.organizerContactEmail
+            }
+          : null,
+        entry: current.entryId
+          ? {
+              id: current.entryId,
+              registrationStatus: current.registrationStatus,
+              acceptanceStatus: current.acceptanceStatus,
+              paymentStatus: current.paymentStatus,
+              amountOpenCents,
+              paymentReference
+            }
+          : null,
+        usedKnowledge: {
+          faqCount: assistantKnowledge.faq.length,
+          logisticsNotesCount: assistantKnowledge.logisticsNotes.length,
+          previousOutgoingCount: recentOutgoing.length
+        }
+      },
+      warnings: [...warnings, ...missingDocumentWarning],
+      confidence: generated.data.confidence,
+      modelId: generated.modelId
+    })
   };
 };
 
 export const generateEventReport = async (
   input: {
     eventId: string;
-    format: 'website' | 'social' | 'summary';
+    classId?: string;
+    scope: 'event' | 'class';
+    formats: Array<'website' | 'short_summary'>;
     tone: 'neutral' | 'friendly' | 'formal';
     length: 'short' | 'medium' | 'long';
     highlights?: string[];
@@ -442,32 +580,45 @@ export const generateEventReport = async (
   actorUserId: string | null
 ) => {
   const db = await getDb();
-  const context = await loadEventReportContext(input.eventId);
-  if (!context) {
+  const eventContext = input.scope === 'class' && input.classId ? await loadClassReportContext(input.eventId, input.classId) : null;
+  const generalContext = input.scope === 'event' ? await loadEventReportContext(input.eventId) : null;
+  const context = eventContext ?? generalContext;
+  if (!context || (input.scope === 'class' && !eventContext)) {
     return null;
   }
-  const generated = await generateStructuredObject({
-    schema: reportSchema,
-    systemPrompt: buildReportSystemPrompt(),
-    userPrompt: renderJsonPrompt(
-      'generate an event communication draft',
-      {
-        targetFormat: input.format,
-        tone: input.tone,
-        targetLength: resolveLengthHint(input.length),
-        event: context.event,
-        counts: context.counts,
-        classes: context.classes,
-        highlights: input.highlights ?? []
-      },
-      {
-        title: 'string?',
-        teaser: 'string|null',
-        text: 'string',
-        warnings: 'string[]'
-      }
-    )
-  });
+  const variants = await Promise.all(
+    input.formats.map(async (format) => {
+      const generated = await generateStructuredObject({
+        schema: reportSchema,
+        systemPrompt: buildReportSystemPrompt(),
+        userPrompt: renderJsonPrompt(
+          'generate an event communication draft',
+          {
+            scope: input.scope,
+            targetFormat: format,
+            tone: input.tone,
+            targetLength: resolveLengthHint(input.length),
+            event: context.event,
+            class: 'class' in context ? context.class : null,
+            counts: context.counts,
+            classes: 'classes' in context ? context.classes : undefined,
+            highlights: input.highlights ?? []
+          },
+          {
+            title: 'string?',
+            teaser: 'string|null',
+            text: 'string',
+            warnings: 'string[]'
+          }
+        )
+      });
+
+      return {
+        generated,
+        format
+      };
+    })
+  );
 
   await writeAuditLog(db as never, {
     eventId: input.eventId,
@@ -477,16 +628,43 @@ export const generateEventReport = async (
     entityId: input.eventId as never,
     payload: {
       eventId: input.eventId,
-      format: input.format,
+      format: input.formats[0] ?? null,
       length: input.length
     }
   });
 
+  const warnings = [
+    ...variants.flatMap((variant) => normalizeWarnings(variant.generated.data.warnings ?? [], 'REVIEW_NOTE')),
+    {
+      code: 'NO_RESULTS_DATA',
+      severity: 'medium' as const,
+      message: 'Es liegen keine strukturierten Ergebnisdaten vor; der Text basiert auf Stammdaten und manuellen Highlights.'
+    }
+  ];
+
   return {
     eventId: input.eventId,
-    modelId: generated.modelId,
-    format: input.format,
-    ...generated.data
+    ...withTaskEnvelope({
+      task: 'event_report',
+      result: {
+        variants: variants.map((variant) => ({
+          format: variant.format,
+          title: variant.generated.data.title ?? null,
+          teaser: variant.generated.data.teaser ?? null,
+          text: variant.generated.data.text
+        }))
+      },
+      basis: {
+        scope: input.scope,
+        event: context.event,
+        class: 'class' in context ? context.class : null,
+        facts: context.counts,
+        highlights: input.highlights ?? []
+      },
+      warnings,
+      confidence: warnings.length > 1 ? 'medium' : 'high',
+      modelId: variants[0]?.generated.modelId ?? 'unknown'
+    })
   };
 };
 
@@ -540,9 +718,21 @@ export const generateSpeakerText = async (
 
   return {
     eventId: input.eventId,
-    modelId: generated.modelId,
-    mode: input.mode,
-    ...generated.data
+    ...withTaskEnvelope({
+      task: 'speaker_text',
+      result: {
+        text: generated.data.text,
+        facts: generated.data.facts
+      },
+      basis: {
+        focusType: input.entryId ? 'entry' : 'class',
+        context,
+        highlights: input.highlights ?? []
+      },
+      warnings: normalizeWarnings(generated.data.warnings ?? [], 'INCOMPLETE_SPEAKER_CONTEXT'),
+      confidence: (generated.data.warnings ?? []).length > 0 ? 'medium' : 'high',
+      modelId: generated.modelId
+    })
   };
 };
 
@@ -558,7 +748,7 @@ export const saveGeneratedDraft = async (
     modelId?: string;
     inputSnapshot?: Record<string, unknown>;
     outputPayload: Record<string, unknown>;
-    warnings?: string[];
+    warnings?: Array<string | AiWarning>;
   },
   actorUserId: string | null
 ) => {
@@ -577,7 +767,15 @@ export const saveGeneratedDraft = async (
       modelId: input.modelId ?? null,
       inputSnapshot: input.inputSnapshot ?? {},
       outputPayload: input.outputPayload,
-      warnings: input.warnings ?? [],
+      warnings: (input.warnings ?? []).map((warning) =>
+        typeof warning === 'string'
+          ? {
+              code: 'REVIEW_NOTE',
+              severity: 'medium',
+              message: warning
+            }
+          : warning
+      ),
       createdBy: actorUserId,
       createdAt: now,
       updatedAt: now
@@ -613,4 +811,38 @@ export const saveGeneratedDraft = async (
   });
 
   return created;
+};
+
+export const listGeneratedDrafts = async (query: {
+  taskType?: 'reply_suggestion' | 'event_report' | 'speaker_text';
+  eventId?: string;
+  limit?: number;
+}) => {
+  const db = await getDb();
+  const conditions = [];
+  if (query.taskType) {
+    conditions.push(eq(aiDraft.taskType, query.taskType));
+  }
+  if (query.eventId) {
+    conditions.push(eq(aiDraft.eventId, query.eventId));
+  }
+
+  const rows = await db
+    .select({
+      id: aiDraft.id,
+      taskType: aiDraft.taskType,
+      title: aiDraft.title,
+      status: aiDraft.status,
+      eventId: aiDraft.eventId,
+      entryId: aiDraft.entryId,
+      messageId: aiDraft.messageId,
+      createdAt: aiDraft.createdAt,
+      updatedAt: aiDraft.updatedAt
+    })
+    .from(aiDraft)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(aiDraft.createdAt))
+    .limit(query.limit ?? 20);
+
+  return rows;
 };

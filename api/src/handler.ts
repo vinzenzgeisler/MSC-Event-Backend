@@ -125,11 +125,14 @@ import { getDashboardSummary, validateDashboardSummaryQuery } from './routes/adm
 import {
   generateAiEventReport,
   generateAiSpeakerText,
+  getAiMessage,
+  listAiDraftHistory,
   listAiMessages,
   saveAiDraft,
   suggestReplyForMessage,
   validateGenerateEventReportInput,
   validateGenerateSpeakerTextInput,
+  validateListAiDraftsInput,
   validateListAiMessagesInput,
   validateSaveAiDraftInput,
   validateSuggestReplyInput
@@ -2351,6 +2354,23 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  const aiMessageDetailMatch = path.match(/^\/admin\/ai\/messages\/([^/]+)$/);
+  if (method === 'GET' && aiMessageDetailMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const result = await getAiMessage(aiMessageDetailMatch[1]);
+      if (!result) {
+        return errorJson(404, 'AI message not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      return errorJson(500, 'Get AI message failed');
+    }
+  }
+
   const aiReplyMatch = path.match(/^\/admin\/ai\/messages\/([^/]+)\/suggest-reply$/);
   if (method === 'POST' && aiReplyMatch) {
     const auth = getAuthContext(event);
@@ -2451,6 +2471,23 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Invalid JSON body');
       }
       return errorJson(500, 'Save AI draft failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/ai/drafts') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const query = validateListAiDraftsInput(event.queryStringParameters ?? {});
+      const drafts = await listAiDraftHistory(query);
+      return json(200, { ok: true, drafts });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      return errorJson(500, 'List AI drafts failed');
     }
   }
 

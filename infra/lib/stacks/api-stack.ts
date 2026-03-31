@@ -922,6 +922,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/ai/drafts/{id}',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/ai/knowledge-suggestions',
       methods: [apigwv2.HttpMethod.GET],
       integration,

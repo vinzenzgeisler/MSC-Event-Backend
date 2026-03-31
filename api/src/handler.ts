@@ -128,6 +128,7 @@ import {
   generateAiEventReport,
   generateAiSpeakerText,
   generateKnowledgeSuggestionsForAiMessage,
+  getAiDraft,
   getAiMessage,
   listAiDraftHistory,
   listAiKnowledgeItemHistory,
@@ -145,7 +146,9 @@ import {
   validateListAiMessagesInput,
   validateMessageChatInput,
   validateSaveAiDraftInput,
-  validateSuggestReplyInput
+  validateSuggestReplyInput,
+  validateUpdateAiReplyDraftInput,
+  updateAiReplyDraft
 } from './routes/adminAi';
 import {
   createTechCheckBatchDocument,
@@ -2554,6 +2557,50 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
       return errorJson(500, 'List AI drafts failed');
+    }
+  }
+
+  const aiDraftDetailMatch = path.match(/^\/admin\/ai\/drafts\/([^/]+)$/);
+  if (method === 'GET' && aiDraftDetailMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const draft = await getAiDraft(aiDraftDetailMatch[1]);
+      if (!draft) {
+        return errorJson(404, 'AI draft not found');
+      }
+      return json(200, { ok: true, draft });
+    } catch (error) {
+      return errorJson(500, 'Get AI draft failed');
+    }
+  }
+
+  if (method === 'PATCH' && aiDraftDetailMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateUpdateAiReplyDraftInput(payload);
+      const draft = await updateAiReplyDraft(aiDraftDetailMatch[1], input, auth.sub);
+      if (!draft) {
+        return errorJson(404, 'AI draft not found');
+      }
+      return json(200, { ok: true, draft });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'AI_DRAFT_NOT_REPLY_SUGGESTION') {
+        return errorJson(409, 'Draft is not a reply suggestion', undefined, 'AI_DRAFT_NOT_REPLY_SUGGESTION');
+      }
+      return errorJson(500, 'Update AI draft failed');
     }
   }
 

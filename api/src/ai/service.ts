@@ -1613,6 +1613,121 @@ export const saveGeneratedDraft = async (
   return created;
 };
 
+export const getGeneratedDraft = async (draftId: string) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: aiDraft.id,
+      taskType: aiDraft.taskType,
+      status: aiDraft.status,
+      eventId: aiDraft.eventId,
+      entryId: aiDraft.entryId,
+      messageId: aiDraft.messageId,
+      title: aiDraft.title,
+      promptVersion: aiDraft.promptVersion,
+      modelId: aiDraft.modelId,
+      inputSnapshot: aiDraft.inputSnapshot,
+      outputPayload: aiDraft.outputPayload,
+      warnings: aiDraft.warnings,
+      createdBy: aiDraft.createdBy,
+      createdAt: aiDraft.createdAt,
+      updatedAt: aiDraft.updatedAt
+    })
+    .from(aiDraft)
+    .where(eq(aiDraft.id, draftId))
+    .limit(1);
+
+  return rows[0] ?? null;
+};
+
+export const updateReplyDraft = async (
+  draftId: string,
+  input: {
+    replySubject: string;
+    replyDraft: string;
+    answerFacts: string[];
+    unknowns: string[];
+    operatorEdits?: Record<string, unknown>;
+  },
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const current = await getGeneratedDraft(draftId);
+  if (!current) {
+    return null;
+  }
+  if (current.taskType !== 'reply_suggestion') {
+    throw new Error('AI_DRAFT_NOT_REPLY_SUGGESTION');
+  }
+
+  const now = new Date();
+  const outputPayload = ((current.outputPayload ?? {}) as Record<string, unknown>) || {};
+  const existingOperatorEdits =
+    outputPayload.operatorEdits && typeof outputPayload.operatorEdits === 'object' && !Array.isArray(outputPayload.operatorEdits)
+      ? (outputPayload.operatorEdits as Record<string, unknown>)
+      : {};
+
+  const updatedOutputPayload = {
+    ...outputPayload,
+    replySubject: input.replySubject,
+    replyDraft: input.replyDraft,
+    answerFacts: uniqueStrings(input.answerFacts, 12),
+    unknowns: uniqueStrings(input.unknowns, 12),
+    operatorEdits: {
+      ...existingOperatorEdits,
+      ...(input.operatorEdits ?? {}),
+      editedBy: actorUserId,
+      editedAt: now.toISOString()
+    },
+    editedBy: actorUserId,
+    editedAt: now.toISOString()
+  };
+
+  const [updated] = await db
+    .update(aiDraft)
+    .set({
+      outputPayload: updatedOutputPayload,
+      updatedAt: now
+    })
+    .where(eq(aiDraft.id, draftId))
+    .returning({
+      id: aiDraft.id,
+      taskType: aiDraft.taskType,
+      status: aiDraft.status,
+      eventId: aiDraft.eventId,
+      entryId: aiDraft.entryId,
+      messageId: aiDraft.messageId,
+      title: aiDraft.title,
+      promptVersion: aiDraft.promptVersion,
+      modelId: aiDraft.modelId,
+      inputSnapshot: aiDraft.inputSnapshot,
+      outputPayload: aiDraft.outputPayload,
+      warnings: aiDraft.warnings,
+      createdBy: aiDraft.createdBy,
+      createdAt: aiDraft.createdAt,
+      updatedAt: aiDraft.updatedAt
+    });
+
+  if (!updated) {
+    throw new Error('AI_DRAFT_UPDATE_FAILED');
+  }
+
+  await writeAuditLog(db as never, {
+    eventId: updated.eventId,
+    actorUserId,
+    action: 'ai_draft_updated',
+    entityType: 'ai_draft',
+    entityId: updated.id as never,
+    payload: {
+      draftId: updated.id,
+      taskType: updated.taskType,
+      messageId: updated.messageId
+    }
+  });
+
+  return updated;
+};
+
 export const listKnowledgeSuggestions = async (query: {
   eventId?: string;
   messageId?: string;

@@ -75,6 +75,10 @@ Response:
 
 Draft-Historie fuer gespeicherte Reply-, Report- und Speaker-Entwuerfe.
 
+### `GET /admin/ai/drafts/{id}`
+
+Laedt einen einzelnen gespeicherten Draft inklusive `outputPayload` und `warnings`.
+
 ### `GET /admin/ai/knowledge-suggestions`
 
 Listet reviewpflichtige Wissensvorschlaege.
@@ -288,6 +292,37 @@ Unveraendert gegenueber dem bisherigen Speaker-Contract.
 ### `POST /admin/ai/drafts`
 
 Speichert einen explizit uebernommenen Entwurf.
+
+### `PATCH /admin/ai/drafts/{id}`
+
+Aktualisiert einen bestehenden `reply_suggestion`-Draft serverseitig.
+
+Request:
+
+```json
+{
+  "replySubject": "Re: Aktualisierte Rueckfrage zur Nennung",
+  "replyDraft": "Hallo ..., vielen Dank fuer Ihre Rueckfrage ...",
+  "answerFacts": [
+    "Die Nennung ist im System eingegangen.",
+    "Die Nennung ist zugelassen."
+  ],
+  "unknowns": [
+    "Konkrete fehlende Unterlagen sind derzeit nicht strukturiert hinterlegt."
+  ],
+  "operatorEdits": {
+    "source": "frontend-edit",
+    "note": "Text manuell geschaerft"
+  }
+}
+```
+
+Verhalten:
+
+- aktualisiert den bearbeiteten Nutzinhalt in `outputPayload`
+- ergaenzt `operatorEdits.editedBy` und `operatorEdits.editedAt`
+- erhaelt vorhandene `basis`, `review` und `warnings` getrennt
+- erneutes `GET /admin/ai/drafts/{id}` liefert die bearbeitete Version
 
 ### `POST /admin/ai/knowledge-items`
 

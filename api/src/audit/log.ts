@@ -40,6 +40,7 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   ai_report_generated: ['eventId', 'format', 'length'],
   ai_speaker_text_generated: ['eventId', 'entryId', 'classId', 'mode'],
   ai_draft_saved: ['draftId', 'taskType', 'status', 'eventId', 'entryId', 'messageId'],
+  ai_draft_updated: ['draftId', 'taskType', 'messageId'],
   ai_knowledge_suggestions_generated: ['messageId', 'suggestionCount', 'topicHint'],
   ai_knowledge_item_saved: ['knowledgeItemId', 'suggestionId', 'topic', 'status'],
   public_entry_created: ['registrationStatus', 'registrationGroupId'],

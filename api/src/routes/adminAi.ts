@@ -5,11 +5,13 @@ import {
   generateEventReport,
   generateKnowledgeSuggestionsForMessage,
   generateMessageChat,
+  getGeneratedDraft,
   generateReplySuggestion,
   generateSpeakerText,
   listGeneratedDrafts,
   listKnowledgeItems,
   listKnowledgeSuggestions,
+  updateReplyDraft,
   saveGeneratedDraft
 } from '../ai/service';
 
@@ -136,6 +138,7 @@ const saveDraftSchema = z.object({
 export const listAiMessages = async (query: z.infer<typeof listMessagesSchema>) => listInboxMessages(query);
 export const getAiMessage = async (messageId: string) => getInboxMessageDetail(messageId);
 export const listAiDraftHistory = async (query: z.infer<typeof listDraftsSchema>) => listGeneratedDrafts(query);
+export const getAiDraft = async (draftId: string) => getGeneratedDraft(draftId);
 export const listAiKnowledgeSuggestionHistory = async (query: z.infer<typeof listKnowledgeSuggestionsSchema>) => listKnowledgeSuggestions(query);
 export const listAiKnowledgeItemHistory = async (query: z.infer<typeof listKnowledgeItemsSchema>) => listKnowledgeItems(query);
 
@@ -165,6 +168,19 @@ export const generateAiSpeakerText = async (input: z.infer<typeof speakerSchema>
 
 export const saveAiDraft = async (input: z.infer<typeof saveDraftSchema>, actorUserId: string | null) =>
   saveGeneratedDraft(input, actorUserId);
+const updateReplyDraftSchema = z.object({
+  replySubject: z.string().min(1).max(240),
+  replyDraft: z.string().min(1).max(4000),
+  answerFacts: z.array(z.string().min(1).max(240)).max(12),
+  unknowns: z.array(z.string().min(1).max(280)).max(12),
+  operatorEdits: z.record(z.unknown()).optional()
+});
+
+export const updateAiReplyDraft = async (
+  draftId: string,
+  input: z.infer<typeof updateReplyDraftSchema>,
+  actorUserId: string | null
+) => updateReplyDraft(draftId, input, actorUserId);
 
 export const createAiKnowledgeItem = async (input: z.infer<typeof createKnowledgeItemSchema>, actorUserId: string | null) =>
   createKnowledgeItem(input, actorUserId);
@@ -204,3 +220,4 @@ export const validateGenerateEventReportInput = (payload: unknown) => eventRepor
 export const validateGenerateSpeakerTextInput = (payload: unknown) => speakerSchema.parse(payload);
 export const validateSaveAiDraftInput = (payload: unknown) => saveDraftSchema.parse(payload);
 export const validateCreateAiKnowledgeItemInput = (payload: unknown) => createKnowledgeItemSchema.parse(payload);
+export const validateUpdateAiReplyDraftInput = (payload: unknown) => updateReplyDraftSchema.parse(payload);

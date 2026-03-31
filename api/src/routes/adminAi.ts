@@ -1,16 +1,19 @@
 import { z } from 'zod';
 import { getInboxMessageDetail, listInboxMessages } from '../ai/inbox';
 import {
+  archiveKnowledgeItem,
   createKnowledgeItem,
   generateEventReport,
   generateKnowledgeSuggestionsForMessage,
   generateMessageChat,
   getGeneratedDraft,
+  getKnowledgeItem,
   generateReplySuggestion,
   generateSpeakerText,
   listGeneratedDrafts,
   listKnowledgeItems,
   listKnowledgeSuggestions,
+  updateKnowledgeItem,
   updateReplyDraft,
   saveGeneratedDraft
 } from '../ai/service';
@@ -85,6 +88,13 @@ const listKnowledgeItemsSchema = z.object({
   limit: z.number().int().min(1).max(100).optional().default(20)
 });
 
+const updateKnowledgeItemSchema = z.object({
+  topic: knowledgeTopicSchema,
+  title: z.string().min(1).max(180),
+  content: z.string().min(1).max(3000),
+  status: z.enum(['suggested', 'approved', 'archived'])
+});
+
 const eventReportSchema = z.object({
   eventId: z.string().uuid(),
   classId: z.string().uuid().optional(),
@@ -141,6 +151,7 @@ export const listAiDraftHistory = async (query: z.infer<typeof listDraftsSchema>
 export const getAiDraft = async (draftId: string) => getGeneratedDraft(draftId);
 export const listAiKnowledgeSuggestionHistory = async (query: z.infer<typeof listKnowledgeSuggestionsSchema>) => listKnowledgeSuggestions(query);
 export const listAiKnowledgeItemHistory = async (query: z.infer<typeof listKnowledgeItemsSchema>) => listKnowledgeItems(query);
+export const getAiKnowledgeItem = async (knowledgeItemId: string) => getKnowledgeItem(knowledgeItemId);
 
 export const suggestReplyForMessage = async (
   messageId: string,
@@ -184,6 +195,13 @@ export const updateAiReplyDraft = async (
 
 export const createAiKnowledgeItem = async (input: z.infer<typeof createKnowledgeItemSchema>, actorUserId: string | null) =>
   createKnowledgeItem(input, actorUserId);
+export const updateAiKnowledgeItem = async (
+  knowledgeItemId: string,
+  input: z.infer<typeof updateKnowledgeItemSchema>,
+  actorUserId: string | null
+) => updateKnowledgeItem(knowledgeItemId, input, actorUserId);
+export const archiveAiKnowledgeItem = async (knowledgeItemId: string, actorUserId: string | null) =>
+  archiveKnowledgeItem(knowledgeItemId, actorUserId);
 
 export const validateListAiMessagesInput = (query: Record<string, string | undefined>) =>
   listMessagesSchema.parse({
@@ -221,3 +239,4 @@ export const validateGenerateSpeakerTextInput = (payload: unknown) => speakerSch
 export const validateSaveAiDraftInput = (payload: unknown) => saveDraftSchema.parse(payload);
 export const validateCreateAiKnowledgeItemInput = (payload: unknown) => createKnowledgeItemSchema.parse(payload);
 export const validateUpdateAiReplyDraftInput = (payload: unknown) => updateReplyDraftSchema.parse(payload);
+export const validateUpdateAiKnowledgeItemInput = (payload: unknown) => updateKnowledgeItemSchema.parse(payload);

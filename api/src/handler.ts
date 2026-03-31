@@ -123,12 +123,14 @@ import {
 } from './routes/adminMail';
 import { getDashboardSummary, validateDashboardSummaryQuery } from './routes/adminDashboard';
 import {
+  archiveAiKnowledgeItem,
   createAiKnowledgeItem,
   generateChatForMessage,
   generateAiEventReport,
   generateAiSpeakerText,
   generateKnowledgeSuggestionsForAiMessage,
   getAiDraft,
+  getAiKnowledgeItem,
   getAiMessage,
   listAiDraftHistory,
   listAiKnowledgeItemHistory,
@@ -147,7 +149,9 @@ import {
   validateMessageChatInput,
   validateSaveAiDraftInput,
   validateSuggestReplyInput,
+  validateUpdateAiKnowledgeItemInput,
   validateUpdateAiReplyDraftInput,
+  updateAiKnowledgeItem,
   updateAiReplyDraft
 } from './routes/adminAi';
 import {
@@ -2635,6 +2639,63 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
       return errorJson(500, 'List AI knowledge items failed');
+    }
+  }
+
+  const aiKnowledgeItemMatch = path.match(/^\/admin\/ai\/knowledge-items\/([^/]+)$/);
+  if (method === 'GET' && aiKnowledgeItemMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const item = await getAiKnowledgeItem(aiKnowledgeItemMatch[1]);
+      if (!item) {
+        return errorJson(404, 'AI knowledge item not found');
+      }
+      return json(200, { ok: true, item });
+    } catch (error) {
+      return errorJson(500, 'Get AI knowledge item failed');
+    }
+  }
+
+  if (method === 'PATCH' && aiKnowledgeItemMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateUpdateAiKnowledgeItemInput(payload);
+      const item = await updateAiKnowledgeItem(aiKnowledgeItemMatch[1], input, auth.sub);
+      if (!item) {
+        return errorJson(404, 'AI knowledge item not found');
+      }
+      return json(200, { ok: true, item });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Update AI knowledge item failed');
+    }
+  }
+
+  if (method === 'DELETE' && aiKnowledgeItemMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const item = await archiveAiKnowledgeItem(aiKnowledgeItemMatch[1], auth.sub);
+      if (!item) {
+        return errorJson(404, 'AI knowledge item not found');
+      }
+      return json(200, { ok: true, item });
+    } catch (error) {
+      return errorJson(500, 'Archive AI knowledge item failed');
     }
   }
 

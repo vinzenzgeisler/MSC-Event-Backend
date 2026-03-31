@@ -1843,6 +1843,9 @@ export const createKnowledgeItem = async (
       createdBy: actorUserId,
       approvedBy: actorUserId,
       approvedAt: input.status === 'suggested' ? null : now,
+      updatedBy: actorUserId,
+      archivedBy: input.status === 'archived' ? actorUserId : null,
+      archivedAt: input.status === 'archived' ? now : null,
       metadata: input.metadata ?? {},
       createdAt: now,
       updatedAt: now
@@ -1857,6 +1860,9 @@ export const createKnowledgeItem = async (
       content: aiKnowledgeItem.content,
       status: aiKnowledgeItem.status,
       sourceType: aiKnowledgeItem.sourceType,
+      updatedBy: aiKnowledgeItem.updatedBy,
+      archivedBy: aiKnowledgeItem.archivedBy,
+      archivedAt: aiKnowledgeItem.archivedAt,
       createdAt: aiKnowledgeItem.createdAt
     });
 
@@ -1896,6 +1902,182 @@ export const createKnowledgeItem = async (
   };
 };
 
+export const getKnowledgeItem = async (knowledgeItemId: string) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: aiKnowledgeItem.id,
+      eventId: aiKnowledgeItem.eventId,
+      messageId: aiKnowledgeItem.messageId,
+      suggestionId: aiKnowledgeItem.suggestionId,
+      topic: aiKnowledgeItem.topic,
+      title: aiKnowledgeItem.title,
+      content: aiKnowledgeItem.content,
+      status: aiKnowledgeItem.status,
+      sourceType: aiKnowledgeItem.sourceType,
+      createdBy: aiKnowledgeItem.createdBy,
+      approvedBy: aiKnowledgeItem.approvedBy,
+      approvedAt: aiKnowledgeItem.approvedAt,
+      updatedBy: aiKnowledgeItem.updatedBy,
+      archivedBy: aiKnowledgeItem.archivedBy,
+      archivedAt: aiKnowledgeItem.archivedAt,
+      metadata: aiKnowledgeItem.metadata,
+      createdAt: aiKnowledgeItem.createdAt,
+      updatedAt: aiKnowledgeItem.updatedAt
+    })
+    .from(aiKnowledgeItem)
+    .where(eq(aiKnowledgeItem.id, knowledgeItemId))
+    .limit(1);
+
+  const current = rows[0];
+  if (!current) {
+    return null;
+  }
+
+  return {
+    ...current,
+    topic: knowledgeTopicSchema.parse(current.topic)
+  };
+};
+
+export const updateKnowledgeItem = async (
+  knowledgeItemId: string,
+  input: {
+    topic: KnowledgeTopic;
+    title: string;
+    content: string;
+    status: 'suggested' | 'approved' | 'archived';
+  },
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const current = await getKnowledgeItem(knowledgeItemId);
+  if (!current) {
+    return null;
+  }
+
+  const now = new Date();
+  const isArchived = input.status === 'archived';
+  const [updated] = await db
+    .update(aiKnowledgeItem)
+    .set({
+      topic: input.topic,
+      title: input.title,
+      content: input.content,
+      status: input.status,
+      updatedBy: actorUserId,
+      updatedAt: now,
+      archivedBy: isArchived ? actorUserId : null,
+      archivedAt: isArchived ? now : null,
+      approvedBy: input.status === 'approved' ? actorUserId : current.approvedBy,
+      approvedAt: input.status === 'approved' ? (current.approvedAt ?? now) : current.approvedAt
+    })
+    .where(eq(aiKnowledgeItem.id, knowledgeItemId))
+    .returning({
+      id: aiKnowledgeItem.id,
+      eventId: aiKnowledgeItem.eventId,
+      messageId: aiKnowledgeItem.messageId,
+      suggestionId: aiKnowledgeItem.suggestionId,
+      topic: aiKnowledgeItem.topic,
+      title: aiKnowledgeItem.title,
+      content: aiKnowledgeItem.content,
+      status: aiKnowledgeItem.status,
+      sourceType: aiKnowledgeItem.sourceType,
+      createdBy: aiKnowledgeItem.createdBy,
+      approvedBy: aiKnowledgeItem.approvedBy,
+      approvedAt: aiKnowledgeItem.approvedAt,
+      updatedBy: aiKnowledgeItem.updatedBy,
+      archivedBy: aiKnowledgeItem.archivedBy,
+      archivedAt: aiKnowledgeItem.archivedAt,
+      metadata: aiKnowledgeItem.metadata,
+      createdAt: aiKnowledgeItem.createdAt,
+      updatedAt: aiKnowledgeItem.updatedAt
+    });
+
+  if (!updated) {
+    throw new Error('AI_KNOWLEDGE_ITEM_UPDATE_FAILED');
+  }
+
+  await writeAuditLog(db as never, {
+    eventId: updated.eventId,
+    actorUserId,
+    action: 'ai_knowledge_item_updated',
+    entityType: 'ai_knowledge_item',
+    entityId: updated.id as never,
+    payload: {
+      knowledgeItemId: updated.id,
+      topic: updated.topic,
+      status: updated.status
+    }
+  });
+
+  return {
+    ...updated,
+    topic: knowledgeTopicSchema.parse(updated.topic)
+  };
+};
+
+export const archiveKnowledgeItem = async (knowledgeItemId: string, actorUserId: string | null) => {
+  const db = await getDb();
+  const current = await getKnowledgeItem(knowledgeItemId);
+  if (!current) {
+    return null;
+  }
+
+  const now = new Date();
+  const [updated] = await db
+    .update(aiKnowledgeItem)
+    .set({
+      status: 'archived',
+      updatedBy: actorUserId,
+      archivedBy: actorUserId,
+      archivedAt: now,
+      updatedAt: now
+    })
+    .where(eq(aiKnowledgeItem.id, knowledgeItemId))
+    .returning({
+      id: aiKnowledgeItem.id,
+      eventId: aiKnowledgeItem.eventId,
+      messageId: aiKnowledgeItem.messageId,
+      suggestionId: aiKnowledgeItem.suggestionId,
+      topic: aiKnowledgeItem.topic,
+      title: aiKnowledgeItem.title,
+      content: aiKnowledgeItem.content,
+      status: aiKnowledgeItem.status,
+      sourceType: aiKnowledgeItem.sourceType,
+      createdBy: aiKnowledgeItem.createdBy,
+      approvedBy: aiKnowledgeItem.approvedBy,
+      approvedAt: aiKnowledgeItem.approvedAt,
+      updatedBy: aiKnowledgeItem.updatedBy,
+      archivedBy: aiKnowledgeItem.archivedBy,
+      archivedAt: aiKnowledgeItem.archivedAt,
+      metadata: aiKnowledgeItem.metadata,
+      createdAt: aiKnowledgeItem.createdAt,
+      updatedAt: aiKnowledgeItem.updatedAt
+    });
+
+  if (!updated) {
+    throw new Error('AI_KNOWLEDGE_ITEM_ARCHIVE_FAILED');
+  }
+
+  await writeAuditLog(db as never, {
+    eventId: updated.eventId,
+    actorUserId,
+    action: 'ai_knowledge_item_archived',
+    entityType: 'ai_knowledge_item',
+    entityId: updated.id as never,
+    payload: {
+      knowledgeItemId: updated.id,
+      status: updated.status
+    }
+  });
+
+  return {
+    ...updated,
+    topic: knowledgeTopicSchema.parse(updated.topic)
+  };
+};
+
 export const listKnowledgeItems = async (query: {
   eventId?: string;
   topic?: KnowledgeTopic;
@@ -1925,6 +2107,9 @@ export const listKnowledgeItems = async (query: {
       content: aiKnowledgeItem.content,
       status: aiKnowledgeItem.status,
       sourceType: aiKnowledgeItem.sourceType,
+      updatedBy: aiKnowledgeItem.updatedBy,
+      archivedBy: aiKnowledgeItem.archivedBy,
+      archivedAt: aiKnowledgeItem.archivedAt,
       createdAt: aiKnowledgeItem.createdAt,
       updatedAt: aiKnowledgeItem.updatedAt
     })

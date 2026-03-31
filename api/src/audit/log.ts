@@ -43,6 +43,8 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   ai_draft_updated: ['draftId', 'taskType', 'messageId'],
   ai_knowledge_suggestions_generated: ['messageId', 'suggestionCount', 'topicHint'],
   ai_knowledge_item_saved: ['knowledgeItemId', 'suggestionId', 'topic', 'status'],
+  ai_knowledge_item_updated: ['knowledgeItemId', 'topic', 'status'],
+  ai_knowledge_item_archived: ['knowledgeItemId', 'status'],
   public_entry_created: ['registrationStatus', 'registrationGroupId'],
   public_entry_verified: ['registrationStatus', 'registrationGroupId'],
   privacy_retention_run: ['windowStart', 'windowEnd', 'deletedRows', 'errors']

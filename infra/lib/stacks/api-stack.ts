@@ -943,6 +943,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/ai/knowledge-items/{id}',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PATCH, apigwv2.HttpMethod.DELETE],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/mail/outbox/{id}/retry',
       methods: [apigwv2.HttpMethod.POST],
       integration,

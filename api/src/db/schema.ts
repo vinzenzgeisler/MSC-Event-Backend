@@ -790,6 +790,9 @@ export const aiKnowledgeItem = pgTable(
     createdBy: text('created_by'),
     approvedBy: text('approved_by'),
     approvedAt: timestamp('approved_at', { withTimezone: true }),
+    updatedBy: text('updated_by'),
+    archivedBy: text('archived_by'),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()

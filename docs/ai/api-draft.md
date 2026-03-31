@@ -102,6 +102,10 @@ Query:
 - `status? = suggested | approved | archived`
 - `limit?`
 
+### `GET /admin/ai/knowledge-items/{id}`
+
+Laedt einen einzelnen Wissenseintrag inklusive Edit-/Archiv-Metadaten.
+
 ## Generate Endpoints
 
 ### `POST /admin/ai/messages/{id}/suggest-reply`
@@ -349,3 +353,29 @@ Manueller Request:
   "status": "approved"
 }
 ```
+
+### `PATCH /admin/ai/knowledge-items/{id}`
+
+Aktualisiert einen bestehenden Wissenseintrag bei stabiler `id`.
+
+Request:
+
+```json
+{
+  "topic": "interview",
+  "title": "Interview-Anfragen Hochschulprojekt",
+  "content": "Interviewanfragen fuer Hochschulprojekte muessen mit der Rennleitung abgestimmt werden.",
+  "status": "approved"
+}
+```
+
+### `DELETE /admin/ai/knowledge-items/{id}`
+
+Soft-Delete auf der freigegebenen Wissensbasis.
+
+Verhalten:
+
+- setzt `status = archived`
+- setzt `updatedBy`, `updatedAt`, `archivedBy`, `archivedAt`
+- `GET /admin/ai/knowledge-items` zeigt die Aenderung direkt
+- `knowledge-items` bleiben klar getrennt von `knowledge-suggestions`

@@ -1,50 +1,22 @@
 # AI Communication Hub API Draft
 
-Stand: 2026-03-24
+Stand: 2026-03-31
 
 ## Read Endpoints
 
 ### `GET /admin/ai/messages`
 
-Listet importierte Inbox-Nachrichten fuer den Anfrage-Assistenten.
+Inbox-Liste fuer den Mail-Assistenten.
 
 Query:
 
 - `eventId?`
-- `status?` = `imported | processed | archived`
+- `status? = imported | processed | archived`
 - `limit?`
-
-Response:
-
-```json
-{
-  "ok": true,
-  "messages": [
-    {
-      "id": "uuid",
-      "source": "imap",
-      "mailboxKey": "dreiecksrennen-dev-imap",
-      "fromEmail": "fahrer@example.org",
-      "fromName": "Max Mustermann",
-      "toEmail": "nennung@example.org",
-      "subject": "Rueckfrage zur Nennung",
-      "receivedAt": "2026-03-24T11:00:00.000Z",
-      "eventId": "uuid",
-      "entryId": "uuid",
-      "status": "processed",
-      "aiSummary": "Rueckfrage zum Status der Nennung.",
-      "aiCategory": "nennung",
-      "textContent": "Volltext...",
-      "createdAt": "2026-03-24T11:00:02.000Z",
-      "preview": "Volltext..."
-    }
-  ]
-}
-```
 
 ### `GET /admin/ai/messages/{id}`
 
-Laedt die Detailansicht fuer den Anfrage-Assistenten.
+Mail-Detail inklusive Plaintext-Body, erkannter Systembasis und freigegebener Wissens-Treffer.
 
 Response:
 
@@ -53,47 +25,77 @@ Response:
   "ok": true,
   "message": {
     "id": "uuid",
-    "source": "imap",
-    "mailboxKey": "dreiecksrennen-dev-imap",
-    "fromEmail": "fahrer@example.org",
-    "fromName": "Max Mustermann",
-    "toEmail": "nennung@example.org",
     "subject": "Rueckfrage zur Nennung",
-    "receivedAt": "2026-03-24T11:00:00.000Z",
-    "eventId": "uuid",
-    "entryId": "uuid",
+    "fromEmail": "fahrer@example.org",
+    "receivedAt": "2026-03-31T10:00:00.000Z",
+    "bodyText": "Hallo MSC-Team,\n\n...",
+    "bodyHtml": null,
+    "bodyFormat": "text",
+    "snippet": "Hallo MSC-Team, ...",
     "status": "processed",
     "aiCategory": "nennung",
-    "aiSummary": "Rueckfrage zum Status der Nennung.",
-    "aiLastProcessedAt": "2026-03-24T11:05:00.000Z",
-    "textContent": "Volltext...",
-    "createdAt": "2026-03-24T11:00:02.000Z"
+    "aiSummary": "Rueckfrage zu Nennung und Interview."
   },
   "basis": {
     "event": {
       "id": "uuid",
-      "name": "Dreiecksrennen 2026",
+      "name": "12. Oberlausitzer Dreieck",
       "contactEmail": "info@example.org"
     },
     "entry": {
       "id": "uuid",
       "registrationStatus": "submitted_verified",
+      "registrationStatusLabel": "E-Mail bestaetigt, Nennung eingegangen",
       "acceptanceStatus": "accepted",
+      "acceptanceStatusLabel": "Zugelassen",
       "paymentStatus": "due",
-      "orgaCode": "MSC-2026-123"
+      "paymentStatusLabel": "Offen",
+      "orgaCode": "MSC-2026-123",
+      "amountOpenCents": 23000,
+      "driverName": "Vinzenz Geisler",
+      "className": "Historische Tourenwagen",
+      "vehicleLabel": "BMW 2002",
+      "detailPath": "/admin/entries/uuid"
     }
+  },
+  "assistantContext": {
+    "knowledgeHits": [
+      {
+        "id": "uuid",
+        "topic": "interview",
+        "title": "Interview-Anfragen",
+        "content": "Interview-Anfragen muessen vor Ort mit der Rennleitung abgestimmt werden."
+      }
+    ]
   }
 }
 ```
 
 ### `GET /admin/ai/drafts`
 
-Listet gespeicherte AI-Drafts fuer Dashboard und Historie.
+Draft-Historie fuer gespeicherte Reply-, Report- und Speaker-Entwuerfe.
+
+### `GET /admin/ai/knowledge-suggestions`
+
+Listet reviewpflichtige Wissensvorschlaege.
 
 Query:
 
-- `taskType?` = `reply_suggestion | event_report | speaker_text`
 - `eventId?`
+- `messageId?`
+- `topic? = documents | payment | interview | logistics | contact | general`
+- `status? = suggested | approved | rejected | archived`
+- `limit?`
+
+### `GET /admin/ai/knowledge-items`
+
+Listet freigegebene oder archivierte Wissenseintraege.
+
+Query:
+
+- `eventId?`
+- `topic?`
+- `status? = suggested | approved | archived`
 - `limit?`
 
 ## Generate Endpoints
@@ -105,7 +107,10 @@ Request:
 ```json
 {
   "tone": "friendly",
-  "includeWarnings": true
+  "includeWarnings": true,
+  "additionalContext": "Interviewanfragen koennen nach Ruecksprache moeglich sein.",
+  "mustMention": ["Antwort bitte sachlich halten"],
+  "mustAvoid": ["keine verbindliche Zusage"]
 }
 ```
 
@@ -117,11 +122,19 @@ Response:
   "messageId": "uuid",
   "task": "reply_suggestion",
   "result": {
-    "summary": "Rueckfrage zum Status der Nennung und zu moeglichen noch fehlenden Unterlagen.",
-    "category": "unterlagen",
-    "replyDraft": "Hallo ..., vielen Dank fuer deine Nachricht ...",
+    "summary": "Rueckfrage zum Status der Nennung und zu einem moeglichen Kurzinterview.",
+    "category": "rueckfrage",
+    "replySubject": "Re: Rueckfrage zur Nennung",
+    "answerFacts": [
+      "Die Nennung ist im System eingegangen und die E-Mail-Adresse ist bestaetigt.",
+      "Die Nennung ist zugelassen."
+    ],
+    "unknowns": [
+      "Welche konkreten Unterlagen oder Angaben noch fehlen, ist im System aktuell nicht strukturiert hinterlegt."
+    ],
+    "replyDraft": "Hallo ..., vielen Dank fuer Ihre Nachricht ...",
     "analysis": {
-      "intent": "unterlagen",
+      "intent": "rueckfrage",
       "language": "de"
     }
   },
@@ -132,214 +145,172 @@ Response:
     },
     "event": {
       "id": "uuid",
-      "name": "Dreiecksrennen 2026",
+      "name": "12. Oberlausitzer Dreieck",
       "contactEmail": "info@example.org"
     },
     "entry": {
       "id": "uuid",
       "registrationStatus": "submitted_verified",
+      "registrationStatusLabel": "Die Nennung ist im System eingegangen und die E-Mail-Adresse ist bestaetigt.",
       "acceptanceStatus": "accepted",
+      "acceptanceStatusLabel": "Die Nennung ist zugelassen.",
       "paymentStatus": "due",
-      "amountOpenCents": 8000,
+      "paymentStatusLabel": "Es ist noch ein offener Betrag von 230,00 EUR vermerkt.",
+      "amountOpenCents": 23000,
       "paymentReference": "Nennung MSC-2026-123 Mustermann"
     },
+    "knowledgeHits": [
+      {
+        "id": "uuid",
+        "topic": "interview",
+        "title": "Interview-Anfragen",
+        "content": "Interview-Anfragen muessen vor Ort mit der Rennleitung abgestimmt werden."
+      }
+    ],
+    "operatorInput": {
+      "additionalContext": "Interviewanfragen koennen nach Ruecksprache moeglich sein.",
+      "mustMention": ["Antwort bitte sachlich halten"],
+      "mustAvoid": ["keine verbindliche Zusage"]
+    },
     "usedKnowledge": {
-      "faqCount": 2,
-      "logisticsNotesCount": 1,
-      "previousOutgoingCount": 1
+      "faqCount": 0,
+      "logisticsNotesCount": 0,
+      "approvedKnowledgeCount": 1,
+      "previousOutgoingCount": 5,
+      "basedOnPreviousCorrespondence": true
     }
   },
   "warnings": [
     {
-      "code": "MISSING_DOCUMENT_DETAILS",
+      "code": "UNKNOWN_CONTEXT",
       "severity": "medium",
-      "message": "Es gibt keinen strukturierten Datensatz, welche Unterlagen konkret fehlen."
+      "message": "Welche konkreten Unterlagen oder Angaben noch fehlen, ist im System aktuell nicht strukturiert hinterlegt.",
+      "displayMessage": "Welche konkreten Unterlagen oder Angaben noch fehlen, ist im System aktuell nicht strukturiert hinterlegt.",
+      "recommendation": "Bitte die offene Stelle vor dem Uebernehmen oder Versenden kurz manuell pruefen."
     }
   ],
   "review": {
     "required": true,
     "status": "draft",
-    "confidence": "medium"
+    "confidence": "medium",
+    "reason": "Die Ausgabe enthaelt Hinweise zu fehlendem oder unsicherem Kontext und muss geprueft werden.",
+    "recommendedChecks": [
+      "Faktenlage und Tonalitaet kurz manuell pruefen.",
+      "Warnhinweise vor der Uebernahme inhaltlich pruefen."
+    ],
+    "blockingIssues": []
   },
   "meta": {
     "modelId": "eu.amazon.nova-micro-v1:0",
     "promptVersion": "v1",
-    "generatedAt": "2026-03-24T12:00:00.000Z"
+    "generatedAt": "2026-03-31T12:00:00.000Z"
   }
+}
+```
+
+### `POST /admin/ai/messages/{id}/chat`
+
+Kontextgebundener Mini-Chat zur aktuellen Mail.
+
+Request:
+
+```json
+{
+  "message": "Kann ich dazu noch eine Interview-Regel hinterlegen?",
+  "history": [
+    {
+      "role": "user",
+      "message": "Die Rennleitung muss gefragt werden."
+    }
+  ],
+  "contextMode": "knowledge_capture"
+}
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "messageId": "uuid",
+  "task": "message_chat",
+  "result": {
+    "answer": "Ja, daraus kann ein Wissensvorschlag fuer Interview-Anfragen abgeleitet werden.",
+    "usedFacts": [
+      "Die Nennung ist im System eingegangen und die E-Mail-Adresse ist bestaetigt."
+    ],
+    "unknowns": [],
+    "knowledgeSuggestions": [
+      {
+        "topic": "interview",
+        "title": "Interview-Anfragen nach dem Lauf",
+        "content": "Interview-Anfragen muessen mit der Rennleitung abgestimmt werden.",
+        "rationale": "Wiederverwendbare Regel fuer spaetere Rueckfragen."
+      }
+    ]
+  },
+  "basis": {
+    "message": {
+      "id": "uuid",
+      "subject": "Rueckfrage zur Nennung"
+    },
+    "knowledgeHits": [],
+    "historyCount": 1,
+    "contextMode": "knowledge_capture"
+  }
+}
+```
+
+### `POST /admin/ai/messages/{id}/knowledge-suggestions`
+
+Erzeugt und speichert reviewpflichtige Wissensvorschlaege zur Mail.
+
+Request:
+
+```json
+{
+  "additionalContext": "Interviewanfragen muessen mit der Rennleitung abgestimmt werden.",
+  "history": [],
+  "topicHint": "interview"
 }
 ```
 
 ### `POST /admin/ai/reports/generate`
 
-Request:
-
-```json
-{
-  "eventId": "uuid",
-  "scope": "class",
-  "classId": "uuid",
-  "formats": ["website", "short_summary"],
-  "tone": "neutral",
-  "length": "medium",
-  "highlights": [
-    "starke internationale Beteiligung",
-    "gute Resonanz im Fahrerlager"
-  ]
-}
-```
-
-Response:
-
-```json
-{
-  "ok": true,
-  "eventId": "uuid",
-  "task": "event_report",
-  "result": {
-    "variants": [
-      {
-        "format": "website",
-        "title": "Starkes Feld beim Dreiecksrennen 2026",
-        "teaser": "Breites Teilnehmerfeld und intensive Rennatmosphaere.",
-        "text": "..."
-      },
-      {
-        "format": "short_summary",
-        "title": null,
-        "teaser": null,
-        "text": "..."
-      }
-    ]
-  },
-  "basis": {
-    "scope": "class",
-    "event": {
-      "id": "uuid",
-      "name": "Dreiecksrennen 2026"
-    },
-    "class": {
-      "id": "uuid",
-      "name": "Historische Tourenwagen"
-    },
-    "facts": {
-      "entriesTotal": 24,
-      "acceptedTotal": 18,
-      "paidTotal": 14
-    },
-    "highlights": [
-      "starke internationale Beteiligung",
-      "gute Resonanz im Fahrerlager"
-    ]
-  },
-  "warnings": [
-    {
-      "code": "NO_RESULTS_DATA",
-      "severity": "medium",
-      "message": "Es liegen keine strukturierten Ergebnisdaten vor; der Text basiert auf Stammdaten und manuellen Highlights."
-    }
-  ],
-  "review": {
-    "required": true,
-    "status": "draft",
-    "confidence": "medium"
-  },
-  "meta": {
-    "modelId": "eu.amazon.nova-micro-v1:0",
-    "promptVersion": "v1",
-    "generatedAt": "2026-03-24T12:00:00.000Z"
-  }
-}
-```
+Unveraendert gegenueber dem bisherigen Mehrvarianten-Contract mit `formats[]`.
 
 ### `POST /admin/ai/speaker/generate`
 
-Request:
-
-```json
-{
-  "eventId": "uuid",
-  "entryId": "uuid",
-  "mode": "driver_intro",
-  "highlights": [
-    "erstmals in dieser Klasse",
-    "historische BMW"
-  ]
-}
-```
-
-Response:
-
-```json
-{
-  "ok": true,
-  "eventId": "uuid",
-  "task": "speaker_text",
-  "result": {
-    "text": "Am Start steht jetzt ...",
-    "facts": [
-      "Startnummer 42",
-      "Klasse Historische Tourenwagen",
-      "BMW 2002"
-    ]
-  },
-  "basis": {
-    "focusType": "entry",
-    "context": {
-      "eventName": "Dreiecksrennen 2026",
-      "className": "Historische Tourenwagen",
-      "startNumber": "42",
-      "driverFirstName": "Max",
-      "driverLastName": "Mustermann",
-      "vehicleMake": "BMW",
-      "vehicleModel": "2002"
-    },
-    "highlights": [
-      "erstmals in dieser Klasse",
-      "historische BMW"
-    ]
-  },
-  "warnings": [],
-  "review": {
-    "required": true,
-    "status": "draft",
-    "confidence": "high"
-  },
-  "meta": {
-    "modelId": "eu.amazon.nova-micro-v1:0",
-    "promptVersion": "v1",
-    "generatedAt": "2026-03-24T12:00:00.000Z"
-  }
-}
-```
+Unveraendert gegenueber dem bisherigen Speaker-Contract.
 
 ## Persistence
 
 ### `POST /admin/ai/drafts`
 
-Speichert einen explizit freigegebenen Entwurf.
+Speichert einen explizit uebernommenen Entwurf.
 
-Request:
+### `POST /admin/ai/knowledge-items`
+
+Uebernimmt einen Wissensvorschlag in die freigegebene Wissensbasis oder legt einen manuellen Eintrag an.
+
+Request aus Vorschlag:
 
 ```json
 {
-  "taskType": "reply_suggestion",
-  "messageId": "uuid",
+  "suggestionId": "uuid",
+  "status": "approved"
+}
+```
+
+Manueller Request:
+
+```json
+{
   "eventId": "uuid",
-  "title": "Antwort auf Rueckfrage zur Nennung",
-  "modelId": "eu.amazon.nova-micro-v1:0",
-  "inputSnapshot": {
-    "tone": "friendly"
-  },
-  "outputPayload": {
-    "summary": "Kurzfassung",
-    "replyDraft": "Antworttext"
-  },
-  "warnings": [
-    {
-      "code": "REVIEW_NOTE",
-      "severity": "medium",
-      "message": "Bitte Interview-Anfrage intern pruefen."
-    }
-  ]
+  "messageId": "uuid",
+  "topic": "contact",
+  "title": "Pressekontakt Event 2026",
+  "content": "Presseanfragen bitte an presse@example.org senden.",
+  "status": "approved"
 }
 ```

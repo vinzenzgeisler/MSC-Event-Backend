@@ -36,9 +36,12 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   email_outbox_retry_requested: ['previousStatus'],
   ai_message_imported: ['messageId', 'source', 'mailboxKey', 'eventId', 'entryId'],
   ai_message_reply_generated: ['messageId', 'category', 'confidence'],
+  ai_message_chat_generated: ['messageId', 'contextMode', 'suggestionCount'],
   ai_report_generated: ['eventId', 'format', 'length'],
   ai_speaker_text_generated: ['eventId', 'entryId', 'classId', 'mode'],
   ai_draft_saved: ['draftId', 'taskType', 'status', 'eventId', 'entryId', 'messageId'],
+  ai_knowledge_suggestions_generated: ['messageId', 'suggestionCount', 'topicHint'],
+  ai_knowledge_item_saved: ['knowledgeItemId', 'suggestionId', 'topic', 'status'],
   public_entry_created: ['registrationStatus', 'registrationGroupId'],
   public_entry_verified: ['registrationStatus', 'registrationGroupId'],
   privacy_retention_run: ['windowStart', 'windowEnd', 'deletedRows', 'errors']

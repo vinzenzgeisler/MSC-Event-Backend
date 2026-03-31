@@ -204,7 +204,7 @@ const parseHeaders = (raw: Buffer): { headers: Record<string, string>; body: str
   return { headers, body };
 };
 
-const decodeMimeEncodedWord = (value: string): string => {
+export const decodeMimeHeaderValue = (value: string): string => {
   const normalized = value.replace(/\?\=\s+\=\?/g, '?==?');
   return normalized.replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_match, charsetRaw: string, encodingRaw: string, encodedText: string) => {
     const charset = charsetRaw.trim().toLowerCase();
@@ -233,14 +233,20 @@ const decodeQuotedPrintable = (value: string): string =>
 
 const stripHtml = (value: string): string =>
   value
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, '\n')
+    .replace(/<script[\s\S]*?<\/script>/gi, '\n')
+    .replace(/<\/(p|div|section|article|h[1-6]|li|tr|table|blockquote)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '• ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/\s+/g, ' ')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 
 const extractBoundary = (contentType: string | undefined): string | null => {
@@ -257,6 +263,15 @@ const extractCharset = (contentType: string | undefined): BufferEncoding => {
   return 'latin1';
 };
 
+const normalizePlainText = (value: string): string =>
+  value
+    .replace(/\r\n/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
 const decodeBody = (body: string, encoding: string | undefined, contentType: string | undefined): string => {
   let decoded = body;
   const charset = extractCharset(contentType);
@@ -271,45 +286,74 @@ const decodeBody = (body: string, encoding: string | undefined, contentType: str
   if ((contentType ?? '').toLowerCase().includes('text/html')) {
     return stripHtml(decoded);
   }
-  return decoded.replace(/\s+/g, ' ').trim();
+  return normalizePlainText(decoded);
 };
 
-const extractMultipartText = (body: string, contentType: string | undefined): string | null => {
+const extractMultipartBodies = (body: string, contentType: string | undefined): { text: string | null; html: string | null } => {
   const boundary = extractBoundary(contentType);
   if (!boundary) {
-    return null;
+    return { text: null, html: null };
   }
   const parts = body.split(`--${boundary}`);
+  let text: string | null = null;
+  let html: string | null = null;
   for (const part of parts) {
-    const parsed = parseHeaders(Buffer.from(part, 'utf8'));
+    const trimmed = part.trim();
+    if (!trimmed || trimmed === '--') {
+      continue;
+    }
+    const parsed = parseHeaders(Buffer.from(part, 'latin1'));
     const partType = parsed.headers['content-type'] ?? '';
+    if (partType.toLowerCase().includes('multipart/')) {
+      const nested = extractMultipartBodies(parsed.body, partType);
+      text = text ?? nested.text;
+      html = html ?? nested.html;
+      continue;
+    }
     if (partType.toLowerCase().includes('text/plain')) {
-      return decodeBody(parsed.body, parsed.headers['content-transfer-encoding'], partType);
+      text = text ?? decodeBody(parsed.body, parsed.headers['content-transfer-encoding'], partType);
     }
-  }
-  for (const part of parts) {
-    const parsed = parseHeaders(Buffer.from(part, 'utf8'));
-    const partType = parsed.headers['content-type'] ?? '';
     if (partType.toLowerCase().includes('text/html')) {
-      return decodeBody(parsed.body, parsed.headers['content-transfer-encoding'], partType);
+      html = html ?? Buffer.from(
+        (() => {
+          let decoded = parsed.body;
+          const encoding = (parsed.headers['content-transfer-encoding'] ?? '').toLowerCase();
+          const charset = extractCharset(partType);
+          if (encoding === 'quoted-printable') {
+            decoded = decodeQuotedPrintable(decoded);
+            return Buffer.from(decoded, 'latin1').toString(charset);
+          }
+          if (encoding === 'base64') {
+            return Buffer.from(decoded.replace(/\s+/g, ''), 'base64').toString(charset);
+          }
+          if (charset === 'utf8') {
+            return Buffer.from(decoded, 'latin1').toString('utf8');
+          }
+          return decoded;
+        })(),
+        'utf8'
+      ).toString('utf8').trim();
     }
   }
-  return null;
+  return { text, html };
 };
 
 export const parseRawEmail = (raw: Buffer) => {
   const { headers, body } = parseHeaders(raw);
   const contentType = headers['content-type'];
+  const multipartBodies = extractMultipartBodies(body, contentType);
   const textContent =
-    extractMultipartText(body, contentType) ??
+    multipartBodies.text ??
     decodeBody(body, headers['content-transfer-encoding'], contentType);
+  const htmlContent = multipartBodies.html ?? ((contentType ?? '').toLowerCase().includes('text/html') ? body : null);
   return {
     messageId: headers['message-id'] ?? null,
-    subject: headers.subject ? decodeMimeEncodedWord(headers.subject) : null,
-    from: headers.from ? decodeMimeEncodedWord(headers.from) : null,
-    to: headers.to ? decodeMimeEncodedWord(headers.to) : null,
+    subject: headers.subject ? decodeMimeHeaderValue(headers.subject) : null,
+    from: headers.from ? decodeMimeHeaderValue(headers.from) : null,
+    to: headers.to ? decodeMimeHeaderValue(headers.to) : null,
     date: headers.date ? new Date(headers.date) : null,
-    textContent
+    textContent,
+    htmlContent
   };
 };
 

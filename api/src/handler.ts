@@ -123,17 +123,27 @@ import {
 } from './routes/adminMail';
 import { getDashboardSummary, validateDashboardSummaryQuery } from './routes/adminDashboard';
 import {
+  createAiKnowledgeItem,
+  generateChatForMessage,
   generateAiEventReport,
   generateAiSpeakerText,
+  generateKnowledgeSuggestionsForAiMessage,
   getAiMessage,
   listAiDraftHistory,
+  listAiKnowledgeItemHistory,
+  listAiKnowledgeSuggestionHistory,
   listAiMessages,
   saveAiDraft,
   suggestReplyForMessage,
+  validateCreateAiKnowledgeItemInput,
+  validateCreateKnowledgeSuggestionsInput,
   validateGenerateEventReportInput,
   validateGenerateSpeakerTextInput,
   validateListAiDraftsInput,
+  validateListAiKnowledgeItemsInput,
+  validateListAiKnowledgeSuggestionsInput,
   validateListAiMessagesInput,
+  validateMessageChatInput,
   validateSaveAiDraftInput,
   validateSuggestReplyInput
 } from './routes/adminAi';
@@ -2399,6 +2409,62 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  const aiMessageChatMatch = path.match(/^\/admin\/ai\/messages\/([^/]+)\/chat$/);
+  if (method === 'POST' && aiMessageChatMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateMessageChatInput(payload);
+      const result = await generateChatForMessage(aiMessageChatMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'AI message not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'AI_MODEL_NOT_CONFIGURED') {
+        return errorJson(503, 'AI model not configured', undefined, 'AI_MODEL_NOT_CONFIGURED');
+      }
+      return errorJson(500, 'Generate AI message chat failed');
+    }
+  }
+
+  const aiKnowledgeSuggestionCreateMatch = path.match(/^\/admin\/ai\/messages\/([^/]+)\/knowledge-suggestions$/);
+  if (method === 'POST' && aiKnowledgeSuggestionCreateMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateCreateKnowledgeSuggestionsInput(payload);
+      const result = await generateKnowledgeSuggestionsForAiMessage(aiKnowledgeSuggestionCreateMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'AI message not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'AI_MODEL_NOT_CONFIGURED') {
+        return errorJson(503, 'AI model not configured', undefined, 'AI_MODEL_NOT_CONFIGURED');
+      }
+      return errorJson(500, 'Generate AI knowledge suggestions failed');
+    }
+  }
+
   if (method === 'POST' && path === '/admin/ai/reports/generate') {
     const auth = getAuthContext(event);
     if (!hasAnyGroup(auth, ['admin', 'editor'])) {
@@ -2488,6 +2554,67 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
       return errorJson(500, 'List AI drafts failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/ai/knowledge-suggestions') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const query = validateListAiKnowledgeSuggestionsInput(event.queryStringParameters ?? {});
+      const suggestions = await listAiKnowledgeSuggestionHistory(query);
+      return json(200, { ok: true, suggestions });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      return errorJson(500, 'List AI knowledge suggestions failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/ai/knowledge-items') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const query = validateListAiKnowledgeItemsInput(event.queryStringParameters ?? {});
+      const items = await listAiKnowledgeItemHistory(query);
+      return json(200, { ok: true, items });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      return errorJson(500, 'List AI knowledge items failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/ai/knowledge-items') {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateCreateAiKnowledgeItemInput(payload);
+      const result = await createAiKnowledgeItem(input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Knowledge suggestion not found');
+      }
+      return json(200, { ok: true, item: result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'AI_KNOWLEDGE_ITEM_INVALID') {
+        return errorJson(400, 'Knowledge item payload incomplete', undefined, 'AI_KNOWLEDGE_ITEM_INVALID');
+      }
+      return errorJson(500, 'Save AI knowledge item failed');
     }
   }
 

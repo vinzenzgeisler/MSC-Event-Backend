@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { writeAuditLog } from '../audit/log';
-import { aiMessageSource, entry, event, invoice, person } from '../db/schema';
-import { uploadAssetFile } from '../docs/storage';
+import { aiKnowledgeItem, aiMessageSource, entry, event, eventClass, invoice, person, vehicle } from '../db/schema';
+import { getAssetObjectBuffer, uploadAssetFile } from '../docs/storage';
 import { isPgUniqueViolation } from '../http/dbErrors';
+import { decodeMimeHeaderValue, parseRawEmail } from './imap';
 
 export type ImportedInboxMessage = {
   source: 'imap' | 'manual';
@@ -22,6 +23,70 @@ export type ImportedInboxMessage = {
 
 const normalizeTextContent = (value: string): string =>
   value.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+
+const registrationStatusLabel = (value: string | null | undefined) => {
+  if (value === 'submitted_verified') {
+    return 'E-Mail bestätigt, Nennung eingegangen';
+  }
+  if (value === 'submitted_unverified') {
+    return 'Nennung eingegangen, E-Mail noch unbestätigt';
+  }
+  return null;
+};
+
+const acceptanceStatusLabel = (value: string | null | undefined) => {
+  if (value === 'accepted') {
+    return 'Zugelassen';
+  }
+  if (value === 'shortlist') {
+    return 'Vorauswahl';
+  }
+  if (value === 'pending') {
+    return 'In Prüfung';
+  }
+  if (value === 'rejected') {
+    return 'Abgelehnt';
+  }
+  return null;
+};
+
+const paymentStatusLabel = (value: string | null | undefined) => {
+  if (value === 'paid') {
+    return 'Bezahlt';
+  }
+  if (value === 'due') {
+    return 'Offen';
+  }
+  return null;
+};
+
+const detectKnowledgeTopics = (value: string): Array<'documents' | 'payment' | 'interview' | 'logistics' | 'contact' | 'general'> => {
+  const normalized = value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ');
+  const topics = new Set<'documents' | 'payment' | 'interview' | 'logistics' | 'contact' | 'general'>();
+  if (/\bunterlag|\bdokument|\bnenn|\banmeld/.test(normalized)) {
+    topics.add('documents');
+  }
+  if (/\bzahl|\biban|\buberweis|\bnenngeld/.test(normalized)) {
+    topics.add('payment');
+  }
+  if (/\binterview|\bpresse|\bmedien|\bakkredit/.test(normalized)) {
+    topics.add('interview');
+  }
+  if (/\banreise|\bfahrerlager|\bzeitplan|\bzugang|\bablauf/.test(normalized)) {
+    topics.add('logistics');
+  }
+  if (/\bkontakt|\bansprechpartner|\btelefon/.test(normalized)) {
+    topics.add('contact');
+  }
+  if (topics.size === 0) {
+    topics.add('general');
+  }
+  return Array.from(topics);
+};
 
 const buildFallbackExternalMessageId = (mailboxKey: string, textContent: string, subject: string | null | undefined): string =>
   createHash('sha256')
@@ -187,6 +252,7 @@ export const listInboxMessages = async (query: { eventId?: string; status?: 'imp
 
   return rows.map((row) => ({
     ...row,
+    subject: row.subject ? decodeMimeHeaderValue(row.subject) : row.subject,
     preview: row.textContent.slice(0, 280)
   }));
 };
@@ -205,6 +271,7 @@ export const getInboxMessageDetail = async (messageId: string) => {
       receivedAt: aiMessageSource.receivedAt,
       eventId: aiMessageSource.eventId,
       entryId: aiMessageSource.entryId,
+      rawS3Key: aiMessageSource.rawS3Key,
       status: aiMessageSource.status,
       aiCategory: aiMessageSource.aiCategory,
       aiSummary: aiMessageSource.aiSummary,
@@ -213,14 +280,22 @@ export const getInboxMessageDetail = async (messageId: string) => {
       createdAt: aiMessageSource.createdAt,
       eventName: event.name,
       eventContactEmail: event.contactEmail,
+      driverFirstName: person.firstName,
+      driverLastName: person.lastName,
+      className: eventClass.name,
+      vehicleLabel: sql<string | null>`nullif(trim(coalesce(${vehicle.make}, '') || ' ' || coalesce(${vehicle.model}, '')), '')`,
       registrationStatus: entry.registrationStatus,
       acceptanceStatus: entry.acceptanceStatus,
       orgaCode: entry.orgaCode,
-      paymentStatus: invoice.paymentStatus
+      paymentStatus: invoice.paymentStatus,
+      amountOpenCents: sql<number | null>`case when ${invoice.totalCents} is null then null else greatest(${invoice.totalCents} - coalesce(${invoice.paidAmountCents}, 0), 0) end`
     })
     .from(aiMessageSource)
     .leftJoin(event, eq(aiMessageSource.eventId, event.id))
     .leftJoin(entry, eq(aiMessageSource.entryId, entry.id))
+    .leftJoin(eventClass, eq(entry.classId, eventClass.id))
+    .leftJoin(person, eq(entry.driverPersonId, person.id))
+    .leftJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
     .where(eq(aiMessageSource.id, messageId))
     .limit(1);
@@ -230,6 +305,32 @@ export const getInboxMessageDetail = async (messageId: string) => {
     return null;
   }
 
+  const raw = current.rawS3Key ? await getAssetObjectBuffer(current.rawS3Key) : null;
+  const parsed = raw ? parseRawEmail(raw) : null;
+  const bodyText = parsed?.textContent?.trim() || current.textContent;
+  const detectedTopics = detectKnowledgeTopics(
+    [current.subject ? decodeMimeHeaderValue(current.subject) : current.subject, bodyText].filter(Boolean).join('\n')
+  );
+  const knowledgeHits = await db
+    .select({
+      id: aiKnowledgeItem.id,
+      topic: aiKnowledgeItem.topic,
+      title: aiKnowledgeItem.title,
+      content: aiKnowledgeItem.content
+    })
+    .from(aiKnowledgeItem)
+    .where(
+      and(
+        eq(aiKnowledgeItem.status, 'approved'),
+        inArray(aiKnowledgeItem.topic, detectedTopics),
+        current.eventId
+          ? sql`(${aiKnowledgeItem.eventId} = ${current.eventId} or ${aiKnowledgeItem.eventId} is null)`
+          : sql`${aiKnowledgeItem.eventId} is null`
+      )
+    )
+    .orderBy(desc(aiKnowledgeItem.eventId), desc(aiKnowledgeItem.createdAt))
+    .limit(6);
+
   return {
     message: {
       id: current.id,
@@ -238,7 +339,7 @@ export const getInboxMessageDetail = async (messageId: string) => {
       fromEmail: current.fromEmail,
       fromName: current.fromName,
       toEmail: current.toEmail,
-      subject: current.subject,
+      subject: current.subject ? decodeMimeHeaderValue(current.subject) : current.subject,
       receivedAt: current.receivedAt,
       eventId: current.eventId,
       entryId: current.entryId,
@@ -246,7 +347,11 @@ export const getInboxMessageDetail = async (messageId: string) => {
       aiCategory: current.aiCategory,
       aiSummary: current.aiSummary,
       aiLastProcessedAt: current.aiLastProcessedAt,
-      textContent: current.textContent,
+      textContent: bodyText,
+      bodyText,
+      bodyHtml: parsed?.htmlContent ?? null,
+      bodyFormat: parsed?.htmlContent ? 'html+text' : 'text',
+      snippet: bodyText.slice(0, 280),
       createdAt: current.createdAt
     },
     basis: {
@@ -261,11 +366,27 @@ export const getInboxMessageDetail = async (messageId: string) => {
         ? {
             id: current.entryId,
             registrationStatus: current.registrationStatus,
+            registrationStatusLabel: registrationStatusLabel(current.registrationStatus),
             acceptanceStatus: current.acceptanceStatus,
+            acceptanceStatusLabel: acceptanceStatusLabel(current.acceptanceStatus),
             paymentStatus: current.paymentStatus,
-            orgaCode: current.orgaCode
+            paymentStatusLabel: paymentStatusLabel(current.paymentStatus),
+            orgaCode: current.orgaCode,
+            amountOpenCents: current.amountOpenCents,
+            driverName: [current.driverFirstName, current.driverLastName].filter(Boolean).join(' ').trim() || null,
+            className: current.className,
+            vehicleLabel: current.vehicleLabel,
+            detailPath: `/admin/entries/${current.entryId}`
           }
         : null
+    },
+    assistantContext: {
+      knowledgeHits: knowledgeHits.map((item) => ({
+        id: item.id,
+        topic: item.topic,
+        title: item.title,
+        content: item.content
+      }))
     }
   };
 };

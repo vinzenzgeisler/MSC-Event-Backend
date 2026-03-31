@@ -873,7 +873,28 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/ai/messages/{id}',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/ai/messages/{id}/suggest-reply',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/ai/messages/{id}/chat',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/ai/messages/{id}/knowledge-suggestions',
       methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
@@ -895,7 +916,21 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/ai/drafts',
-      methods: [apigwv2.HttpMethod.POST],
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/ai/knowledge-suggestions',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/ai/knowledge-items',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
     });

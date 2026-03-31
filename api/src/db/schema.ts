@@ -737,3 +737,77 @@ export const aiDraft = pgTable(
     eventIndex: index('ai_draft_event_idx').on(table.eventId, table.createdAt)
   })
 );
+
+export const aiKnowledgeSuggestion = pgTable(
+  'ai_knowledge_suggestion',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').references(() => event.id, { onDelete: 'set null' }),
+    messageId: uuid('message_id').references(() => aiMessageSource.id, { onDelete: 'set null' }),
+    topic: text('topic').notNull(),
+    title: text('title').notNull(),
+    content: text('content').notNull(),
+    rationale: text('rationale'),
+    status: text('status').notNull().default('suggested'),
+    sourceType: text('source_type').notNull().default('ai_suggested'),
+    createdBy: text('created_by'),
+    reviewedBy: text('reviewed_by'),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    topicCheck: check(
+      'ai_knowledge_suggestion_topic_check',
+      sql`${table.topic} in ('documents', 'payment', 'interview', 'logistics', 'contact', 'general')`
+    ),
+    statusCheck: check(
+      'ai_knowledge_suggestion_status_check',
+      sql`${table.status} in ('suggested', 'approved', 'rejected', 'archived')`
+    ),
+    sourceTypeCheck: check(
+      'ai_knowledge_suggestion_source_type_check',
+      sql`${table.sourceType} in ('manual', 'ai_suggested')`
+    ),
+    eventTopicStatusIndex: index('ai_knowledge_suggestion_event_topic_status_idx').on(table.eventId, table.topic, table.status, table.createdAt),
+    messageIndex: index('ai_knowledge_suggestion_message_idx').on(table.messageId, table.createdAt)
+  })
+);
+
+export const aiKnowledgeItem = pgTable(
+  'ai_knowledge_item',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').references(() => event.id, { onDelete: 'set null' }),
+    messageId: uuid('message_id').references(() => aiMessageSource.id, { onDelete: 'set null' }),
+    suggestionId: uuid('suggestion_id').references(() => aiKnowledgeSuggestion.id, { onDelete: 'set null' }),
+    topic: text('topic').notNull(),
+    title: text('title').notNull(),
+    content: text('content').notNull(),
+    status: text('status').notNull().default('approved'),
+    sourceType: text('source_type').notNull().default('manual'),
+    createdBy: text('created_by'),
+    approvedBy: text('approved_by'),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    topicCheck: check(
+      'ai_knowledge_item_topic_check',
+      sql`${table.topic} in ('documents', 'payment', 'interview', 'logistics', 'contact', 'general')`
+    ),
+    statusCheck: check(
+      'ai_knowledge_item_status_check',
+      sql`${table.status} in ('suggested', 'approved', 'archived')`
+    ),
+    sourceTypeCheck: check(
+      'ai_knowledge_item_source_type_check',
+      sql`${table.sourceType} in ('manual', 'ai_suggested')`
+    ),
+    eventTopicStatusIndex: index('ai_knowledge_item_event_topic_status_idx').on(table.eventId, table.topic, table.status, table.createdAt),
+    messageIndex: index('ai_knowledge_item_message_idx').on(table.messageId, table.createdAt)
+  })
+);

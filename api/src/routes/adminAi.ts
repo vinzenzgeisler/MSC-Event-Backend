@@ -4,11 +4,13 @@ import {
   archiveKnowledgeItem,
   createKnowledgeItem,
   generateEventReport,
+  generateKnowledgeSuggestionsForReportDraft,
   generateKnowledgeSuggestionsForMessage,
   generateMessageChat,
   getGeneratedDraft,
   getKnowledgeItem,
   generateReplySuggestion,
+  regenerateEventReportVariant,
   generateSpeakerText,
   listGeneratedDrafts,
   listKnowledgeItems,
@@ -102,9 +104,23 @@ const eventReportSchema = z.object({
   formats: z.array(z.enum(['website', 'short_summary'])).min(1).max(2),
   tone: z.enum(['neutral', 'friendly', 'formal']).optional().default('neutral'),
   length: z.enum(['short', 'medium', 'long']).optional().default('medium'),
-  highlights: z.array(z.string().min(1).max(280)).max(10).optional().default([])
+  highlights: z.array(z.string().min(1).max(280)).max(10).optional().default([]),
+  additionalContext: z.string().min(1).max(3000).optional(),
+  mustMention: z.array(z.string().min(1).max(240)).max(8).optional().default([]),
+  mustAvoid: z.array(z.string().min(1).max(240)).max(8).optional().default([]),
+  audience: z.string().min(1).max(120).optional(),
+  publishChannel: z.string().min(1).max(120).optional()
 }).refine((value) => value.scope === 'event' || Boolean(value.classId), {
   message: 'Provide classId when scope is class'
+});
+
+const regenerateReportVariantSchema = z.object({
+  format: z.enum(['website', 'short_summary']),
+  additionalContext: z.string().min(1).max(3000).optional(),
+  mustMention: z.array(z.string().min(1).max(240)).max(8).optional(),
+  mustAvoid: z.array(z.string().min(1).max(240)).max(8).optional(),
+  audience: z.string().min(1).max(120).optional(),
+  publishChannel: z.string().min(1).max(120).optional()
 });
 
 const speakerSchema = z
@@ -174,6 +190,12 @@ export const generateKnowledgeSuggestionsForAiMessage = async (
 export const generateAiEventReport = async (input: z.infer<typeof eventReportSchema>, actorUserId: string | null) =>
   generateEventReport(input, actorUserId);
 
+export const regenerateAiEventReportVariant = async (
+  draftId: string,
+  input: z.infer<typeof regenerateReportVariantSchema>,
+  actorUserId: string | null
+) => regenerateEventReportVariant(draftId, input, actorUserId);
+
 export const generateAiSpeakerText = async (input: z.infer<typeof speakerSchema>, actorUserId: string | null) =>
   generateSpeakerText(input, actorUserId);
 
@@ -187,11 +209,38 @@ const updateReplyDraftSchema = z.object({
   operatorEdits: z.record(z.unknown()).optional()
 });
 
+const reportDraftVariantSchema = z.object({
+  format: z.enum(['website', 'short_summary']),
+  title: z.string().max(180).nullable().optional(),
+  teaser: z.string().max(280).nullable().optional(),
+  text: z.string().min(1).max(5000),
+  highlights: z.array(z.string().min(1).max(280)).max(10).optional()
+});
+
+const updateReportDraftSchema = z.object({
+  variants: z.array(reportDraftVariantSchema).min(1).max(4),
+  highlights: z.array(z.string().min(1).max(280)).max(10).optional().default([]),
+  operatorEdits: z.record(z.unknown()).optional()
+});
+
+const updateAiDraftSchema = z.union([updateReplyDraftSchema, updateReportDraftSchema]);
+
+const createReportKnowledgeSuggestionsSchema = z.object({
+  additionalContext: z.string().min(1).max(3000).optional(),
+  topicHint: knowledgeTopicSchema.optional()
+});
+
 export const updateAiReplyDraft = async (
   draftId: string,
-  input: z.infer<typeof updateReplyDraftSchema>,
+  input: z.infer<typeof updateAiDraftSchema>,
   actorUserId: string | null
 ) => updateReplyDraft(draftId, input, actorUserId);
+
+export const generateAiKnowledgeSuggestionsForReportDraft = async (
+  draftId: string,
+  input: z.infer<typeof createReportKnowledgeSuggestionsSchema>,
+  actorUserId: string | null
+) => generateKnowledgeSuggestionsForReportDraft(draftId, input, actorUserId);
 
 export const createAiKnowledgeItem = async (input: z.infer<typeof createKnowledgeItemSchema>, actorUserId: string | null) =>
   createKnowledgeItem(input, actorUserId);
@@ -235,8 +284,10 @@ export const validateSuggestReplyInput = (payload: unknown) => suggestReplySchem
 export const validateMessageChatInput = (payload: unknown) => messageChatSchema.parse(payload);
 export const validateCreateKnowledgeSuggestionsInput = (payload: unknown) => createKnowledgeSuggestionsSchema.parse(payload);
 export const validateGenerateEventReportInput = (payload: unknown) => eventReportSchema.parse(payload);
+export const validateRegenerateAiEventReportVariantInput = (payload: unknown) => regenerateReportVariantSchema.parse(payload);
 export const validateGenerateSpeakerTextInput = (payload: unknown) => speakerSchema.parse(payload);
 export const validateSaveAiDraftInput = (payload: unknown) => saveDraftSchema.parse(payload);
 export const validateCreateAiKnowledgeItemInput = (payload: unknown) => createKnowledgeItemSchema.parse(payload);
-export const validateUpdateAiReplyDraftInput = (payload: unknown) => updateReplyDraftSchema.parse(payload);
+export const validateUpdateAiReplyDraftInput = (payload: unknown) => updateAiDraftSchema.parse(payload);
 export const validateUpdateAiKnowledgeItemInput = (payload: unknown) => updateKnowledgeItemSchema.parse(payload);
+export const validateCreateReportKnowledgeSuggestionsInput = (payload: unknown) => createReportKnowledgeSuggestionsSchema.parse(payload);

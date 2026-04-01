@@ -285,7 +285,138 @@ Request:
 
 ### `POST /admin/ai/reports/generate`
 
-Unveraendert gegenueber dem bisherigen Mehrvarianten-Contract mit `formats[]`.
+Erzeugt einen transparenten Mehrvarianten-Berichtsdraft.
+
+Request:
+
+```json
+{
+  "eventId": "uuid",
+  "scope": "event",
+  "formats": ["website", "short_summary"],
+  "tone": "neutral",
+  "length": "medium",
+  "highlights": ["starke internationale Beteiligung"],
+  "additionalContext": "Der Bericht ist fuer die Website und den Social-Teaser gedacht.",
+  "mustMention": ["traditionsreiche Veranstaltung"],
+  "mustAvoid": ["keine Ergebnisbehauptungen"],
+  "audience": "Website-Besucher",
+  "publishChannel": "website"
+}
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "task": "event_report",
+  "result": {
+    "variants": [
+      {
+        "format": "website",
+        "title": "Starkes Feld beim Dreieck 2026",
+        "teaser": "Volles Fahrerlager und breite Klassenverteilung.",
+        "text": "...",
+        "highlights": ["starke internationale Beteiligung"]
+      }
+    ],
+    "variantReview": [
+      {
+        "format": "website",
+        "confidence": "medium",
+        "blockingIssues": [],
+        "uncertainClaims": [
+          "Es liegen keine strukturierten Ergebnisdaten vor."
+        ],
+        "warnings": [
+          {
+            "code": "REVIEW_NOTE",
+            "severity": "medium",
+            "message": "Der Bericht basiert auf begrenzten Fakten."
+          }
+        ]
+      }
+    ],
+    "blockingIssues": [],
+    "uncertainClaims": [
+      "Es liegen keine strukturierten Ergebnisdaten vor."
+    ]
+  },
+  "basis": {
+    "scope": "event",
+    "event": {
+      "id": "uuid",
+      "name": "12. Oberlausitzer Dreieck"
+    },
+    "class": null,
+    "facts": {
+      "entriesTotal": 24,
+      "acceptedTotal": 18,
+      "paidTotal": 14
+    },
+    "highlights": ["starke internationale Beteiligung"],
+    "factBlocks": [
+      {
+        "key": "event",
+        "label": "Eventstammdaten",
+        "source": "event",
+        "facts": ["12. Oberlausitzer Dreieck"]
+      }
+    ],
+    "usedKnowledge": [
+      {
+        "id": "uuid",
+        "topic": "logistics",
+        "title": "Fahrerlager",
+        "content": "..."
+      }
+    ],
+    "operatorInput": {
+      "additionalContext": "Der Bericht ist fuer die Website und den Social-Teaser gedacht.",
+      "mustMention": ["traditionsreiche Veranstaltung"],
+      "mustAvoid": ["keine Ergebnisbehauptungen"],
+      "audience": "Website-Besucher",
+      "publishChannel": "website"
+    },
+    "sourceSummary": {
+      "factBlockCount": 2,
+      "factCount": 6,
+      "approvedKnowledgeCount": 1,
+      "manualHighlightsCount": 1,
+      "missingDataCount": 1,
+      "operatorInputPresent": true
+    },
+    "missingData": [
+      "Es liegen keine strukturierten Ergebnisdaten, Platzierungen oder Laufzeiten vor."
+    ]
+  }
+}
+```
+
+### `POST /admin/ai/reports/{id}/regenerate-variant`
+
+Regeneriert nur eine einzelne Berichtsvariante innerhalb eines bestehenden `event_report`-Drafts.
+
+Request:
+
+```json
+{
+  "format": "website",
+  "additionalContext": "Bitte fuer die Website etwas formeller formulieren.",
+  "mustAvoid": ["keine erfundenen Ergebnisdetails"]
+}
+```
+
+Verhalten:
+
+- regeneriert nur die angeforderte Variante
+- laesst die restlichen Varianten im Draft unveraendert
+- aktualisiert `outputPayload.variants`, `variantReview`, `editedBy`, `editedAt`
+
+### `POST /admin/ai/reports/{id}/knowledge-suggestions`
+
+Erzeugt reviewpflichtige Wissensvorschlaege aus bestaetigten Berichtsfakten, Highlights und zusaetzlichem Operator-Kontext.
 
 ### `POST /admin/ai/speaker/generate`
 
@@ -299,7 +430,7 @@ Speichert einen explizit uebernommenen Entwurf.
 
 ### `PATCH /admin/ai/drafts/{id}`
 
-Aktualisiert einen bestehenden `reply_suggestion`-Draft serverseitig.
+Aktualisiert einen bestehenden `reply_suggestion`- oder `event_report`-Draft serverseitig.
 
 Request:
 
@@ -327,6 +458,32 @@ Verhalten:
 - ergaenzt `operatorEdits.editedBy` und `operatorEdits.editedAt`
 - erhaelt vorhandene `basis`, `review` und `warnings` getrennt
 - erneutes `GET /admin/ai/drafts/{id}` liefert die bearbeitete Version
+
+Request fuer `event_report`:
+
+```json
+{
+  "variants": [
+    {
+      "format": "website",
+      "title": "Aktualisierter Website-Bericht",
+      "teaser": "Kurzfassung fuer die Website",
+      "text": "Aktualisierter Text ...",
+      "highlights": ["traditionsreiche Veranstaltung"]
+    },
+    {
+      "format": "short_summary",
+      "title": null,
+      "teaser": null,
+      "text": "Kurze Zusammenfassung ..."
+    }
+  ],
+  "highlights": ["traditionsreiche Veranstaltung"],
+  "operatorEdits": {
+    "source": "frontend-edit"
+  }
+}
+```
 
 ### `POST /admin/ai/knowledge-items`
 

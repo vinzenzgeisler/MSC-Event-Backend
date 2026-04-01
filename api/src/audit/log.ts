@@ -38,6 +38,8 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   ai_message_reply_generated: ['messageId', 'category', 'confidence'],
   ai_message_chat_generated: ['messageId', 'contextMode', 'suggestionCount'],
   ai_report_generated: ['eventId', 'format', 'length'],
+  ai_report_variant_regenerated: ['draftId', 'format', 'eventId'],
+  ai_report_knowledge_suggestions_generated: ['draftId', 'suggestionCount', 'eventId'],
   ai_speaker_text_generated: ['eventId', 'entryId', 'classId', 'mode'],
   ai_draft_saved: ['draftId', 'taskType', 'status', 'eventId', 'entryId', 'messageId'],
   ai_draft_updated: ['draftId', 'taskType', 'messageId'],

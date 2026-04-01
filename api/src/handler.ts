@@ -127,6 +127,7 @@ import {
   createAiKnowledgeItem,
   generateChatForMessage,
   generateAiEventReport,
+  generateAiKnowledgeSuggestionsForReportDraft,
   generateAiSpeakerText,
   generateKnowledgeSuggestionsForAiMessage,
   getAiDraft,
@@ -138,9 +139,12 @@ import {
   listAiMessages,
   saveAiDraft,
   suggestReplyForMessage,
+  regenerateAiEventReportVariant,
+  validateCreateReportKnowledgeSuggestionsInput,
   validateCreateAiKnowledgeItemInput,
   validateCreateKnowledgeSuggestionsInput,
   validateGenerateEventReportInput,
+  validateRegenerateAiEventReportVariantInput,
   validateGenerateSpeakerTextInput,
   validateListAiDraftsInput,
   validateListAiKnowledgeItemsInput,
@@ -2499,6 +2503,37 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  const aiReportRegenerateVariantMatch = path.match(/^\/admin\/ai\/reports\/([^/]+)\/regenerate-variant$/);
+  if (method === 'POST' && aiReportRegenerateVariantMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateRegenerateAiEventReportVariantInput(payload);
+      const result = await regenerateAiEventReportVariant(aiReportRegenerateVariantMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'AI report draft not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'AI_MODEL_NOT_CONFIGURED') {
+        return errorJson(503, 'AI model not configured', undefined, 'AI_MODEL_NOT_CONFIGURED');
+      }
+      if (error instanceof Error && error.message === 'AI_DRAFT_NOT_EVENT_REPORT') {
+        return errorJson(409, 'Draft is not an event report', undefined, 'AI_DRAFT_NOT_EVENT_REPORT');
+      }
+      return errorJson(500, 'Regenerate AI report variant failed');
+    }
+  }
+
   if (method === 'POST' && path === '/admin/ai/speaker/generate') {
     const auth = getAuthContext(event);
     if (!hasAnyGroup(auth, ['admin', 'editor'])) {
@@ -2604,7 +2639,41 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'AI_DRAFT_NOT_REPLY_SUGGESTION') {
         return errorJson(409, 'Draft is not a reply suggestion', undefined, 'AI_DRAFT_NOT_REPLY_SUGGESTION');
       }
+      if (error instanceof Error && error.message === 'AI_DRAFT_NOT_PATCHABLE') {
+        return errorJson(409, 'Draft type does not support patching', undefined, 'AI_DRAFT_NOT_PATCHABLE');
+      }
+      if (error instanceof Error && error.message === 'AI_DRAFT_INVALID_PATCH_PAYLOAD') {
+        return errorJson(400, 'Draft patch payload invalid for task type', undefined, 'AI_DRAFT_INVALID_PATCH_PAYLOAD');
+      }
       return errorJson(500, 'Update AI draft failed');
+    }
+  }
+
+  const aiReportKnowledgeSuggestionMatch = path.match(/^\/admin\/ai\/reports\/([^/]+)\/knowledge-suggestions$/);
+  if (method === 'POST' && aiReportKnowledgeSuggestionMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateCreateReportKnowledgeSuggestionsInput(payload);
+      const result = await generateAiKnowledgeSuggestionsForReportDraft(aiReportKnowledgeSuggestionMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'AI report draft not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'AI_DRAFT_NOT_EVENT_REPORT') {
+        return errorJson(409, 'Draft is not an event report', undefined, 'AI_DRAFT_NOT_EVENT_REPORT');
+      }
+      return errorJson(500, 'Generate report knowledge suggestions failed');
     }
   }
 

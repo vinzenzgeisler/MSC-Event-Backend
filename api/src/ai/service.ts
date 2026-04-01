@@ -148,7 +148,8 @@ const reportSchema = z.object({
   title: z.string().min(1).max(180).optional(),
   teaser: z.string().max(280).nullable().optional(),
   text: z.string().min(1).max(5000),
-  warnings: z.array(z.string()).max(8).default([])
+  warnings: z.array(z.string()).max(8).default([]),
+  uncertainClaims: z.array(z.string().min(1).max(280)).max(8).default([])
 });
 
 const speakerTextSchema = z.object({
@@ -192,10 +193,28 @@ const buildReplySystemPrompt = () =>
   ].join(' ');
 
 const buildReportSystemPrompt = () =>
-  'You generate event communication drafts in German. Keep the text factual, presentation-ready, and based only on the supplied data. Return JSON with title, teaser, text, warnings.';
+  'You generate event communication drafts in German. Keep the text factual, presentation-ready, and based only on the supplied data. Do not invent results, rankings, lap times, sponsors, or quotes. If information is missing, mention it conservatively in warnings or uncertainClaims instead of implying facts. Return JSON with title, teaser, text, warnings, uncertainClaims.';
 
 const buildSpeakerSystemPrompt = () =>
   'You generate short announcer-support text in German. Keep it lively but factual and easy to read aloud. Return JSON with text, facts, warnings.';
+
+type ReportFormat = 'website' | 'short_summary';
+
+type ReportVariantPayload = {
+  format: ReportFormat;
+  title: string | null;
+  teaser: string | null;
+  text: string;
+  highlights: string[];
+};
+
+type ReportVariantReviewPayload = {
+  format: ReportFormat;
+  confidence: 'low' | 'medium' | 'high';
+  blockingIssues: string[];
+  uncertainClaims: string[];
+  warnings: AiWarning[];
+};
 
 const buildChatSystemPrompt = (contextMode: 'reply' | 'knowledge_capture') =>
   [
@@ -785,6 +804,127 @@ const loadClassReportContext = async (eventId: string, classId: string) => {
   };
 };
 
+const buildReportFactBlocks = (context: Awaited<ReturnType<typeof loadEventReportContext>> | Awaited<ReturnType<typeof loadClassReportContext>>) => {
+  if (!context) {
+    return [];
+  }
+
+  const blocks: Array<{ key: string; label: string; source: string; facts: string[] }> = [
+    {
+      key: 'event',
+      label: 'Eventstammdaten',
+      source: 'event',
+      facts: toCompactArray([
+        context.event.name,
+        'startsAt' in context.event && context.event.startsAt ? `Beginn: ${context.event.startsAt}` : null,
+        'endsAt' in context.event && context.event.endsAt ? `Ende: ${context.event.endsAt}` : null,
+        'status' in context.event && context.event.status ? `Status: ${context.event.status}` : null,
+        'contactEmail' in context.event && context.event.contactEmail ? `Kontakt: ${context.event.contactEmail}` : null,
+        'websiteUrl' in context.event && context.event.websiteUrl ? `Website: ${context.event.websiteUrl}` : null
+      ], 8)
+    },
+    {
+      key: 'counts',
+      label: 'Teilnahme und Zahlung',
+      source: 'aggregated_counts',
+      facts: [
+        `Nennungen gesamt: ${context.counts.entriesTotal}`,
+        `Zugelassene Nennungen: ${context.counts.acceptedTotal}`,
+        `Bezahlt markiert: ${context.counts.paidTotal}`
+      ]
+    }
+  ];
+
+  if ('class' in context && context.class) {
+    blocks.push({
+      key: 'class',
+      label: 'Klassenbezug',
+      source: 'event_class',
+      facts: [`Klasse: ${context.class.name}`]
+    });
+  }
+
+  if ('classes' in context && context.classes.length > 0) {
+    blocks.push({
+      key: 'class_distribution',
+      label: 'Klassenverteilung',
+      source: 'event_class',
+      facts: context.classes.map((item) => `${item.className}: ${item.count}`)
+    });
+  }
+
+  return blocks.filter((block) => block.facts.length > 0);
+};
+
+const buildReportMissingData = (context: Awaited<ReturnType<typeof loadEventReportContext>> | Awaited<ReturnType<typeof loadClassReportContext>>) => {
+  const missingData = [
+    'Es liegen keine strukturierten Ergebnisdaten, Platzierungen oder Laufzeiten vor.'
+  ];
+
+  return missingData;
+};
+
+const buildReportSourceSummary = (input: {
+  factBlocks: Array<{ key: string; label: string; source: string; facts: string[] }>;
+  approvedKnowledgeCount: number;
+  highlightsCount: number;
+  missingDataCount: number;
+  operatorInputPresent: boolean;
+}) => ({
+  factBlockCount: input.factBlocks.length,
+  factCount: input.factBlocks.reduce((sum, block) => sum + block.facts.length, 0),
+  approvedKnowledgeCount: input.approvedKnowledgeCount,
+  manualHighlightsCount: input.highlightsCount,
+  missingDataCount: input.missingDataCount,
+  operatorInputPresent: input.operatorInputPresent
+});
+
+const normalizeReportVariantConfidence = (warnings: AiWarning[], uncertainClaims: string[]): 'low' | 'medium' | 'high' => {
+  if (warnings.some((warning) => warning.severity === 'high')) {
+    return 'low';
+  }
+  if (warnings.length > 1 || uncertainClaims.length > 0) {
+    return 'medium';
+  }
+  return 'high';
+};
+
+const buildReportVariantReview = (
+  format: ReportFormat,
+  warnings: AiWarning[],
+  uncertainClaims: string[]
+): ReportVariantReviewPayload => ({
+  format,
+  confidence: normalizeReportVariantConfidence(warnings, uncertainClaims),
+  blockingIssues: warnings.filter((warning) => warning.severity === 'high').map((warning) => warning.message),
+  uncertainClaims: uniqueStrings(uncertainClaims, 8),
+  warnings
+});
+
+const extractObjectRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+
+const extractReportDraftVariants = (outputPayload: Record<string, unknown>): ReportVariantPayload[] => {
+  const items = Array.isArray(outputPayload.variants) ? outputPayload.variants : [];
+  return items
+    .map((item) => (item && typeof item === 'object' ? (item as Record<string, unknown>) : null))
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .flatMap((item) => {
+      const format = item.format === 'website' || item.format === 'short_summary' ? item.format : null;
+      const text = typeof item.text === 'string' ? item.text.trim() : '';
+      if (!format || !text) {
+        return [];
+      }
+      return [{
+        format,
+        title: typeof item.title === 'string' ? item.title : null,
+        teaser: typeof item.teaser === 'string' ? item.teaser : null,
+        text,
+        highlights: Array.isArray(item.highlights) ? uniqueStrings(item.highlights.map((value) => String(value)), 10) : []
+      }];
+    });
+};
+
 const loadSpeakerContext = async (input: { eventId: string; entryId?: string; classId?: string }) => {
   const db = await getDb();
   if (input.entryId) {
@@ -1068,10 +1208,15 @@ export const generateEventReport = async (
     eventId: string;
     classId?: string;
     scope: 'event' | 'class';
-    formats: Array<'website' | 'short_summary'>;
+    formats: Array<ReportFormat>;
     tone: 'neutral' | 'friendly' | 'formal';
     length: 'short' | 'medium' | 'long';
     highlights?: string[];
+    additionalContext?: string;
+    mustMention?: string[];
+    mustAvoid?: string[];
+    audience?: string;
+    publishChannel?: string;
   },
   actorUserId: string | null
 ) => {
@@ -1082,6 +1227,17 @@ export const generateEventReport = async (
   if (!context || (input.scope === 'class' && !eventContext)) {
     return null;
   }
+  const approvedKnowledge = await loadApprovedKnowledgeItems(input.eventId, ['general', 'logistics', 'contact']);
+  const factBlocks = buildReportFactBlocks(context);
+  const missingData = buildReportMissingData(context);
+  const operatorInput = {
+    additionalContext: input.additionalContext ?? null,
+    mustMention: input.mustMention ?? [],
+    mustAvoid: input.mustAvoid ?? [],
+    audience: input.audience ?? null,
+    publishChannel: input.publishChannel ?? null
+  };
+
   const variants = await Promise.all(
     input.formats.map(async (format) => {
       const generated = await generateStructuredObject({
@@ -1098,13 +1254,22 @@ export const generateEventReport = async (
             class: 'class' in context ? context.class : null,
             counts: context.counts,
             classes: 'classes' in context ? context.classes : undefined,
-            highlights: input.highlights ?? []
+            highlights: input.highlights ?? [],
+            factBlocks,
+            approvedKnowledge: approvedKnowledge.map((item) => ({
+              topic: item.topic,
+              title: item.title,
+              content: item.content
+            })),
+            operatorInput,
+            missingData
           },
           {
             title: 'string?',
             teaser: 'string|null',
             text: 'string',
-            warnings: 'string[]'
+            warnings: 'string[]',
+            uncertainClaims: 'string[]'
           }
         )
       });
@@ -1140,6 +1305,13 @@ export const generateEventReport = async (
     }
   ];
   const confidence = warnings.length > 1 ? 'medium' : 'high';
+  const variantReview = variants.map((variant) =>
+    buildReportVariantReview(
+      variant.format,
+      normalizeWarnings(variant.generated.data.warnings ?? [], 'REVIEW_NOTE'),
+      variant.generated.data.uncertainClaims ?? []
+    )
+  );
 
   return {
     eventId: input.eventId,
@@ -1150,15 +1322,36 @@ export const generateEventReport = async (
           format: variant.format,
           title: variant.generated.data.title ?? null,
           teaser: variant.generated.data.teaser ?? null,
-          text: variant.generated.data.text
-        }))
+          text: variant.generated.data.text,
+          highlights: input.highlights ?? []
+        })),
+        variantReview,
+        blockingIssues: uniqueStrings(variantReview.flatMap((item) => item.blockingIssues), 8),
+        uncertainClaims: uniqueStrings(variantReview.flatMap((item) => item.uncertainClaims), 8)
       },
       basis: {
         scope: input.scope,
         event: context.event,
         class: 'class' in context ? context.class : null,
         facts: context.counts,
-        highlights: input.highlights ?? []
+        highlights: input.highlights ?? [],
+        factBlocks,
+        usedKnowledge: buildKnowledgeHitPreview(approvedKnowledge),
+        operatorInput,
+        sourceSummary: buildReportSourceSummary({
+          factBlocks,
+          approvedKnowledgeCount: approvedKnowledge.length,
+          highlightsCount: (input.highlights ?? []).length,
+          missingDataCount: missingData.length,
+          operatorInputPresent: Boolean(
+            operatorInput.additionalContext ||
+            operatorInput.mustMention.length > 0 ||
+            operatorInput.mustAvoid.length > 0 ||
+            operatorInput.audience ||
+            operatorInput.publishChannel
+          )
+        }),
+        missingData
       },
       warnings,
       confidence,
@@ -1642,22 +1835,31 @@ export const getGeneratedDraft = async (draftId: string) => {
 
 export const updateReplyDraft = async (
   draftId: string,
-  input: {
-    replySubject: string;
-    replyDraft: string;
-    answerFacts: string[];
-    unknowns: string[];
-    operatorEdits?: Record<string, unknown>;
-  },
+  input:
+    | {
+        replySubject: string;
+        replyDraft: string;
+        answerFacts: string[];
+        unknowns: string[];
+        operatorEdits?: Record<string, unknown>;
+      }
+    | {
+        variants: Array<{
+          format: ReportFormat;
+          title?: string | null;
+          teaser?: string | null;
+          text: string;
+          highlights?: string[];
+        }>;
+        highlights?: string[];
+        operatorEdits?: Record<string, unknown>;
+      },
   actorUserId: string | null
 ) => {
   const db = await getDb();
   const current = await getGeneratedDraft(draftId);
   if (!current) {
     return null;
-  }
-  if (current.taskType !== 'reply_suggestion') {
-    throw new Error('AI_DRAFT_NOT_REPLY_SUGGESTION');
   }
 
   const now = new Date();
@@ -1666,22 +1868,53 @@ export const updateReplyDraft = async (
     outputPayload.operatorEdits && typeof outputPayload.operatorEdits === 'object' && !Array.isArray(outputPayload.operatorEdits)
       ? (outputPayload.operatorEdits as Record<string, unknown>)
       : {};
+  let updatedOutputPayload: Record<string, unknown>;
 
-  const updatedOutputPayload = {
-    ...outputPayload,
-    replySubject: input.replySubject,
-    replyDraft: input.replyDraft,
-    answerFacts: uniqueStrings(input.answerFacts, 12),
-    unknowns: uniqueStrings(input.unknowns, 12),
-    operatorEdits: {
-      ...existingOperatorEdits,
-      ...(input.operatorEdits ?? {}),
+  if (current.taskType === 'reply_suggestion') {
+    if (!('replySubject' in input)) {
+      throw new Error('AI_DRAFT_INVALID_PATCH_PAYLOAD');
+    }
+    updatedOutputPayload = {
+      ...outputPayload,
+      replySubject: input.replySubject,
+      replyDraft: input.replyDraft,
+      answerFacts: uniqueStrings(input.answerFacts, 12),
+      unknowns: uniqueStrings(input.unknowns, 12),
+      operatorEdits: {
+        ...existingOperatorEdits,
+        ...(input.operatorEdits ?? {}),
+        editedBy: actorUserId,
+        editedAt: now.toISOString()
+      },
       editedBy: actorUserId,
       editedAt: now.toISOString()
-    },
-    editedBy: actorUserId,
-    editedAt: now.toISOString()
-  };
+    };
+  } else if (current.taskType === 'event_report') {
+    if (!('variants' in input)) {
+      throw new Error('AI_DRAFT_INVALID_PATCH_PAYLOAD');
+    }
+    updatedOutputPayload = {
+      ...outputPayload,
+      variants: input.variants.map((variant) => ({
+        format: variant.format,
+        title: variant.title ?? null,
+        teaser: variant.teaser ?? null,
+        text: variant.text,
+        highlights: uniqueStrings([...(variant.highlights ?? []), ...(input.highlights ?? [])], 10)
+      })),
+      highlights: uniqueStrings(input.highlights ?? [], 10),
+      operatorEdits: {
+        ...existingOperatorEdits,
+        ...(input.operatorEdits ?? {}),
+        editedBy: actorUserId,
+        editedAt: now.toISOString()
+      },
+      editedBy: actorUserId,
+      editedAt: now.toISOString()
+    };
+  } else {
+    throw new Error('AI_DRAFT_NOT_PATCHABLE');
+  }
 
   const [updated] = await db
     .update(aiDraft)
@@ -1726,6 +1959,134 @@ export const updateReplyDraft = async (
   });
 
   return updated;
+};
+
+export const regenerateEventReportVariant = async (
+  draftId: string,
+  input: {
+    format: ReportFormat;
+    additionalContext?: string;
+    mustMention?: string[];
+    mustAvoid?: string[];
+    audience?: string;
+    publishChannel?: string;
+  },
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const current = await getGeneratedDraft(draftId);
+  if (!current) {
+    return null;
+  }
+  if (current.taskType !== 'event_report') {
+    throw new Error('AI_DRAFT_NOT_EVENT_REPORT');
+  }
+
+  const snapshot = extractObjectRecord(current.inputSnapshot);
+  const eventId = typeof snapshot.eventId === 'string' ? snapshot.eventId : current.eventId;
+  const scope = snapshot.scope === 'class' ? 'class' : 'event';
+  const classId = typeof snapshot.classId === 'string' ? snapshot.classId : undefined;
+  const tone = snapshot.tone === 'friendly' || snapshot.tone === 'formal' ? snapshot.tone : 'neutral';
+  const length = snapshot.length === 'short' || snapshot.length === 'long' ? snapshot.length : 'medium';
+  const highlights = Array.isArray(snapshot.highlights) ? uniqueStrings(snapshot.highlights.map((value) => String(value)), 10) : [];
+
+  if (!eventId) {
+    throw new Error('AI_DRAFT_EVENT_CONTEXT_MISSING');
+  }
+
+  const generated = await generateEventReport({
+    eventId,
+    classId,
+    scope,
+    formats: [input.format],
+    tone,
+    length,
+    highlights,
+    additionalContext: input.additionalContext ?? (typeof snapshot.additionalContext === 'string' ? snapshot.additionalContext : undefined),
+    mustMention: input.mustMention ?? (Array.isArray(snapshot.mustMention) ? snapshot.mustMention.map((value) => String(value)) : []),
+    mustAvoid: input.mustAvoid ?? (Array.isArray(snapshot.mustAvoid) ? snapshot.mustAvoid.map((value) => String(value)) : []),
+    audience: input.audience ?? (typeof snapshot.audience === 'string' ? snapshot.audience : undefined),
+    publishChannel: input.publishChannel ?? (typeof snapshot.publishChannel === 'string' ? snapshot.publishChannel : undefined)
+  }, actorUserId);
+
+  if (!generated) {
+    return null;
+  }
+
+  const now = new Date();
+  const outputPayload = extractObjectRecord(current.outputPayload);
+  const currentVariants = extractReportDraftVariants(outputPayload).filter((variant) => variant.format !== input.format);
+  const regeneratedVariant = (generated.result.variants as ReportVariantPayload[])[0];
+  const currentVariantReview = Array.isArray(outputPayload.variantReview) ? outputPayload.variantReview.filter((item) => {
+    const record = extractObjectRecord(item);
+    return record.format !== input.format;
+  }) : [];
+  const regeneratedVariantReview = (generated.result.variantReview as ReportVariantReviewPayload[])[0];
+
+  const updatedOutputPayload = {
+    ...outputPayload,
+    variants: [...currentVariants, regeneratedVariant].sort((a, b) => a.format.localeCompare(b.format)),
+    variantReview: [...currentVariantReview, regeneratedVariantReview].sort((a, b) => String(extractObjectRecord(a).format).localeCompare(String(extractObjectRecord(b).format))),
+    blockingIssues: generated.result.blockingIssues,
+    uncertainClaims: generated.result.uncertainClaims,
+    basis: generated.basis,
+    review: generated.review,
+    meta: generated.meta,
+    operatorEdits: {
+      ...extractObjectRecord(outputPayload.operatorEdits),
+      editedBy: actorUserId,
+      editedAt: now.toISOString(),
+      regeneratedFormat: input.format
+    },
+    editedBy: actorUserId,
+    editedAt: now.toISOString()
+  };
+
+  const [updated] = await db
+    .update(aiDraft)
+    .set({
+      outputPayload: updatedOutputPayload,
+      warnings: generated.warnings,
+      modelId: generated.meta.modelId,
+      promptVersion: generated.meta.promptVersion,
+      updatedAt: now
+    })
+    .where(eq(aiDraft.id, draftId))
+    .returning({
+      id: aiDraft.id,
+      taskType: aiDraft.taskType,
+      status: aiDraft.status,
+      eventId: aiDraft.eventId,
+      entryId: aiDraft.entryId,
+      messageId: aiDraft.messageId,
+      title: aiDraft.title,
+      promptVersion: aiDraft.promptVersion,
+      modelId: aiDraft.modelId,
+      inputSnapshot: aiDraft.inputSnapshot,
+      outputPayload: aiDraft.outputPayload,
+      warnings: aiDraft.warnings,
+      createdBy: aiDraft.createdBy,
+      createdAt: aiDraft.createdAt,
+      updatedAt: aiDraft.updatedAt
+    });
+
+  await writeAuditLog(db as never, {
+    eventId: updated.eventId,
+    actorUserId,
+    action: 'ai_report_variant_regenerated',
+    entityType: 'ai_draft',
+    entityId: updated.id as never,
+    payload: {
+      draftId: updated.id,
+      format: input.format,
+      eventId: updated.eventId
+    }
+  });
+
+  return {
+    draft: updated,
+    generated
+  };
 };
 
 export const listKnowledgeSuggestions = async (query: {
@@ -1773,6 +2134,140 @@ export const listKnowledgeSuggestions = async (query: {
     ...row,
     topic: knowledgeTopicSchema.parse(row.topic)
   }));
+};
+
+export const generateKnowledgeSuggestionsForReportDraft = async (
+  draftId: string,
+  input: {
+    additionalContext?: string;
+    topicHint?: KnowledgeTopic;
+  },
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const current = await getGeneratedDraft(draftId);
+  if (!current) {
+    return null;
+  }
+  if (current.taskType !== 'event_report') {
+    throw new Error('AI_DRAFT_NOT_EVENT_REPORT');
+  }
+
+  const outputPayload = extractObjectRecord(current.outputPayload);
+  const basis = extractObjectRecord(outputPayload.basis);
+  const approvedKnowledge = (Array.isArray(basis.usedKnowledge) ? basis.usedKnowledge : [])
+    .map((item) => extractObjectRecord(item))
+    .flatMap((item) => {
+      const topic = typeof item.topic === 'string' ? knowledgeTopicSchema.safeParse(item.topic).data : undefined;
+      const title = typeof item.title === 'string' ? item.title : undefined;
+      const content = typeof item.content === 'string' ? item.content : undefined;
+      const id = typeof item.id === 'string' ? item.id : undefined;
+      return topic && title && content ? [{ id, topic, title, content }] : [];
+    });
+  const factBlocks = Array.isArray(basis.factBlocks) ? basis.factBlocks : [];
+  const highlights = Array.isArray(outputPayload.highlights)
+    ? outputPayload.highlights.map((value) => String(value))
+    : Array.isArray(basis.highlights)
+      ? basis.highlights.map((value) => String(value))
+      : [];
+  const candidateText = [
+    ...factBlocks.flatMap((item) => {
+      const block = extractObjectRecord(item);
+      const label = typeof block.label === 'string' ? block.label : 'Berichtsfakten';
+      const facts = Array.isArray(block.facts) ? block.facts.map((value) => String(value)) : [];
+      return facts.map((fact) => `${label}: ${fact}`);
+    }),
+    ...highlights,
+    input.additionalContext ?? ''
+  ].join('\n\n');
+
+  const normalized = buildFallbackKnowledgeSuggestions({
+    messageText: candidateText,
+    additionalContext: candidateText,
+    topicHint: input.topicHint,
+    approvedKnowledge: approvedKnowledge.map((item) => ({
+      topic: item.topic,
+      title: item.title,
+      content: item.content
+    }))
+  });
+
+  const now = new Date();
+  const createdRows =
+    normalized.length > 0
+      ? await db
+          .insert(aiKnowledgeSuggestion)
+          .values(
+            normalized.map((item) => ({
+              eventId: current.eventId ?? null,
+              messageId: null,
+              topic: item.topic,
+              title: item.title,
+              content: item.content,
+              rationale: item.rationale ?? 'Aus bestaetigten Berichtsfakten und Operator-Eingaben abgeleitet.',
+              status: 'suggested',
+              sourceType: 'ai_suggested',
+              createdBy: actorUserId,
+              createdAt: now,
+              updatedAt: now
+            }))
+          )
+          .returning({
+            id: aiKnowledgeSuggestion.id,
+            eventId: aiKnowledgeSuggestion.eventId,
+            messageId: aiKnowledgeSuggestion.messageId,
+            topic: aiKnowledgeSuggestion.topic,
+            title: aiKnowledgeSuggestion.title,
+            content: aiKnowledgeSuggestion.content,
+            rationale: aiKnowledgeSuggestion.rationale,
+            status: aiKnowledgeSuggestion.status,
+            createdAt: aiKnowledgeSuggestion.createdAt
+          })
+      : [];
+
+  await writeAuditLog(db as never, {
+    eventId: current.eventId,
+    actorUserId,
+    action: 'ai_report_knowledge_suggestions_generated',
+    entityType: 'ai_draft',
+    entityId: draftId as never,
+    payload: {
+      draftId,
+      suggestionCount: createdRows.length,
+      eventId: current.eventId
+    }
+  });
+
+  return {
+    draftId,
+    ...withTaskEnvelope({
+      task: 'knowledge_suggestions',
+      result: {
+        suggestions: createdRows.map((item) => ({
+          ...item,
+          topic: knowledgeTopicSchema.parse(item.topic)
+        }))
+      },
+      basis: {
+        draftId,
+        eventId: current.eventId,
+        factBlockCount: factBlocks.length,
+        approvedKnowledge: approvedKnowledge.map((item) => ({
+          id: item.id ?? null,
+          topic: item.topic,
+          title: item.title,
+          content: item.content
+        })),
+        operatorInput: input.additionalContext ?? null
+      },
+      warnings: [],
+      confidence: createdRows.length > 0 ? 'medium' : 'low',
+      modelId: current.modelId ?? 'manual-fallback',
+      reviewReason: 'Wissensvorschlaege aus Berichtsfakten muessen vor der Uebernahme manuell geprueft werden.',
+      recommendedChecks: ['Titel, Inhalt und Themenzuordnung der Wissensvorschlaege manuell pruefen.'],
+      blockingIssues: []
+    })
+  };
 };
 
 export const createKnowledgeItem = async (

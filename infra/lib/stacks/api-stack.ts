@@ -908,6 +908,20 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/ai/reports/{id}/regenerate-variant',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/ai/reports/{id}/knowledge-suggestions',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/ai/speaker/generate',
       methods: [apigwv2.HttpMethod.POST],
       integration,

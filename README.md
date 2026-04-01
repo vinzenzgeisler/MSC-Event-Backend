@@ -1,33 +1,63 @@
-# Dreiecksrennen Monorepo
+# MSC Event Backend
 
-Dieses Repo ist als npm-Workspace organisiert:
+Dieses Repository enthaelt das Backend und die AWS-Infrastruktur fuer das MSC-Event-System.
 
-- `api/` enthält den Lambda/API-Code (Phase 2, Drizzle + Postgres).
-- `infra/` enthält die AWS CDK App.
+Der fachliche Schwerpunkt des aktuellen Projektstands ist der `AI Communication Hub`: eine cloudbasierte, review-pflichtige Assistenz fuer wiederkehrende Kommunikationsaufgaben rund um das Event.
 
-## KI-Feature fuer die Abgabe
+## Was das Projekt kann
 
-Das Cloud-/KI-Feature fuer die Abgabe ist der `AI Communication Hub`.
+Das Backend stellt klassische Admin- und Event-Funktionen bereit und erweitert diese um drei KI-Use-Cases:
 
-Es erweitert das MSC-Event-System um drei review-pflichtige KI-Assistenzfunktionen:
-
-- Mail-Assistent fuer eingehende Anfragen
+- Mail-Assistent
+  - importiert eingehende Anfragen
+  - fasst Nachrichten zusammen
+  - kategorisiert sie grob
+  - erzeugt einen Antwortentwurf mit Warnhinweisen
 - Event-Bericht-Generator
+  - erzeugt Kommunikationsentwuerfe fuer Event oder Klasse
+  - unterstuetzt mehrere Varianten wie `website` und `short_summary`
+  - zeigt die verwendete Faktenbasis transparent an
 - Sprecherassistenz
+  - erzeugt kurze sprechfertige Texte fuer Fahrer oder Klassen
 
-Technisch wird dabei ein typischer Cloud-Flow umgesetzt:
+Ergaenzend gibt es:
 
-- API Gateway ruft Lambda auf
-- Lambda baut serverseitig den fachlichen Kontext
-- Lambda nutzt AWS Bedrock als KI-Service
-- Ergebnisse werden als pruefbare Entwuerfe zurueckgegeben
+- gespeicherte KI-Drafts
+- reviewpflichtige Wissensvorschlaege
+- freigegebene Knowledge-Items als wiederverwendbare Wissensbasis
 
-Der Fokus liegt bewusst nicht auf einem offenen Chatbot, sondern auf klaren, plausiblen Use Cases fuer den Praxispartner.
+## Wie die KI eingebunden ist
+
+Die KI-Integration laeuft ueber AWS:
+
+- API Gateway nimmt Anfragen entgegen
+- Lambda verarbeitet die Fachlogik
+- Lambda baut serverseitig den Kontext aus Event-, Nennungs- und Kommunikationsdaten
+- AWS Bedrock erzeugt strukturierte KI-Ausgaben
+- das Backend gibt pruefbare Entwuerfe mit `basis`, `warnings` und `review` zurueck
+
+Die KI arbeitet bewusst als Assistenz. Es gibt keinen offenen Haupt-Chatbot und keine autonome Entscheidungskomponente.
+
+## Projektstruktur
+
+- `api/`
+  - Lambda/API-Code
+  - Drizzle-Schema und Migrationen
+  - KI-Service-Logik
+- `infra/`
+  - AWS CDK App
+  - API Gateway, Lambda, Scheduler, Bedrock- und Secret-Anbindung
+- `docs/`
+  - weiterfuehrende Architektur-, API- und Betriebsdokumentation
 
 ## Voraussetzungen
 
+Fuer lokalen Build und Deployment:
+
 - Node.js 20+
 - npm 10+
+- AWS CLI
+- AWS Account bzw. Zugriff auf die Zielumgebung
 
 ## Installation
 
@@ -35,51 +65,79 @@ Der Fokus liegt bewusst nicht auf einem offenen Chatbot, sondern auf klaren, pla
 npm install
 ```
 
-## Konfigurationsmodell (wichtig)
+## Nutzung in Kurzform
 
-- Stage-spezifische Deploy-Konfiguration liegt in `infra/lib/config/dev.ts` und `infra/lib/config/prod.ts`.
-- OAuth-URLs, Verify-URL, SES-Absender und Assets-CORS werden dort gepflegt.
-- `.env.example` enthält nur noch AWS-Credential-Variablen fuer die CLI.
+### Lokal bauen
 
-## Wichtige Befehle
+```bash
+npm run api:build
+npm run infra:build
+```
 
-- `npm run api:build`
-- `npm run api:start`
-- `npm run api:db:generate`
-- `npm run api:db:migrate`
-- `npm run infra:build`
-- `npm run synth`
-- `npm run deploy`
+### Infrastruktur deployen
 
-## Doku fuer Nachbau und Abgabe
+Beispiel fuer `dev`:
+
+```bash
+cd infra
+npx cdk deploy --all -c stage=dev -c devProfile=test --require-approval never
+```
+
+### Datenbank migrieren
+
+```bash
+npm run api:db:migrate
+```
+
+### Funktion pruefen
+
+Sinnvolle erste Checks:
+
+1. `GET /health`
+2. `GET /admin/ai/messages`
+3. `POST /admin/ai/messages/{id}/suggest-reply`
+4. `POST /admin/ai/reports/generate`
+5. `POST /admin/ai/speaker/generate`
+
+## Konfiguration und Secrets
+
+Wichtige Punkte:
+
+- Stage-spezifische Konfiguration liegt in:
+  - `infra/lib/config/dev.ts`
+  - `infra/lib/config/prod.ts`
+- produktive Secrets liegen nicht im Repository
+- fuer den Mail-Assistenten wird ein IMAP-Secret in AWS Secrets Manager benoetigt
+- fuer die KI wird ein Bedrock-Modell bzw. Inference Profile benoetigt
+
+Empfohlener MVP-Standard:
+
+- `eu.amazon.nova-micro-v1:0`
+
+## Wie das Projekt sinnvoll genutzt wird
+
+Der `AI Communication Hub` ist fuer reale, fachlich plausible Arbeitsablaeufe gedacht:
+
+- eingehende Mails schneller verstehen und beantworten
+- Kommunikationsentwuerfe aus vorhandenen Eventdaten erzeugen
+- Wissen aus wiederkehrenden Rueckfragen strukturiert wiederverwendbar machen
+
+Wichtig:
+
+- KI-Ausgaben bleiben Entwuerfe
+- fachliche Pruefung durch Menschen bleibt Pflicht
+- fehlende Daten sollen sichtbar gemacht, nicht erfunden werden
+
+## Weiterfuehrende Doku
+
+Fuer technische Details:
 
 - API: `api/README.md`
-- Infra: `infra/README.md`
+- Infrastruktur: `infra/README.md`
 - AI Architektur: `docs/ai/architecture.md`
-- AI MVP Scope: `docs/ai/mvp-scope.md`
-- AI Risiken / offene Fragen: `docs/ai/open-questions-risks.md`
+- AI Projektuebersicht: `docs/ai/project-overview.md`
 - AI API Contract: `docs/ai/api-draft.md`
-- AI Setup und Deploy: `docs/ai/setup-and-deploy.md`
-- AI Konfigurationsreferenz: `docs/ai/configuration-reference.md`
-- AI Demo-Runbook: `docs/ai/demo-runbook.md`
-- AI Submission Summary: `docs/ai/submission-summary.md`
-- Handover Phase 4: `docs/phase4-handover.md`
-- Handover Phase 5: `docs/phase5-handover.md`
-- Handover Phase 6: `docs/phase6-handover.md`
-- Smoke Test (PowerShell): `scripts/phase3-smoke-test.ps1`
-
-## Ablauf (Kurz)
-
-1. Installieren: `npm install`
-2. Dev kostenarm deployen: `cd infra && npx cdk deploy --all -c stage=dev -c devProfile=idle`
-3. Für funktionale Tests: `cd infra && npx cdk deploy --all -c stage=dev -c devProfile=test`
-4. Smoke-Test ausführen: `pwsh ./scripts/phase3-smoke-test.ps1`
-
-## Empfohlener Nachbau fuer die KI-Abgabe
-
-1. `npm install`
-2. AWS Stage-Konfiguration und Secrets gemäss `docs/ai/configuration-reference.md` anlegen
-3. Infrastruktur deployen gemäss `docs/ai/setup-and-deploy.md`
-4. Datenbank migrieren
-5. Backend deployen
-6. Demo-Schritte gemäss `docs/ai/demo-runbook.md` durchgehen
+- Setup und Deploy: `docs/ai/setup-and-deploy.md`
+- Konfigurationsreferenz: `docs/ai/configuration-reference.md`
+- Demo-Ablauf: `docs/ai/demo-runbook.md`
+- Risiken und offene Fragen: `docs/ai/open-questions-risks.md`

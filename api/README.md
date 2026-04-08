@@ -9,7 +9,7 @@ Minimaler TypeScript-Lambda-Handler mit Datenbankzugriff (Postgres via Drizzle):
 - `POST /admin/mail/queue` → Outbox-Einträge für Sammelmails
 - `GET /admin/events` / `POST /admin/events` → Event-Liste + Event anlegen
 - `PATCH /admin/events/:id` → Event-Metadaten anpassen (solange offen)
-- `GET /admin/events/current` → aktuelles Event lesen
+- `GET /admin/events/:id|current` → beliebiges oder aktuelles Event lesen
 - `POST /admin/events/:id/activate|close|archive` → Event-Lifecycle steuern
 - `GET|POST /admin/events/:id/classes` + `PATCH|DELETE /admin/classes/:id` → Klassenverwaltung
 - `POST /admin/mail/lifecycle/queue` → Statusbasierte Mail pro Nennung/Fahrer

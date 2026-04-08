@@ -188,8 +188,11 @@ export class ApiStack extends Stack {
         RETENTION_UPLOAD_DAYS: '30',
         RETENTION_EXPORT_DAYS: '90',
         RETENTION_OUTBOX_DAYS: '365',
+        RETENTION_EMAIL_DELIVERY_DAYS: '365',
         RETENTION_AUDIT_DAYS: '730',
-        RETENTION_NOTES_DAYS: '365'
+        RETENTION_EVENT_OPERATIONAL_DAYS: '365',
+        RETENTION_DOCUMENT_DAYS: '2190',
+        RETENTION_INVOICE_DAYS: '3650'
       },
       bundling: {
         target: 'node20',
@@ -530,7 +533,7 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/events/{id}',
-      methods: [apigwv2.HttpMethod.PATCH],
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PATCH],
       integration,
       authorizer: jwtAuthorizer
     });

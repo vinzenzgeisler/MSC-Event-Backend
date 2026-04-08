@@ -11,6 +11,7 @@ import {
   activateEvent,
   closeEvent,
   createEvent,
+  getEventById,
   getCurrentEvent,
   listEvents,
   validateCreateEventInput,
@@ -627,6 +628,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  const eventPatchMatch = path.match(/^\/admin\/events\/([^/]+)$/);
+
   if (method === 'GET' && path === '/admin/events/current') {
     const auth = getAuthContext(event);
     if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
@@ -640,6 +643,22 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, event: current });
     } catch (error) {
       return errorJson(500, 'Get current event failed');
+    }
+  }
+
+  if (method === 'GET' && eventPatchMatch) {
+    const auth = getAuthContext(event);
+    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const selected = await getEventById(eventPatchMatch[1]);
+      if (!selected) {
+        return errorJson(404, 'Event not found');
+      }
+      return json(200, { ok: true, event: selected });
+    } catch (error) {
+      return errorJson(500, 'Get event failed');
     }
   }
 
@@ -696,7 +715,6 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
-  const eventPatchMatch = path.match(/^\/admin\/events\/([^/]+)$/);
   if (method === 'PATCH' && eventPatchMatch) {
     const auth = getAuthContext(event);
     if (!hasGroup(auth, 'admin')) {

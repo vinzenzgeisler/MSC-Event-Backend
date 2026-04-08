@@ -36,7 +36,7 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   email_outbox_retry_requested: ['previousStatus'],
   public_entry_created: ['registrationStatus', 'registrationGroupId'],
   public_entry_verified: ['registrationStatus', 'registrationGroupId'],
-  privacy_retention_run: ['windowStart', 'windowEnd', 'deletedRows', 'errors']
+  privacy_retention_run: ['windowStart', 'windowEnd', 'dryRun', 'deletedRows', 'errors']
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

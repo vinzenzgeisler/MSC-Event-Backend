@@ -84,7 +84,7 @@ const ensureTransitionAllowed = (from: string, to: string) => {
   if (to === 'open' && (from === 'draft' || from === 'closed' || from === 'open')) {
     return;
   }
-  if (to === 'closed' && from === 'open') {
+  if (to === 'closed' && (from === 'open' || from === 'archived')) {
     return;
   }
   if (to === 'archived' && from === 'closed') {
@@ -167,6 +167,34 @@ export const getCurrentEvent = async () => {
   return rows[0] ?? null;
 };
 
+export const getEventById = async (eventId: string) => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: event.id,
+      name: event.name,
+      startsAt: event.startsAt,
+      endsAt: event.endsAt,
+      status: event.status,
+      isCurrent: event.isCurrent,
+      registrationOpenAt: event.registrationOpenAt,
+      registrationCloseAt: event.registrationCloseAt,
+      contactEmail: event.contactEmail,
+      websiteUrl: event.websiteUrl,
+      entryConfirmationConfig: event.entryConfirmationConfig,
+      openedAt: event.openedAt,
+      closedAt: event.closedAt,
+      archivedAt: event.archivedAt,
+      createdAt: event.createdAt,
+      updatedAt: event.updatedAt
+    })
+    .from(event)
+    .where(eq(event.id, eventId))
+    .limit(1);
+
+  return rows[0] ?? null;
+};
+
 export const createEvent = async (input: CreateEventInput, actorUserId: string | null) => {
   const db = await getDb();
   const now = new Date();
@@ -221,16 +249,21 @@ export const activateEvent = async (eventId: string, actorUserId: string | null)
     if (!existing) {
       return null;
     }
-    ensureTransitionAllowed(existing.status, 'open');
+    const restoringArchivedEvent = existing.status === 'archived';
+    ensureTransitionAllowed(existing.status, restoringArchivedEvent ? 'closed' : 'open');
 
-    await tx.update(event).set({ isCurrent: false, updatedAt: now }).where(eq(event.isCurrent, true));
+    if (!restoringArchivedEvent) {
+      await tx.update(event).set({ isCurrent: false, updatedAt: now }).where(eq(event.isCurrent, true));
+    }
 
     const [updated] = await tx
       .update(event)
       .set({
-        status: 'open',
-        isCurrent: true,
-        openedAt: existing.openedAt ?? now,
+        status: restoringArchivedEvent ? 'closed' : 'open',
+        isCurrent: restoringArchivedEvent ? false : true,
+        openedAt: restoringArchivedEvent ? existing.openedAt : existing.openedAt ?? now,
+        closedAt: restoringArchivedEvent ? existing.closedAt ?? now : existing.closedAt,
+        archivedAt: restoringArchivedEvent ? null : existing.archivedAt,
         updatedAt: now
       })
       .where(eq(event.id, eventId))

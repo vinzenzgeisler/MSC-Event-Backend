@@ -6,7 +6,7 @@ Stand: 2026-02-26
 - Datenminimierung: Nur zwecknoetige Felder speichern.
 - Zweckbindung: Loesch-/Anonymisierungsfristen pro Verarbeitung.
 - Nachweisbarkeit: Loeschaktionen als Audit-Eintrag protokollieren.
-- Trennung operativ vs. revisionsrelevant: Operative Daten frueher minimieren, Nachweisdaten kontrolliert laenger halten.
+- Trennung zwischen personenbezogenen Anmeldedaten, Nachweisdaten und gesetzlich aufzubewahrenden Daten.
 
 ## ANNAHMEN
 - ANNAHME: Keine aktuell aktive zentrale Purge-Pipeline fuer alle Tabellen.
@@ -16,15 +16,16 @@ Stand: 2026-02-26
 
 | Datenkategorie / Tabellen | Frist | Begruendung | Loesch-/Pseudonymisierungsmodus |
 |---|---|---|---|
-| Teilnehmer-Stammdaten (`person`) in Bezug auf aktive/archivierte Entries | 3 Jahre nach Eventende | Operative Rueckfragen, Reklamationen | Nach Frist pseudonymisieren, bei fehlenden Referenzen hard delete |
-| Nennungsdaten (`entry`, `registration_group`) | 3 Jahre nach Eventende | Veranstaltungsdurchfuehrung + moderate Nachlaufzeit | Zunaechst Soft Delete, danach hard delete |
-| Notizen (`specialNotes`, `internalNote`, `driverNote`) | 12 Monate nach Eventende | Erhoehte Sensitivitaet, kein Dauerbedarf | Fruehzeitige Feldanonymisierung/Leeren |
+| Personenbezogene Daten aus der Anmeldung (`person`) | 1 Jahr nach Eventende | Durchfuehrung und Nachbereitung der Veranstaltung | Nach Frist anonymisieren; eventbezogen behandeln, keine eventuebergreifende Wiederverwendung |
+| Nennungsdaten (`entry`, `registration_group`) | 1 Jahr nach Eventende, soweit keine laengeren Pflichten greifen | Nachweis der Anmeldung und Abwicklung | Personenbezug entfernen; verbleibende Datensaetze nur, soweit fuer Dokumente, Zahlungen oder Nachweise erforderlich |
+| Notizen (`specialNotes`, `internalNote`, `driverNote`) | 1 Jahr nach Eventende | Kein Dauerbedarf nach der Veranstaltung | Feldanonymisierung/Leeren |
+| Angaben zu Sorgeberechtigten bei Minderjaehrigen (`consent_evidence.guardian_*`) | 1 Jahr nach Eventende | Nachweis der Zustimmung bei Minderjaehrigen | Feldanonymisierung/Leeren |
 | Verifikationsdaten (`*_email_verification`) | 30 Tage nach `expiresAt` oder `verifiedAt` | Sicherheitszweck nur kurzzeitig | Hard delete |
 | Idempotenzspeicher (`public_entry_submission`) | 30 Tage | Duplicate-Schutz kurzfristig ausreichend | Hard delete |
 | Fahrzeugbild-Upload-Metadaten (`vehicle_image_upload`) | 30 Tage nach Abschluss/Verfall | Nur Upload-Prozesssteuerung | Hard delete |
-| Fahrzeugbilder in S3 (`assets`) | 3 Jahre nach Eventende, dann Anonymisierungspruefung | Dokumentation Teilnahmefahrzeug | Loeschung Objekt + Entfernen DB-Referenz |
-| Dokumentmetadaten/PDF (`document`, `documents` Bucket) | 6 Jahre | Nachweis- und Organisationsinteresse | Hard delete nach Frist, ggf. Sperrvermerk-Verlaengerung |
-| Rechnung/Zahlung (`invoice`, `invoice_payment`) | 10 Jahre | Steuer-/Abgabenrechtliche Aufbewahrung | Keine fruehzeitige Loeschung; nach Frist hard delete/anonymisieren |
+| Fahrzeugbilder in S3 (`assets`) | 1 Jahr nach Eventende | Bild zur Anmeldung und Pruefung des Fahrzeugs | Loeschung Objekt + Entfernen DB-Referenz |
+| Dokumentmetadaten/PDF (`document`, `documents` Bucket) | 6 Jahre nach Eventende | Nachweis- und Organisationsinteresse | Hard delete nach Frist |
+| Rechnung/Zahlung (`invoice`, `invoice_payment`) | 10 Jahre nach Eventende | Steuer-/Abgabenrechtliche Aufbewahrung | Keine fruehzeitige Loeschung; nach Frist hard delete |
 | E-Mail-Outbox/Delivery (`email_outbox`, `email_delivery`) | 12 Monate | Kommunikationsnachweis und Zustellanalyse | Hard delete, Fehlertexte frueher minimieren (90 Tage) |
 | Exporte (`export_job` + exportierte CSV in S3) | 90 Tage | Operative Auswertung, geringe Dauer notwendig | Hard delete Objekt + Jobdaten |
 | Audit-Log (`audit_log`) | 24 Monate | Accountability, Missbrauchsaufklaerung | Hard delete oder irreversible Pseudonymisierung von Payload |
@@ -38,13 +39,13 @@ Stand: 2026-02-26
   - `entry`, `registration_group` (inkl. Aufraeumen verwaister Referenzen),
   - Verifikations-/Outbox-/Job-Tabellen,
   - Export-/Upload-Metadaten.
-- Finanzdaten bleiben bis Fristende erhalten, danach kontrolliertes Hard Delete oder Finanz-Archiv mit starker Zugriffsbeschraenkung.
+- Finanzdaten bleiben bis Fristende erhalten und werden danach automatisiert geloescht.
 
 ## Anonymisierungskonzept
-- Pseudonymisierung fuer langfristige Statistik:
-  - `person.email` -> gehashter Wert (salted, nicht rueckrechenbar),
-  - Namen/Adresse/Telefon/Notfallkontakt -> Nullung,
-  - `motorsportHistory`/Notizfelder -> Nullung.
+- Pseudonymisierung fuer verbleibende eventbezogene Nachweise:
+  - `person.email` -> Nullung.
+  - Namen/Adresse/Telefon/Notfallkontakt -> Nullung.
+  - `motorsportHistory`, Notizfelder und Angaben zu Sorgeberechtigten -> Nullung.
 - Beibehaltung nur aggregationsrelevanter Daten:
   - Event, Klasse, Zahlungsstatus (ohne direkte Personenidentifikatoren), technische Statusdaten.
 - Audit-`payload`: nur Whitelist-Felder, keine Volltexte mit PII.

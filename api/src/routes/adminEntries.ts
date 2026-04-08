@@ -2,7 +2,7 @@ import { and, asc, eq, ilike, inArray, or, sql, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { auditLog, document, entry, eventClass, invoice, invoicePayment, person, registrationGroup, vehicle } from '../db/schema';
+import { auditLog, consentEvidence, document, entry, eventClass, invoice, invoicePayment, person, registrationGroup, vehicle } from '../db/schema';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { deriveInvoicePaymentStatus } from '../domain/invoiceStatus';
@@ -219,6 +219,8 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       internalNote: entry.internalNote,
       driverNote: entry.driverNote,
       driverPersonId: entry.driverPersonId,
+      driverProcessingRestricted: person.processingRestricted,
+      driverObjectionFlag: person.objectionFlag,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
       driverEmail: person.email,
@@ -241,6 +243,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
     const completed = row.acceptanceStatus === 'accepted' && row.paymentStatus === 'paid';
     const vehicleLabel = toVehicleLabel(row.vehicleMake, row.vehicleModel, row.startNumberNorm);
     const vehicleThumbUrl = await getVehicleThumbUrl(row.vehicleImageS3Key);
+    const shouldRedactSensitiveFields = redactSensitiveFields || row.driverProcessingRestricted || row.driverObjectionFlag;
     return {
       ...row,
       completionStatus: completed ? 'completed' : 'open',
@@ -253,9 +256,9 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       deletedByUserId: row.deletedBy,
       deletedByDisplay: row.deletedByDisplay ?? (row.deletedBy && row.deletedBy.includes('@') ? row.deletedBy : null),
       deleteReason: row.deleteReason,
-      driverFirstName: redactSensitiveFields ? null : row.driverFirstName,
-      driverLastName: redactSensitiveFields ? null : row.driverLastName,
-      driverEmail: redactSensitiveFields ? null : row.driverEmail
+      driverFirstName: shouldRedactSensitiveFields ? null : row.driverFirstName,
+      driverLastName: shouldRedactSensitiveFields ? null : row.driverLastName,
+      driverEmail: shouldRedactSensitiveFields ? null : row.driverEmail
     };
   }));
 
@@ -312,6 +315,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       consentCapturedAt: entry.consentCapturedAt,
       driverPersonId: entry.driverPersonId,
       codriverPersonId: entry.codriverPersonId,
+      driverProcessingRestricted: person.processingRestricted,
+      driverObjectionFlag: person.objectionFlag,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
       driverEmail: person.email,
@@ -360,6 +365,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       : await db
           .select({
             id: person.id,
+            processingRestricted: person.processingRestricted,
+            objectionFlag: person.objectionFlag,
             firstName: person.firstName,
             lastName: person.lastName,
             email: person.email,
@@ -401,6 +408,18 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
           .where(eq(vehicle.id, current.backupVehicleId))
           .limit(1);
   const backupVehicle = backupVehicleRows[0] ?? null;
+  const consentEvidenceRows = await db
+    .select({
+      guardianFullName: consentEvidence.guardianFullName,
+      guardianEmail: consentEvidence.guardianEmail,
+      guardianPhone: consentEvidence.guardianPhone,
+      guardianConsentAccepted: consentEvidence.guardianConsentAccepted
+    })
+    .from(consentEvidence)
+    .where(eq(consentEvidence.entryId, entryId))
+    .orderBy(sql`${consentEvidence.capturedAt} desc`, sql`${consentEvidence.createdAt} desc`)
+    .limit(1);
+  const guardianConsent = consentEvidenceRows[0] ?? null;
 
   const documentRows = await db
     .select({
@@ -442,6 +461,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     getVehicleThumbUrl(current.vehicleImageS3Key),
     getVehicleThumbUrl(backupVehicle?.imageS3Key ?? null)
   ]);
+  const driverRestricted = redactSensitiveFields || current.driverProcessingRestricted || current.driverObjectionFlag;
+  const codriverRestricted = redactSensitiveFields || Boolean(codriver?.processingRestricted) || Boolean(codriver?.objectionFlag);
 
   return {
     entry: {
@@ -469,37 +490,37 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       confirmationMailVerified: current.confirmationMailVerifiedAt !== null,
       person: {
         driver: {
-          firstName: redactSensitiveFields ? null : current.driverFirstName,
-          lastName: redactSensitiveFields ? null : current.driverLastName,
-          email: redactSensitiveFields ? null : current.driverEmail,
-          birthdate: redactSensitiveFields ? null : current.driverBirthdate,
-          nationality: redactSensitiveFields ? null : current.driverNationality,
-          street: redactSensitiveFields ? null : current.driverStreet,
-          zip: redactSensitiveFields ? null : current.driverZip,
-          city: redactSensitiveFields ? null : current.driverCity,
-          phone: redactSensitiveFields ? null : current.driverPhone,
-          emergencyContactName: redactSensitiveFields ? null : current.driverEmergencyContactName,
-          emergencyContactFirstName: redactSensitiveFields ? null : current.driverEmergencyContactFirstName,
-          emergencyContactLastName: redactSensitiveFields ? null : current.driverEmergencyContactLastName,
-          emergencyContactPhone: redactSensitiveFields ? null : current.driverEmergencyContactPhone,
-          motorsportHistory: redactSensitiveFields ? null : current.driverMotorsportHistory
+          firstName: driverRestricted ? null : current.driverFirstName,
+          lastName: driverRestricted ? null : current.driverLastName,
+          email: driverRestricted ? null : current.driverEmail,
+          birthdate: driverRestricted ? null : current.driverBirthdate,
+          nationality: driverRestricted ? null : current.driverNationality,
+          street: driverRestricted ? null : current.driverStreet,
+          zip: driverRestricted ? null : current.driverZip,
+          city: driverRestricted ? null : current.driverCity,
+          phone: driverRestricted ? null : current.driverPhone,
+          emergencyContactName: driverRestricted ? null : current.driverEmergencyContactName,
+          emergencyContactFirstName: driverRestricted ? null : current.driverEmergencyContactFirstName,
+          emergencyContactLastName: driverRestricted ? null : current.driverEmergencyContactLastName,
+          emergencyContactPhone: driverRestricted ? null : current.driverEmergencyContactPhone,
+          motorsportHistory: driverRestricted ? null : current.driverMotorsportHistory
         },
         codriver: codriver
           ? {
-              firstName: redactSensitiveFields ? null : codriver.firstName,
-              lastName: redactSensitiveFields ? null : codriver.lastName,
-              email: redactSensitiveFields ? null : codriver.email,
-              birthdate: redactSensitiveFields ? null : codriver.birthdate,
-              nationality: redactSensitiveFields ? null : codriver.nationality,
-              street: redactSensitiveFields ? null : codriver.street,
-              zip: redactSensitiveFields ? null : codriver.zip,
-              city: redactSensitiveFields ? null : codriver.city,
-              phone: redactSensitiveFields ? null : codriver.phone,
-              emergencyContactName: redactSensitiveFields ? null : codriver.emergencyContactName,
-              emergencyContactFirstName: redactSensitiveFields ? null : codriver.emergencyContactFirstName,
-              emergencyContactLastName: redactSensitiveFields ? null : codriver.emergencyContactLastName,
-              emergencyContactPhone: redactSensitiveFields ? null : codriver.emergencyContactPhone,
-              motorsportHistory: redactSensitiveFields ? null : codriver.motorsportHistory
+              firstName: codriverRestricted ? null : codriver.firstName,
+              lastName: codriverRestricted ? null : codriver.lastName,
+              email: codriverRestricted ? null : codriver.email,
+              birthdate: codriverRestricted ? null : codriver.birthdate,
+              nationality: codriverRestricted ? null : codriver.nationality,
+              street: codriverRestricted ? null : codriver.street,
+              zip: codriverRestricted ? null : codriver.zip,
+              city: codriverRestricted ? null : codriver.city,
+              phone: codriverRestricted ? null : codriver.phone,
+              emergencyContactName: codriverRestricted ? null : codriver.emergencyContactName,
+              emergencyContactFirstName: codriverRestricted ? null : codriver.emergencyContactFirstName,
+              emergencyContactLastName: codriverRestricted ? null : codriver.emergencyContactLastName,
+              emergencyContactPhone: codriverRestricted ? null : codriver.emergencyContactPhone,
+              motorsportHistory: codriverRestricted ? null : codriver.motorsportHistory
             }
           : null
       },
@@ -553,6 +574,14 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         termsAccepted: current.consentTermsAccepted,
         privacyAccepted: current.consentPrivacyAccepted,
         mediaAccepted: current.consentMediaAccepted,
+        guardian: guardianConsent
+          ? {
+              fullName: driverRestricted ? null : guardianConsent.guardianFullName,
+              email: driverRestricted ? null : guardianConsent.guardianEmail,
+              phone: driverRestricted ? null : guardianConsent.guardianPhone,
+              consentAccepted: driverRestricted ? false : guardianConsent.guardianConsentAccepted
+            }
+          : null,
         consentVersion: current.consentVersion,
         consentCapturedAt: current.consentCapturedAt
       },

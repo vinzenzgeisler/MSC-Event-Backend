@@ -49,7 +49,7 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   ai_knowledge_item_archived: ['knowledgeItemId', 'status'],
   public_entry_created: ['registrationStatus', 'registrationGroupId'],
   public_entry_verified: ['registrationStatus', 'registrationGroupId'],
-  privacy_retention_run: ['windowStart', 'windowEnd', 'deletedRows', 'errors']
+  privacy_retention_run: ['windowStart', 'windowEnd', 'dryRun', 'deletedRows', 'errors']
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

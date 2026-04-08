@@ -134,9 +134,9 @@ Optional fuer die volle Demo:
 - Konfiguration: `docs/ai/configuration-reference.md`
 - Demo: `docs/ai/demo-runbook.md`
 
-## 10. Minimaler Nachbau fuer die Abgabe
+## 10. Minimaler Projektstart
 
-Wenn nur das KI-Feature vorfuehrbar nachgebaut werden soll, reicht funktional:
+Wenn zunaechst nur das KI-Feature funktionsfaehig aufgebaut werden soll, reicht funktional:
 
 1. `dev`-Stage konfigurieren
 2. Bedrock aktivieren
@@ -144,4 +144,4 @@ Wenn nur das KI-Feature vorfuehrbar nachgebaut werden soll, reicht funktional:
 4. Deploy
 5. Migration
 6. Testmail importieren
-7. Reply-Assistent und Berichtsgenerator demonstrieren
+7. Reply-Assistent und Berichtsgenerator pruefen

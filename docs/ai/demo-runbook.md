@@ -4,7 +4,7 @@ Stand: 2026-04-02
 
 ## Ziel
 
-Dieses Runbook beschreibt einen klaren Vortragspfad fuer das Kolloquium.
+Dieses Runbook beschreibt einen klaren Demonstrationspfad fuer das Feature.
 
 ## Demo-Kernaussage
 
@@ -27,7 +27,7 @@ Sagen:
 - Lambda nutzt Bedrock fuer die Generierung
 - das Ergebnis wird als Entwurf mit Warnungen und Review-Hinweisen zurueckgegeben
 
-Dateien / Folienbasis:
+Geeignete Referenzen:
 
 - `docs/ai/architecture.md`
 - `docs/ai/submission-summary.md`
@@ -105,7 +105,7 @@ Kurzfassung:
 
 ## Demo-Vorbereitung
 
-Vor dem Vortrag sicherstellen:
+Vor der Demonstration sicherstellen:
 
 - mindestens eine importierte Testmail vorhanden
 - Bedrock erreichbar
@@ -113,7 +113,7 @@ Vor dem Vortrag sicherstellen:
 - ein Event fuer den Berichtsgenerator vorhanden
 - Demo-Nutzer mit Admin-/Editor-Rechten vorhanden
 
-## Fallback fuer den Vortrag
+## Fallback fuer die Demonstration
 
 Falls IMAP oder externe Mail gerade nicht verfuegbar ist:
 

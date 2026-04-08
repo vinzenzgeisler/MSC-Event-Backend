@@ -1,4 +1,4 @@
-# AI Communication Hub Submission Summary
+# AI Communication Hub Project Overview
 
 Stand: 2026-04-02
 
@@ -14,9 +14,9 @@ Diese Aufgaben sind fachlich relevant, aber zeitaufwendig und oft von verteiltem
 
 ## Ziel der Loesung
 
-Es wurde eine cloudbasierte `KI-gestuetzte Event-Kommunikationszentrale` aufgebaut, die AWS Bedrock sinnvoll fuer klar abgegrenzte Assistenzaufgaben verwendet.
+Der `AI Communication Hub` erweitert das System um eine cloudbasierte, review-pflichtige Assistenz fuer genau diese Kommunikationsaufgaben.
 
-Die KI trifft keine autonomen Entscheidungen, sondern erzeugt Entwuerfe, Zusammenfassungen und Wissensvorschlaege, die manuell geprueft werden.
+Die KI trifft keine autonomen Entscheidungen, sondern erzeugt Entwuerfe, Zusammenfassungen und Wissensvorschlaege, die fachlich geprueft werden.
 
 ## Cloud-Architektur
 
@@ -42,12 +42,12 @@ Die KI wird nicht beliebig, sondern dort eingesetzt, wo sie fuer den Praxispartn
 - vorhandenes Wissen strukturiert wiederverwendbar machen
 - Transparenz ueber Datenbasis und Unsicherheit erhalten
 
-## Fachlicher Nutzen fuer den Praxispartner
+## Fachlicher Nutzen
 
 - weniger manueller Aufwand bei wiederkehrender Kommunikation
 - bessere Nachvollziehbarkeit durch serverseitigen Kontext und Review-Hinweise
 - wiederverwendbare Wissensbasis statt rein temporaerer KI-Ausgaben
-- vorzeigbare Cloud-Integration mit realem Anwendungsbezug
+- klar integrierte Cloud-Architektur mit realem Anwendungsbezug
 
 ## Bewusste Grenzen
 
@@ -56,7 +56,7 @@ Die KI wird nicht beliebig, sondern dort eingesetzt, wo sie fuer den Praxispartn
 - keine Halluzinationsfoerderung durch unkontrollierte Prompts
 - fehlende Daten werden markiert statt frei erfunden
 
-## Fuer den Nachbau abgegebene Kernbestandteile
+## Wichtige Projektbestandteile
 
 - Backend-Code
 - AWS-Infrastruktur-Code
@@ -67,6 +67,6 @@ Die KI wird nicht beliebig, sondern dort eingesetzt, wo sie fuer den Praxispartn
 - Demo-Runbook
 - Konfigurationsreferenz ohne produktive Secrets
 
-## Empfohlene Kernaussage im Vortrag
+## Kernidee
 
-Es wurde keine allgemeine KI-Spielerei gebaut, sondern ein realistisches, cloudfaehiges Assistenzsystem fuer Event-Kommunikation, das bestehende Systemdaten mit AWS Bedrock verbindet und menschliche Review bewusst im Prozess behaelt.
+Der `AI Communication Hub` ist keine allgemeine KI-Spielerei, sondern ein realistisches Assistenzsystem fuer Event-Kommunikation, das bestehende Systemdaten mit AWS Bedrock verbindet und menschliche Review bewusst im Prozess behaelt.

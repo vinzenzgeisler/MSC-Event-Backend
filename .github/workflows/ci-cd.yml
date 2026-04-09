@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  validate_common:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -48,16 +48,50 @@ jobs:
       - name: Infra build
         run: npm --workspace infra run build
 
+  validate_dev:
+    if: github.base_ref == 'dev' || github.ref == 'refs/heads/dev' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    needs: validate_common
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
       - name: CDK synth (dev)
-        if: github.base_ref == 'dev' || github.ref == 'refs/heads/dev'
         run: npm --workspace infra run synth -- -c stage=dev -c devProfile=test
         env:
           DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
 
+  validate_prod:
+    if: github.base_ref == 'main' || github.ref == 'refs/heads/main'
+    needs: validate_common
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
       - name: CDK synth (prod)
-        if: github.base_ref == 'main' || github.ref == 'refs/heads/main'
         run: npm --workspace infra run synth -- -c stage=prod
         env:
           PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
@@ -69,7 +103,9 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
       (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'schedule')
-    needs: validate
+    needs:
+      - validate_common
+      - validate_dev
     runs-on: ubuntu-latest
     environment: dev
     env:
@@ -122,7 +158,9 @@ jobs:
 
   deploy_prod:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: validate
+    needs:
+      - validate_common
+      - validate_prod
     runs-on: ubuntu-latest
     environment: prod
     steps:

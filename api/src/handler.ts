@@ -140,10 +140,12 @@ import {
   finalizeVehicleImageUpload,
   getPublicCurrentEventWithClasses,
   initVehicleImageUpload,
+  resendPublicEntryVerification,
   validateCreatePublicEntryInput,
   validateCreatePublicEntriesBatchInput,
   validatePublicStartNumber,
   validatePublicStartNumberInput,
+  validateResendPublicEntryVerificationInput,
   validateVehicleImageUploadFinalizeInput,
   validateVehicleImageUploadInitInput,
   validateVerifyPublicEntryInput,
@@ -159,9 +161,14 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     const path = event.requestContext.http.path;
     const stage = process.env.STAGE ?? 'dev';
     const adminAuth = path.startsWith('/admin/') ? getAuthContext(event) : null;
+    const requireAdminMfa = process.env.REQUIRE_ADMIN_MFA === 'true';
+    const isAdminMutation = path.startsWith('/admin/') && !['GET', 'OPTIONS'].includes(method);
 
     if (adminAuth && !adminAuth.sub) {
       return errorJson(401, 'Unauthorized');
+    }
+    if (requireAdminMfa && adminAuth?.sub && isAdminMutation && !adminAuth.mfaAuthenticated) {
+      return errorJson(403, 'MFA required', undefined, 'MFA_REQUIRED');
     }
 
     if (method === 'OPTIONS') {
@@ -516,6 +523,36 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  const publicVerifyResendMatch = path.match(/^\/public\/entries\/([^/]+)\/verification-resend$/);
+  if (method === 'POST' && publicVerifyResendMatch) {
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateResendPublicEntryVerificationInput(payload);
+      const result = await resendPublicEntryVerification(publicVerifyResendMatch[1], input);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'ENTRY_NOT_FOUND') {
+        return errorJson(404, 'Entry not found', undefined, 'ENTRY_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'VERIFY_ALREADY_COMPLETED') {
+        return errorJson(409, 'Email already verified', undefined, 'VERIFY_ALREADY_COMPLETED');
+      }
+      if (error instanceof Error && error.message === 'VERIFICATION_RESEND_QUEUE_FAILED') {
+        return errorJson(500, 'Verification resend queue failed', undefined, 'VERIFICATION_RESEND_QUEUE_FAILED');
+      }
+      if (error instanceof Error && (error.message === 'EVENT_NOT_OPEN' || error.message === 'REGISTRATION_NOT_OPEN' || error.message === 'REGISTRATION_CLOSED')) {
+        return errorJson(409, error.message, undefined, error.message);
+      }
+      return errorJson(500, 'Verification resend failed');
+    }
+  }
+
   if (method === 'GET' && path === '/admin/ping') {
     const auth = getAuthContext(event);
     if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
@@ -566,6 +603,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   if (method === 'GET' && path === '/admin/db/ping') {
+    if (stage === 'prod') {
+      return errorJson(404, 'Not found');
+    }
     const auth = getAuthContext(event);
     if (!hasGroup(auth, 'admin')) {
       return errorJson(403, 'Forbidden');
@@ -586,6 +626,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   if (method === 'GET' && path === '/admin/db/schema') {
+    if (stage === 'prod') {
+      return errorJson(404, 'Not found');
+    }
     const auth = getAuthContext(event);
     if (!hasGroup(auth, 'admin')) {
       return errorJson(403, 'Forbidden');

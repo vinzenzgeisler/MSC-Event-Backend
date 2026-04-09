@@ -230,7 +230,9 @@ const vehicleInputSchema = z
 const consentInputSchema = z.object({
   termsAccepted: z.literal(true),
   privacyAccepted: z.literal(true),
+  waiverAccepted: z.literal(true),
   mediaAccepted: z.boolean().optional().default(false),
+  clubInfoAccepted: z.boolean().optional().default(false),
   consentVersion: nonEmptySchema,
   consentTextHash: z.string().trim().regex(/^[a-fA-F0-9]{64}$/),
   locale: z.string().trim().min(2).max(16),
@@ -316,6 +318,8 @@ const verifySchema = z.object({
   token: z.string().min(16)
 });
 
+const resendVerificationSchema = z.object({});
+
 const validateStartNumberSchema = z.object({
   eventId: z.string().uuid(),
   classId: z.string().uuid(),
@@ -336,6 +340,7 @@ const uploadFinalizeSchema = z.object({
 
 type CreateEntryInput = z.infer<typeof createEntrySchema>;
 type VerifyInput = z.infer<typeof verifySchema>;
+type ResendVerificationInput = z.infer<typeof resendVerificationSchema>;
 type ValidateStartNumberInput = z.infer<typeof validateStartNumberSchema>;
 type UploadInitInput = z.infer<typeof uploadInitSchema>;
 type UploadFinalizeInput = z.infer<typeof uploadFinalizeSchema>;
@@ -424,8 +429,11 @@ const canonicalizePayload = (value: unknown): unknown => {
 const createPayloadHash = (value: unknown): string =>
   createHash('sha256').update(JSON.stringify(canonicalizePayload(value))).digest('hex');
 
-// Verification links should remain valid long-term.
-const verificationTokenFarFutureExpiry = (): Date => new Date('2099-12-31T23:59:59.000Z');
+const verificationTokenExpiry = (now = new Date()): Date => {
+  const rawDays = Number.parseInt(process.env.EMAIL_VERIFICATION_TOKEN_TTL_DAYS ?? '30', 10);
+  const ttlDays = Number.isFinite(rawDays) && rawDays > 0 ? rawDays : 30;
+  return new Date(now.getTime() + ttlDays * 24 * 60 * 60 * 1000);
+};
 
 export const createPublicEntriesBatch = async (input: CreateBatchInput) => {
   return createPublicEntriesBatchInternal(input);
@@ -436,7 +444,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
   const db = await getDb();
   const now = new Date();
   const token = createHash('sha256').update(`${randomUUID()}:${input.driver.email}:${Date.now()}`).digest('hex');
-  const tokenExpiresAt = verificationTokenFarFutureExpiry();
+  const tokenExpiresAt = verificationTokenExpiry(now);
   const normalizedDriverEmail = normalizeEmail(input.driver.email);
   const payloadHash = createPayloadHash(input);
 
@@ -764,7 +772,9 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
           consentSource: input.consent.consentSource,
           termsAccepted: input.consent.termsAccepted,
           privacyAccepted: input.consent.privacyAccepted,
+          waiverAccepted: input.consent.waiverAccepted,
           mediaAccepted: input.consent.mediaAccepted,
+          clubInfoAccepted: input.consent.clubInfoAccepted,
           guardianFullName: input.driver.guardianFullName ?? null,
           guardianEmail: input.driver.guardianEmail ? normalizeEmail(input.driver.guardianEmail) : null,
           guardianPhone: input.driver.guardianPhone ?? null,
@@ -1437,9 +1447,82 @@ export const verifyPublicEntryEmail = async (entryId: string, input: VerifyInput
   return { verified: true, groupId };
 };
 
+export const resendPublicEntryVerification = async (entryId: string, _input: ResendVerificationInput) => {
+  const db = await getDb();
+  const now = new Date();
+  const entryRows = await db
+    .select({
+      entryId: entry.id,
+      eventId: entry.eventId,
+      registrationStatus: entry.registrationStatus,
+      registrationGroupId: entry.registrationGroupId,
+      confirmationMailSentAt: entry.confirmationMailSentAt
+    })
+    .from(entry)
+    .where(and(eq(entry.id, entryId), sql`${entry.deletedAt} is null`))
+    .limit(1);
+  const currentEntry = entryRows[0];
+  if (!currentEntry?.registrationGroupId) {
+    throw new Error('ENTRY_NOT_FOUND');
+  }
+  if (currentEntry.registrationStatus === 'submitted_verified') {
+    throw new Error('VERIFY_ALREADY_COMPLETED');
+  }
+
+  await assertRegistrationOpen(currentEntry.eventId);
+
+  const token = createHash('sha256').update(`${randomUUID()}:${currentEntry.registrationGroupId}:${Date.now()}`).digest('hex');
+  await db
+    .insert(registrationGroupEmailVerification)
+    .values({
+      registrationGroupId: currentEntry.registrationGroupId,
+      token,
+      expiresAt: verificationTokenExpiry(now),
+      verifiedAt: null,
+      createdAt: now
+    })
+    .onConflictDoUpdate({
+      target: registrationGroupEmailVerification.registrationGroupId,
+      set: {
+        token,
+        expiresAt: verificationTokenExpiry(now),
+        verifiedAt: null,
+        createdAt: now
+      }
+    });
+
+  try {
+    await queueLifecycleMail(
+      {
+        eventId: currentEntry.eventId,
+        entryId: currentEntry.entryId,
+        eventType: 'email_confirmation_reminder',
+        includeDriverNote: false,
+        allowDuplicate: true
+      },
+      null
+    );
+  } catch {
+    throw new Error('VERIFICATION_RESEND_QUEUE_FAILED');
+  }
+
+  if (!currentEntry.confirmationMailSentAt) {
+    await db
+      .update(entry)
+      .set({
+        confirmationMailSentAt: now,
+        updatedAt: now
+      })
+      .where(eq(entry.id, currentEntry.entryId));
+  }
+
+  return { queued: true };
+};
+
 export const validateCreatePublicEntryInput = (payload: unknown) => createEntrySchema.parse(payload);
 export const validateCreatePublicEntriesBatchInput = (payload: unknown) => createBatchSchema.parse(payload);
 export const validateVerifyPublicEntryInput = (payload: unknown) => verifySchema.parse(payload);
+export const validateResendPublicEntryVerificationInput = (payload: unknown) => resendVerificationSchema.parse(payload);
 export const validatePublicStartNumberInput = (payload: unknown) => validateStartNumberSchema.parse(payload);
 export const validateVehicleImageUploadInitInput = (payload: unknown) => uploadInitSchema.parse(payload);
 export const validateVehicleImageUploadFinalizeInput = (payload: unknown) => uploadFinalizeSchema.parse(payload);

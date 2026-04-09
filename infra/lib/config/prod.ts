@@ -1,14 +1,16 @@
 import { StageConfig } from './types';
 
+const prodPublicBaseUrl = ((process.env.PROD_PUBLIC_BASE_URL ?? 'https://event.msc-oberlausitzer-dreilaendereck.de').trim()).replace(/\/$/, '');
+
 export const prodConfig: StageConfig = {
   stage: 'prod',
   prefix: 'dreiecksrennen-prod',
-  cognitoCallbackUrls: [],
-  cognitoLogoutUrls: [],
+  cognitoCallbackUrls: [`${prodPublicBaseUrl}/admin/login`],
+  cognitoLogoutUrls: [`${prodPublicBaseUrl}/admin/login`],
   cognitoDomainPrefix: 'dreiecksrennen-prod-auth',
   sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
-  publicVerifyBaseUrl: 'https://event.msc-oberlausitzer-dreilaendereck.de/anmeldung/verify',
-  assetsCorsAllowedOrigins: [],
+  publicVerifyBaseUrl: `${prodPublicBaseUrl}/anmeldung/verify`,
+  assetsCorsAllowedOrigins: [prodPublicBaseUrl],
   devCleanupEnabled: false,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,

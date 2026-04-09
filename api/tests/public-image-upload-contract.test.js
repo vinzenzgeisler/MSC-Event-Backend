@@ -24,7 +24,9 @@ const basePayload = {
   consent: {
     termsAccepted: true,
     privacyAccepted: true,
+    waiverAccepted: true,
     mediaAccepted: false,
+    clubInfoAccepted: false,
     consentVersion: '2026-03',
     consentTextHash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     locale: 'de',

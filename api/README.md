@@ -42,6 +42,7 @@ Minimaler TypeScript-Lambda-Handler mit Datenbankzugriff (Postgres via Drizzle):
 
 - `POST /public/events/:id/entries` → Nennung anlegen (unverified)
 - `POST /public/entries/:id/verify-email` → E-Mail-Verifikation abschließen
+- `POST /public/entries/:id/verification-resend` → Verifikationsmail erneut anstoßen
 - `GET /public/events/current` → aktuelles Event + Klassen für Anmeldeformular
 - `POST /public/events/:id/start-number/validate` → Startnummer-Prüfung vor Submit
 - `POST /public/uploads/vehicle-image/init|finalize` → Presigned Upload-Flow für Fahrzeugbilder

@@ -410,6 +410,11 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
   const backupVehicle = backupVehicleRows[0] ?? null;
   const consentEvidenceRows = await db
     .select({
+      consentTextHash: consentEvidence.consentTextHash,
+      locale: consentEvidence.locale,
+      consentSource: consentEvidence.consentSource,
+      waiverAccepted: consentEvidence.waiverAccepted,
+      clubInfoAccepted: consentEvidence.clubInfoAccepted,
       guardianFullName: consentEvidence.guardianFullName,
       guardianEmail: consentEvidence.guardianEmail,
       guardianPhone: consentEvidence.guardianPhone,
@@ -573,7 +578,9 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       consent: {
         termsAccepted: current.consentTermsAccepted,
         privacyAccepted: current.consentPrivacyAccepted,
+        waiverAccepted: guardianConsent?.waiverAccepted ?? false,
         mediaAccepted: current.consentMediaAccepted,
+        clubInfoAccepted: guardianConsent?.clubInfoAccepted ?? false,
         guardian: guardianConsent
           ? {
               fullName: driverRestricted ? null : guardianConsent.guardianFullName,
@@ -583,7 +590,10 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
             }
           : null,
         consentVersion: current.consentVersion,
-        consentCapturedAt: current.consentCapturedAt
+        consentCapturedAt: current.consentCapturedAt,
+        consentTextHash: guardianConsent?.consentTextHash ?? null,
+        locale: guardianConsent?.locale ?? null,
+        consentSource: guardianConsent?.consentSource ?? null
       },
       createdAt: current.createdAt,
       updatedAt: current.updatedAt

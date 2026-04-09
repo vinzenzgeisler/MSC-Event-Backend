@@ -953,6 +953,12 @@ const isUndefinedColumnError = (error: unknown): boolean =>
   'code' in error &&
   (error as { code?: string }).code === '42703';
 
+const verificationTokenExpiry = (now = new Date()): Date => {
+  const rawDays = Number.parseInt(process.env.EMAIL_VERIFICATION_TOKEN_TTL_DAYS ?? '30', 10);
+  const ttlDays = Number.isFinite(rawDays) && rawDays > 0 ? rawDays : 30;
+  return new Date(now.getTime() + ttlDays * 24 * 60 * 60 * 1000);
+};
+
 const upsertRegistrationGroupVerificationToken = async (registrationGroupId: string, seed: string): Promise<string> => {
   const db = await getDb();
   const now = new Date();
@@ -971,7 +977,7 @@ const upsertRegistrationGroupVerificationToken = async (registrationGroupId: str
   }
 
   const token = createHash('sha256').update(`${randomUUID()}:${seed}:${Date.now()}`).digest('hex');
-  const expiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24);
+  const expiresAt = verificationTokenExpiry(now);
 
   await db
     .insert(registrationGroupEmailVerification)

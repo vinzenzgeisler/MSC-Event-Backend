@@ -298,7 +298,7 @@ export const closeEvent = async (eventId: string, actorUserId: string | null) =>
     .update(event)
     .set({
       status: 'closed',
-      isCurrent: existing.isCurrent,
+      isCurrent: false,
       closedAt: now,
       updatedAt: now
     })

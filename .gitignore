@@ -13,5 +13,6 @@ tmp-*.json
 Nennung.pdf
 Nennung.png
 msc-logo.png
+!infra/assets/mail-logo/msc-logo.png
 BACKEND_EMAIL_DESIGN_SPEC.md
 docs/BACKEND_MAIL_*.md

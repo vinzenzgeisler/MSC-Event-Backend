@@ -9,6 +9,8 @@ on:
     branches:
       - dev
       - main
+  schedule:
+    - cron: '0 21 * * *'
   workflow_dispatch:
     inputs:
       dev_profile:
@@ -65,12 +67,13 @@ jobs:
   deploy_dev:
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
-      (github.event_name == 'workflow_dispatch')
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'schedule')
     needs: validate
     runs-on: ubuntu-latest
     environment: dev
     env:
-      DEV_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dev_profile || 'idle' }}
+      DEV_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dev_profile || github.event_name == 'push' && 'test' || 'idle' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

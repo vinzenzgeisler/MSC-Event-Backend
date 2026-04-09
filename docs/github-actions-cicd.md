@@ -49,7 +49,8 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
 
 ## Verhalten
 - PRs gegen `dev` oder `main` laufen nur Validierung.
-- Push auf `dev` deployt `stage=dev` mit `devProfile=idle`.
+- Push auf `dev` deployt `stage=dev` mit `devProfile=test`.
+- Ein täglicher Scheduler deployt `stage=dev` automatisch mit `devProfile=idle`, um Kosten zu sparen.
 - Manueller `workflow_dispatch` kann `stage=dev` mit `devProfile=test` oder `idle` deployen.
 - Push auf `main` deployt `stage=prod`.
 
@@ -69,9 +70,9 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
   - Callback-/Logout-URLs werden aus `DEV_PUBLIC_BASE_URL` und `PROD_PUBLIC_BASE_URL` abgeleitet.
   - Deshalb müssen die Frontend-Domains vor dem Deploy feststehen.
 - Dev-Kosten:
-  - `dev` bleibt standardmäßig im `idle`-Profil.
-  - Für echte API-/DB-Tests den Workflow manuell mit `dev_profile=test` starten.
-  - Danach wieder `dev` normal per Push oder manuell mit `idle` deployen.
+  - `dev` wird bei normalen Pushes testbar mit `devProfile=test` deployed.
+  - Ein täglicher Scheduler fährt `dev` automatisch zurück auf `idle`.
+  - Zusätzlich kann `dev` jederzeit manuell mit `dev_profile=idle` oder `test` deployt werden.
 
 ## Empfehlung
 - `prod` immer mit Required Reviewer absichern.

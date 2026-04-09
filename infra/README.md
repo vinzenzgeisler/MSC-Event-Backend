@@ -25,10 +25,11 @@ npx cdk deploy --all -c stage=dev
 
 Für GitHub Actions gilt:
 
-- Push auf `dev` deployt immer `devProfile=idle`
+- Push auf `dev` deployt immer `devProfile=test`
+- Ein täglicher Scheduler setzt `dev` wieder auf `devProfile=idle`
 - Push auf `main` deployt `prod`
 - `prod` sollte über GitHub Environment Approval geschützt werden
-- Für echte Dev-API-/DB-Tests wird `devProfile=test` nur manuell gestartet
+- `devProfile=test` oder `idle` kann zusätzlich jederzeit manuell gestartet werden
 
 ## Cognito Hosted UI (OAuth) und Verify-Link
 

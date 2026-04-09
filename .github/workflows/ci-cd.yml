@@ -66,6 +66,31 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Validate Dev environment configuration
+        run: |
+          if [ -z "${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}" ]; then
+            echo "AWS_DEPLOY_ROLE_ARN_DEV is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_ACCOUNT_ID }}" ]; then
+            echo "AWS_ACCOUNT_ID is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_REGION }}" ]; then
+            echo "AWS_REGION is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+          if [ -z "${{ vars.DEV_PUBLIC_BASE_URL }}" ]; then
+            echo "DEV_PUBLIC_BASE_URL is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+
       - name: CDK synth (dev)
         run: npm --workspace infra run synth -- -c stage=dev -c devProfile=test
         env:
@@ -90,6 +115,31 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Validate Prod environment configuration
+        run: |
+          if [ -z "${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}" ]; then
+            echo "AWS_DEPLOY_ROLE_ARN_PROD is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_ACCOUNT_ID }}" ]; then
+            echo "AWS_ACCOUNT_ID is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_REGION }}" ]; then
+            echo "AWS_REGION is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+          if [ -z "${{ vars.PROD_PUBLIC_BASE_URL }}" ]; then
+            echo "PROD_PUBLIC_BASE_URL is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: CDK synth (prod)
         run: npm --workspace infra run synth -- -c stage=prod

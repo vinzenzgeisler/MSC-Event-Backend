@@ -1,6 +1,14 @@
 import { StageConfig } from './types';
 
-const prodPublicBaseUrl = ((process.env.PROD_PUBLIC_BASE_URL ?? 'https://event.msc-oberlausitzer-dreilaendereck.de').trim()).replace(/\/$/, '');
+const requireEnv = (name: string): string => {
+  const value = (process.env[name] ?? '').trim();
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+};
+
+const prodPublicBaseUrl = requireEnv('PROD_PUBLIC_BASE_URL').replace(/\/$/, '');
 
 export const prodConfig: StageConfig = {
   stage: 'prod',

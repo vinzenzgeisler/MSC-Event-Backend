@@ -23,6 +23,13 @@ cd infra
 npx cdk deploy --all -c stage=dev
 ```
 
+Für GitHub Actions gilt:
+
+- Push auf `dev` deployt immer `devProfile=idle`
+- Push auf `main` deployt `prod`
+- `prod` sollte über GitHub Environment Approval geschützt werden
+- Für echte Dev-API-/DB-Tests wird `devProfile=test` nur manuell gestartet
+
 ## Cognito Hosted UI (OAuth) und Verify-Link
 
 Die Werte werden ueber Stage-Konfigurationsdateien gepflegt:

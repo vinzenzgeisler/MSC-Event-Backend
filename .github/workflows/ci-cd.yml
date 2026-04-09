@@ -9,6 +9,16 @@ on:
     branches:
       - dev
       - main
+  workflow_dispatch:
+    inputs:
+      dev_profile:
+        description: "Dev deploy profile"
+        required: true
+        default: "test"
+        type: choice
+        options:
+          - idle
+          - test
 
 permissions:
   id-token: write
@@ -53,10 +63,14 @@ jobs:
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
 
   deploy_dev:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+      (github.event_name == 'workflow_dispatch')
     needs: validate
     runs-on: ubuntu-latest
     environment: dev
+    env:
+      DEV_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dev_profile || 'idle' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,14 +84,33 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Validate Dev environment configuration
+        run: |
+          if [ -z "${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}" ]; then
+            echo "AWS_DEPLOY_ROLE_ARN_DEV is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_ACCOUNT_ID }}" ]; then
+            echo "AWS_ACCOUNT_ID is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_REGION }}" ]; then
+            echo "AWS_REGION is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+          if [ -z "${{ vars.DEV_PUBLIC_BASE_URL }}" ]; then
+            echo "DEV_PUBLIC_BASE_URL is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Deploy Dev stacks
-        run: npx cdk deploy --all -c stage=dev -c devProfile=test --require-approval never
+        run: npx cdk deploy --all -c stage=dev -c devProfile=${DEV_PROFILE} --require-approval never
         working-directory: infra
         env:
           DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
@@ -102,10 +135,29 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Validate Prod environment configuration
+        run: |
+          if [ -z "${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}" ]; then
+            echo "AWS_DEPLOY_ROLE_ARN_PROD is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_ACCOUNT_ID }}" ]; then
+            echo "AWS_ACCOUNT_ID is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_REGION }}" ]; then
+            echo "AWS_REGION is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+          if [ -z "${{ vars.PROD_PUBLIC_BASE_URL }}" ]; then
+            echo "PROD_PUBLIC_BASE_URL is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Deploy Prod stacks

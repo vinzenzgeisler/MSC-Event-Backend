@@ -30,6 +30,8 @@ Für GitHub Actions gilt:
 - Push auf `main` deployt `prod`
 - `prod` sollte über GitHub Environment Approval geschützt werden
 - `devProfile=test` oder `idle` kann zusätzlich jederzeit manuell gestartet werden
+- Bei `devProfile=test` und in `prod` werden die SQL-Migrationen in der Pipeline automatisch ausgeführt
+- Bei `devProfile=idle` laufen keine Migrationen
 
 ## Cognito Hosted UI (OAuth) und Verify-Link
 

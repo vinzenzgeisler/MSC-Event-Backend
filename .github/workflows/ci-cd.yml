@@ -160,6 +160,7 @@ jobs:
     environment: dev
     env:
       DEV_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dev_profile || github.event_name == 'push' && 'test' || 'idle' }}
+      STACK_PREFIX: dreiecksrennen-dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -198,8 +199,59 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Deploy Dev stacks
-        run: npx cdk deploy --all -c stage=dev -c devProfile=${DEV_PROFILE} --require-approval never
+      - name: Deploy Dev base stacks
+        run: >
+          npx cdk deploy
+          ${STACK_PREFIX}-auth-stack
+          ${STACK_PREFIX}-data-stack
+          ${STACK_PREFIX}-storage-stack
+          -c stage=dev
+          -c devProfile=${DEV_PROFILE}
+          --require-approval never
+        working-directory: infra
+        env:
+          DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Run Dev database migrations
+        if: env.DEV_PROFILE != 'idle'
+        run: |
+          set -euo pipefail
+          secret_arn="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_PREFIX}-data-stack" \
+            --region "${AWS_REGION}" \
+            --query "Stacks[0].Outputs[?OutputKey=='DbSecretArn'].OutputValue" \
+            --output text)"
+          if [ -z "${secret_arn}" ] || [ "${secret_arn}" = "None" ]; then
+            echo "DbSecretArn output not found on ${STACK_PREFIX}-data-stack."
+            exit 1
+          fi
+          secret_json="$(aws secretsmanager get-secret-value \
+            --secret-id "${secret_arn}" \
+            --region "${AWS_REGION}" \
+            --query SecretString \
+            --output text)"
+          db_user="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.username||'')))")"
+          db_pass="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.password||'')))")"
+          db_host="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.host||''))")"
+          db_port="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.port||''))")"
+          db_name="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.dbname||''))")"
+          curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-global-bundle.pem
+          export DATABASE_URL="postgres://${db_user}:${db_pass}@${db_host}:${db_port}/${db_name}"
+          export DB_SSL_CA_PATH="/tmp/rds-global-bundle.pem"
+          npm --workspace api run db:migrate
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Deploy Dev API stack
+        if: env.DEV_PROFILE != 'idle'
+        run: >
+          npx cdk deploy
+          ${STACK_PREFIX}-api-stack
+          -c stage=dev
+          -c devProfile=${DEV_PROFILE}
+          --require-approval never
         working-directory: infra
         env:
           DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
@@ -213,6 +265,8 @@ jobs:
       - validate_prod
     runs-on: ubuntu-latest
     environment: prod
+    env:
+      STACK_PREFIX: dreiecksrennen-prod
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -251,8 +305,55 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Deploy Prod stacks
-        run: npx cdk deploy --all -c stage=prod --require-approval never
+      - name: Deploy Prod base stacks
+        run: >
+          npx cdk deploy
+          ${STACK_PREFIX}-auth-stack
+          ${STACK_PREFIX}-data-stack
+          ${STACK_PREFIX}-storage-stack
+          -c stage=prod
+          --require-approval never
+        working-directory: infra
+        env:
+          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Run Prod database migrations
+        run: |
+          set -euo pipefail
+          secret_arn="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_PREFIX}-data-stack" \
+            --region "${AWS_REGION}" \
+            --query "Stacks[0].Outputs[?OutputKey=='DbSecretArn'].OutputValue" \
+            --output text)"
+          if [ -z "${secret_arn}" ] || [ "${secret_arn}" = "None" ]; then
+            echo "DbSecretArn output not found on ${STACK_PREFIX}-data-stack."
+            exit 1
+          fi
+          secret_json="$(aws secretsmanager get-secret-value \
+            --secret-id "${secret_arn}" \
+            --region "${AWS_REGION}" \
+            --query SecretString \
+            --output text)"
+          db_user="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.username||'')))")"
+          db_pass="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.password||'')))")"
+          db_host="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.host||''))")"
+          db_port="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.port||''))")"
+          db_name="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.dbname||''))")"
+          curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-global-bundle.pem
+          export DATABASE_URL="postgres://${db_user}:${db_pass}@${db_host}:${db_port}/${db_name}"
+          export DB_SSL_CA_PATH="/tmp/rds-global-bundle.pem"
+          npm --workspace api run db:migrate
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Deploy Prod API stack
+        run: >
+          npx cdk deploy
+          ${STACK_PREFIX}-api-stack
+          -c stage=prod
+          --require-approval never
         working-directory: infra
         env:
           PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}

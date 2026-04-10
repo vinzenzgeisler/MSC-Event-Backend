@@ -62,6 +62,21 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
 - Manueller `workflow_dispatch` kann `stage=dev` mit `devProfile=test` oder `idle` deployen.
 - Push auf `main` deployt `stage=prod`.
 
+## Deploy-Reihenfolge
+- `dev` mit `test`:
+  - Auth/Data/Storage deploy
+  - SQL-Migrationen automatisch gegen die Dev-Datenbank
+  - danach API-Stack deploy
+- `dev` mit `idle`:
+  - keine Migrationen
+  - kein API-Deploy
+- `prod`:
+  - Auth/Data/Storage deploy
+  - SQL-Migrationen automatisch gegen die Prod-Datenbank
+  - danach API-Stack deploy
+
+Die Pipeline geht davon aus, dass DB-Änderungen als vorwärtskompatible Migrationen ins Repo eingecheckt werden.
+
 ## AWS-Vorbereitung
 - Für Dev und Prod werden getrennte GitHub-Deploy-Roles erwartet: `AWS_DEPLOY_ROLE_ARN_DEV` und `AWS_DEPLOY_ROLE_ARN_PROD`.
 - Beide Roles brauchen OIDC-Trust für GitHub Actions auf dieses Repository.

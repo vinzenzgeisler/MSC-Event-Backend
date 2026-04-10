@@ -40,6 +40,8 @@ npm install
 - Handover Phase 5: `docs/phase5-handover.md`
 - Handover Phase 6: `docs/phase6-handover.md`
 - Smoke Test (PowerShell): `scripts/phase3-smoke-test.ps1`
+- Public Registration Dev Readiness: `docs/public-registration-dev-readiness.md`
+- Public Registration Dev Runner: `scripts/public-registration-dev-readiness.ps1`
 
 ## Ablauf (Kurz)
 

@@ -1,6 +1,7 @@
 param(
   [string]$Stage = "dev",
   [string]$Region = "eu-central-1",
+  [string]$ApiUrl = "",
   [Parameter(Mandatory = $true)][string]$AdminUsername,
   [Parameter(Mandatory = $true)][string]$AdminPassword,
   [Parameter(Mandatory = $true)][string]$EmailDe,
@@ -198,7 +199,7 @@ function New-ScenarioEntries {
     }
   }
 
-  return $entries
+  return @($entries)
 }
 
 function Get-EntryIdsForEmail([string]$ApiUrl, $Headers, [string]$EventId, [string]$Email) {
@@ -273,6 +274,8 @@ function New-ScenarioResult([string]$Name, [string]$Locale, [string]$Email) {
     communication = [ordered]@{
       registrationReceivedPreviewOk = $false
       reminderPreviewOk = $false
+      registrationReceivedPreviewCode = $null
+      reminderPreviewCode = $null
       missingPlaceholders = @()
       warnings = @()
     }
@@ -285,7 +288,7 @@ $outputDir = Join-Path $OutputRoot $timestamp
 Ensure-Directory $outputDir
 
 Step "Load stack outputs"
-$apiUrl = (Get-StackOutput -StackName "dreiecksrennen-$Stage-api-stack" -OutputKey "ApiUrl").TrimEnd('/')
+$apiUrl = if ($ApiUrl.Trim()) { $ApiUrl.Trim().TrimEnd('/') } else { (Get-StackOutput -StackName "dreiecksrennen-$Stage-api-stack" -OutputKey "ApiUrl").TrimEnd('/') }
 $userPoolId = Get-StackOutput -StackName "dreiecksrennen-$Stage-auth-stack" -OutputKey "UserPoolId"
 $clientId = Get-StackOutput -StackName "dreiecksrennen-$Stage-auth-stack" -OutputKey "UserPoolClientId"
 
@@ -350,7 +353,7 @@ foreach ($scenario in $scenarios) {
     clientSubmissionKey = "dev-readiness-$($scenario.name)-$timestamp"
     driver = New-DriverPayload -Email $scenario.email -Locale $scenario.locale -Minor:([bool]$scenario.minor)
     consent = New-ConsentPayload -Locale $scenario.locale
-    entries = New-ScenarioEntries -CurrentEvent $currentEvent -ScenarioName $scenario.name -Locale $scenario.locale -Codriver:([bool]$scenario.codriver) -DoubleStarter:([bool]$scenario.doubleStarter) -BackupVehicle:([bool]$scenario.backupVehicle)
+    entries = @(New-ScenarioEntries -CurrentEvent $currentEvent -ScenarioName $scenario.name -Locale $scenario.locale -Codriver:([bool]$scenario.codriver) -DoubleStarter:([bool]$scenario.doubleStarter) -BackupVehicle:([bool]$scenario.backupVehicle))
   }
 
   Set-Content -Path (Join-Path $scenarioDir "request.json") -Value ($payload | ConvertTo-Json -Depth 20)
@@ -370,22 +373,22 @@ foreach ($scenario in $scenarios) {
   $result.registrationStatus = $primaryDetail.entry.registrationStatus
   $result.consentLocale = $primaryDetail.entry.consent.locale
 
-  $registrationPreview = Invoke-MailPreview -ApiUrl $apiUrl -Headers $headers -EntryId $primaryEntryId -TemplateKey "registration_received"
-  Save-MailPreviewArtifacts -ScenarioDir $scenarioDir -TemplateKey "registration_received" -Preview $registrationPreview
-  $result.communication.registrationReceivedPreviewOk = ($registrationPreview.missingPlaceholders.Count -eq 0)
-  $result.communication.missingPlaceholders += @($registrationPreview.missingPlaceholders)
-  $result.communication.warnings += @($registrationPreview.warnings)
-
-  if ($scenario.previewReminder) {
-    $reminderPreview = Invoke-MailPreview -ApiUrl $apiUrl -Headers $headers -EntryId $primaryEntryId -TemplateKey "email_confirmation_reminder"
-    Save-MailPreviewArtifacts -ScenarioDir $scenarioDir -TemplateKey "email_confirmation_reminder" -Preview $reminderPreview
-    $result.communication.reminderPreviewOk = ($reminderPreview.missingPlaceholders.Count -eq 0)
-    $result.communication.missingPlaceholders += @($reminderPreview.missingPlaceholders)
-    $result.communication.warnings += @($reminderPreview.warnings)
-
-    $resendResponse = Invoke-JsonRequest -Method POST -Uri "$apiUrl/public/entries/$primaryEntryId/verification-resend" -Headers @{ "Content-Type" = "application/json" } -Body @{}
-    Set-Content -Path (Join-Path $scenarioDir "verification-resend.json") -Value ($resendResponse | ConvertTo-Json -Depth 20)
-    $result.verificationResendOk = [bool]$resendResponse.ok
+  try {
+    $registrationPreview = Invoke-MailPreview -ApiUrl $apiUrl -Headers $headers -EntryId $primaryEntryId -TemplateKey "registration_received"
+    Save-MailPreviewArtifacts -ScenarioDir $scenarioDir -TemplateKey "registration_received" -Preview $registrationPreview
+    $result.communication.registrationReceivedPreviewOk = ($registrationPreview.missingPlaceholders.Count -eq 0)
+    $result.communication.missingPlaceholders += @($registrationPreview.missingPlaceholders)
+    $result.communication.warnings += @($registrationPreview.warnings)
+  } catch {
+    $errorPayload = $_.ErrorDetails.Message
+    Set-Content -Path (Join-Path $scenarioDir "registration_received.preview-error.json") -Value $errorPayload
+    try {
+      $parsedError = $errorPayload | ConvertFrom-Json
+      $result.communication.registrationReceivedPreviewCode = $parsedError.code
+      $result.communication.warnings += @("registration_received preview failed: $($parsedError.code)")
+    } catch {
+      $result.communication.warnings += @('registration_received preview failed')
+    }
   }
 
   if ($scenario.autoVerify) {
@@ -395,6 +398,41 @@ foreach ($scenario in $scenarios) {
     Set-Content -Path (Join-Path $scenarioDir "$primaryEntryId.verified-detail.json") -Value ($verifiedDetail | ConvertTo-Json -Depth 20)
     $result.verified = ($verifiedDetail.entry.registrationStatus -eq "submitted_verified")
     $result.registrationStatus = $verifiedDetail.entry.registrationStatus
+  }
+
+  if ($scenario.previewReminder) {
+    try {
+      $reminderPreview = Invoke-MailPreview -ApiUrl $apiUrl -Headers $headers -EntryId $primaryEntryId -TemplateKey "email_confirmation_reminder"
+      Save-MailPreviewArtifacts -ScenarioDir $scenarioDir -TemplateKey "email_confirmation_reminder" -Preview $reminderPreview
+      $result.communication.reminderPreviewOk = ($reminderPreview.missingPlaceholders.Count -eq 0)
+      $result.communication.missingPlaceholders += @($reminderPreview.missingPlaceholders)
+      $result.communication.warnings += @($reminderPreview.warnings)
+    } catch {
+      $errorPayload = $_.ErrorDetails.Message
+      Set-Content -Path (Join-Path $scenarioDir "email_confirmation_reminder.preview-error.json") -Value $errorPayload
+      try {
+        $parsedError = $errorPayload | ConvertFrom-Json
+        $result.communication.reminderPreviewCode = $parsedError.code
+        $result.communication.warnings += @("email_confirmation_reminder preview failed: $($parsedError.code)")
+      } catch {
+        $result.communication.warnings += @('email_confirmation_reminder preview failed')
+      }
+    }
+
+    try {
+      $resendResponse = Invoke-JsonRequest -Method POST -Uri "$apiUrl/public/entries/$primaryEntryId/verification-resend" -Headers @{ "Content-Type" = "application/json" } -Body @{}
+      Set-Content -Path (Join-Path $scenarioDir "verification-resend.json") -Value ($resendResponse | ConvertTo-Json -Depth 20)
+      $result.verificationResendOk = [bool]$resendResponse.ok
+    } catch {
+      $errorPayload = $_.ErrorDetails.Message
+      Set-Content -Path (Join-Path $scenarioDir "verification-resend.error.json") -Value $errorPayload
+      try {
+        $parsedError = $errorPayload | ConvertFrom-Json
+        $result.communication.warnings += @("verification resend failed: $($parsedError.code)")
+      } catch {
+        $result.communication.warnings += @('verification resend failed')
+      }
+    }
   }
 
   $summary.scenarios += $result
@@ -427,6 +465,8 @@ foreach ($scenario in $summary.scenarios) {
   $markdown += "- Consent locale: $($scenario.consentLocale)"
   $markdown += "- registration_received preview ok: $($scenario.communication.registrationReceivedPreviewOk)"
   $markdown += "- reminder preview ok: $($scenario.communication.reminderPreviewOk)"
+  $markdown += "- registration_received preview code: $($scenario.communication.registrationReceivedPreviewCode)"
+  $markdown += "- reminder preview code: $($scenario.communication.reminderPreviewCode)"
   $markdown += "- Missing placeholders: $([string]::Join(', ', @($scenario.communication.missingPlaceholders | Select-Object -Unique)))"
   $markdown += "- Warnings: $([string]::Join(' | ', @($scenario.communication.warnings | Select-Object -Unique)))"
 }

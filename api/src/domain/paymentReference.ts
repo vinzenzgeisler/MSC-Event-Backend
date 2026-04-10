@@ -17,8 +17,11 @@ export const buildPaymentReference = (input: BuildPaymentReferenceInput): string
   const fullName = [normalizeReferencePart(input.firstName), normalizeReferencePart(input.lastName)]
     .filter((value): value is string => Boolean(value))
     .join(' ');
+  const prefix = normalizeReferencePart(input.prefix);
+  const orgaCode = normalizeReferencePart(input.orgaCode);
+  const prefixedOrgaCode = prefix && orgaCode ? `${prefix}-${orgaCode}` : orgaCode;
 
-  return [normalizeReferencePart(input.prefix) ?? 'Nennung', normalizeReferencePart(input.orgaCode), fullName]
+  return ['Nennung', prefixedOrgaCode, fullName]
     .filter((value): value is string => Boolean(value && value.trim().length > 0))
     .join(' ');
 };

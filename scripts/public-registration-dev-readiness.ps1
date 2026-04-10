@@ -47,21 +47,24 @@ function Invoke-JsonRequest {
   return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers -Body ($Body | ConvertTo-Json -Depth 20)
 }
 
-function New-ConsentPayload([string]$Locale) {
-  $consentText = "MSC public registration consent $Locale"
-  $consentBytes = [System.Text.Encoding]::UTF8.GetBytes($consentText)
-  $hashBytes = [System.Security.Cryptography.SHA256]::HashData($consentBytes)
-  $hash = [Convert]::ToHexString($hashBytes).ToLowerInvariant()
+function Get-PublicLegalConsent([string]$ApiUrl, [string]$Locale) {
+  $response = Invoke-JsonRequest -Method GET -Uri "$ApiUrl/public/legal/current?locale=$([System.Uri]::EscapeDataString($Locale))"
+  if (-not $response.consent) {
+    throw "Public legal consent metadata missing for locale=$Locale."
+  }
+  return $response.consent
+}
 
+function New-ConsentPayload($PublishedConsent) {
   return @{
     termsAccepted = $true
     privacyAccepted = $true
     waiverAccepted = $true
     mediaAccepted = $false
     clubInfoAccepted = $true
-    consentVersion = "dev-readiness-2026-04-10"
-    consentTextHash = $hash
-    locale = $Locale
+    consentVersion = $PublishedConsent.consentVersion
+    consentTextHash = $PublishedConsent.consentTextHash
+    locale = $PublishedConsent.consentLocale
     consentSource = "public_form"
     consentCapturedAt = (Get-Date).ToUniversalTime().ToString("o")
   }
@@ -271,6 +274,9 @@ function New-ScenarioResult([string]$Name, [string]$Locale, [string]$Email) {
     verificationResendOk = $false
     registrationStatus = $null
     consentLocale = $null
+    consentVersion = $null
+    consentHashMatchesPublished = $false
+    consentVersionMatchesPublished = $false
     communication = [ordered]@{
       registrationReceivedPreviewOk = $false
       reminderPreviewOk = $false
@@ -344,6 +350,8 @@ foreach ($scenario in $scenarios) {
   $scenarioDir = Join-Path $outputDir $scenario.name
   Ensure-Directory $scenarioDir
   $result = New-ScenarioResult -Name $scenario.name -Locale $scenario.locale -Email $scenario.email
+  $publishedConsent = Get-PublicLegalConsent -ApiUrl $apiUrl -Locale $scenario.locale
+  Set-Content -Path (Join-Path $scenarioDir "public-legal-current.json") -Value ((@{ consent = $publishedConsent } | ConvertTo-Json -Depth 20))
 
   $deletedCount = Remove-EntriesForEmail -ApiUrl $apiUrl -Headers $headers -EventId $eventId -Email $scenario.email
   $result.cleanupDeleted = $deletedCount
@@ -352,7 +360,7 @@ foreach ($scenario in $scenarios) {
     eventId = $eventId
     clientSubmissionKey = "dev-readiness-$($scenario.name)-$timestamp"
     driver = New-DriverPayload -Email $scenario.email -Locale $scenario.locale -Minor:([bool]$scenario.minor)
-    consent = New-ConsentPayload -Locale $scenario.locale
+    consent = New-ConsentPayload -PublishedConsent $publishedConsent
     entries = @(New-ScenarioEntries -CurrentEvent $currentEvent -ScenarioName $scenario.name -Locale $scenario.locale -Codriver:([bool]$scenario.codriver) -DoubleStarter:([bool]$scenario.doubleStarter) -BackupVehicle:([bool]$scenario.backupVehicle))
   }
 
@@ -372,6 +380,15 @@ foreach ($scenario in $scenarios) {
   $primaryDetail = Get-EntryDetail -ApiUrl $apiUrl -Headers $headers -EntryId $primaryEntryId
   $result.registrationStatus = $primaryDetail.entry.registrationStatus
   $result.consentLocale = $primaryDetail.entry.consent.locale
+  $result.consentVersion = $primaryDetail.entry.consent.consentVersion
+  $result.consentHashMatchesPublished = ($primaryDetail.entry.consent.consentTextHash -eq $publishedConsent.consentTextHash)
+  $result.consentVersionMatchesPublished = ($primaryDetail.entry.consent.consentVersion -eq $publishedConsent.consentVersion)
+  if (-not $result.consentHashMatchesPublished) {
+    $result.communication.warnings += @('stored consent hash does not match published legal metadata')
+  }
+  if (-not $result.consentVersionMatchesPublished) {
+    $result.communication.warnings += @('stored consent version does not match published legal metadata')
+  }
 
   try {
     $registrationPreview = Invoke-MailPreview -ApiUrl $apiUrl -Headers $headers -EntryId $primaryEntryId -TemplateKey "registration_received"
@@ -463,6 +480,9 @@ foreach ($scenario in $summary.scenarios) {
   $markdown += "- Verified automatically: $($scenario.verified)"
   $markdown += "- Verification resend ok: $($scenario.verificationResendOk)"
   $markdown += "- Consent locale: $($scenario.consentLocale)"
+  $markdown += "- Consent version: $($scenario.consentVersion)"
+  $markdown += "- Consent version matches published: $($scenario.consentVersionMatchesPublished)"
+  $markdown += "- Consent hash matches published: $($scenario.consentHashMatchesPublished)"
   $markdown += "- registration_received preview ok: $($scenario.communication.registrationReceivedPreviewOk)"
   $markdown += "- reminder preview ok: $($scenario.communication.reminderPreviewOk)"
   $markdown += "- registration_received preview code: $($scenario.communication.registrationReceivedPreviewCode)"

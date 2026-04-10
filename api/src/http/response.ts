@@ -8,7 +8,8 @@ type FieldError = {
 
 export const json = (
   statusCode: number,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  extraHeaders?: Record<string, string>
 ): APIGatewayProxyStructuredResultV2 => {
   const origin = process.env.CORS_ALLOW_ORIGIN ?? process.env.WEB_APP_ORIGIN ?? '*';
   return {
@@ -21,7 +22,8 @@ export const json = (
         'Authorization,authorization,Content-Type,content-type,Accept,accept,X-Requested-With,x-requested-with,X-Amz-Date,x-amz-date,X-Amz-Security-Token,x-amz-security-token,X-Api-Key,x-api-key',
       'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
       'access-control-max-age': '600',
-      'access-control-expose-headers': 'content-type'
+      'access-control-expose-headers': 'content-type,retry-after',
+      ...(extraHeaders ?? {})
     },
     body: JSON.stringify(body)
   };
@@ -74,16 +76,21 @@ export const errorJson = (
   message: string,
   details?: Record<string, unknown>,
   code?: string,
-  fieldErrors?: FieldError[]
+  fieldErrors?: FieldError[],
+  extraHeaders?: Record<string, string>
 ): APIGatewayProxyStructuredResultV2 => {
   const derivedFieldErrors = parseFieldErrorsFromDetails(details);
-  return json(statusCode, {
-    ok: false,
-    code: code ?? defaultCodeForStatus(statusCode),
-    message,
-    ...((fieldErrors && fieldErrors.length > 0 ? fieldErrors : derivedFieldErrors)
-      ? { fieldErrors: (fieldErrors && fieldErrors.length > 0 ? fieldErrors : derivedFieldErrors) }
-      : {}),
-    ...(details ? { details } : {})
-  });
+  return json(
+    statusCode,
+    {
+      ok: false,
+      code: code ?? defaultCodeForStatus(statusCode),
+      message,
+      ...((fieldErrors && fieldErrors.length > 0 ? fieldErrors : derivedFieldErrors)
+        ? { fieldErrors: (fieldErrors && fieldErrors.length > 0 ? fieldErrors : derivedFieldErrors) }
+        : {}),
+      ...(details ? { details } : {})
+    },
+    extraHeaders
+  );
 };

@@ -57,6 +57,27 @@ export const appConfig = pgTable(
   })
 );
 
+export const publicRateLimit = pgTable(
+  'public_rate_limit',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    scope: text('scope').notNull(),
+    keyHash: text('key_hash').notNull(),
+    windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
+    hitCount: integer('hit_count').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    scopeKeyWindowUnique: uniqueIndex('public_rate_limit_scope_key_window_unique').on(
+      table.scope,
+      table.keyHash,
+      table.windowStart
+    ),
+    updatedIndex: index('public_rate_limit_updated_idx').on(table.updatedAt)
+  })
+);
+
 export const eventClass = pgTable(
   'class',
   {

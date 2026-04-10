@@ -22,6 +22,7 @@ import { validateImageBuffer } from '../domain/imageValidation';
 import { normalizeStartNumber } from '../domain/startNumber';
 import { buildOrgaCode } from '../domain/orgaCode';
 import { isPgUniqueViolation } from '../http/dbErrors';
+import { getPublicLegalCurrent, resolvePublicLegalLocale } from './publicLegal';
 import { DuplicateRequestError, queueLifecycleMail, queueMail } from './adminMail';
 import { recalculateInvoices } from './adminFinance';
 
@@ -435,12 +436,29 @@ const verificationTokenExpiry = (now = new Date()): Date => {
   return new Date(now.getTime() + ttlDays * 24 * 60 * 60 * 1000);
 };
 
+const assertConsentMetadataMatchesPublishedLegalTexts = async (
+  consent: Pick<z.infer<typeof consentInputSchema>, 'locale' | 'consentVersion' | 'consentTextHash'>
+) => {
+  const normalizedLocale = resolvePublicLegalLocale(consent.locale);
+  if (normalizedLocale !== consent.locale) {
+    throw new Error('CONSENT_LOCALE_INVALID');
+  }
+  const legal = await getPublicLegalCurrent({ locale: consent.locale });
+  if (legal.consent.consentVersion !== consent.consentVersion) {
+    throw new Error('CONSENT_VERSION_MISMATCH');
+  }
+  if (legal.consent.consentTextHash.toLowerCase() !== consent.consentTextHash.toLowerCase()) {
+    throw new Error('CONSENT_TEXT_HASH_MISMATCH');
+  }
+};
+
 export const createPublicEntriesBatch = async (input: CreateBatchInput) => {
   return createPublicEntriesBatchInternal(input);
 };
 
 const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput): Promise<BatchResponse> => {
   await assertRegistrationOpen(input.eventId);
+  await assertConsentMetadataMatchesPublishedLegalTexts(input.consent);
   const db = await getDb();
   const now = new Date();
   const token = createHash('sha256').update(`${randomUUID()}:${input.driver.email}:${Date.now()}`).digest('hex');

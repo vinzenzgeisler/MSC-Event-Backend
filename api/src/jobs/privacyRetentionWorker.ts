@@ -5,6 +5,7 @@ type RetentionSettings = {
   verificationDays: number;
   idempotencyDays: number;
   uploadDays: number;
+  rateLimitDays: number;
   exportDays: number;
   outboxDays: number;
   emailDeliveryDays: number;
@@ -28,6 +29,7 @@ const loadSettings = (): RetentionSettings => ({
   verificationDays: parseRetention('RETENTION_VERIFICATION_DAYS', 30),
   idempotencyDays: parseRetention('RETENTION_IDEMPOTENCY_DAYS', 30),
   uploadDays: parseRetention('RETENTION_UPLOAD_DAYS', 30),
+  rateLimitDays: parseRetention('RETENTION_RATE_LIMIT_DAYS', 7),
   exportDays: parseRetention('RETENTION_EXPORT_DAYS', 90),
   outboxDays: parseRetention('RETENTION_OUTBOX_DAYS', 365),
   emailDeliveryDays: parseRetention('RETENTION_EMAIL_DELIVERY_DAYS', 365),
@@ -85,6 +87,13 @@ export const handler = async () => {
     `delete from "vehicle_image_upload"
      where coalesce("finalized_at", "expires_at", "created_at") < now() - ($1 * interval '1 day')`,
     [settings.uploadDays]
+  );
+
+  await execute(
+    'public_rate_limit',
+    `delete from "public_rate_limit"
+     where "updated_at" < now() - ($1 * interval '1 day')`,
+    [settings.rateLimitDays]
   );
 
   await execute(

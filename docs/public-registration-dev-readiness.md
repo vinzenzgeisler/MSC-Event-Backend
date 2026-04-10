@@ -37,6 +37,7 @@ Der Lauf erledigt:
 
 - Admin-Login gegen Dev-Cognito
 - Laden des aktuellen Public-Events
+- Laden der veröffentlichten Consent-Metadaten über `GET /public/legal/current`
 - Bereinigung alter Dev-Nennungen für die Testmails
 - öffentliche Registrierung für diese Szenarien:
   - `de-happy-moto`
@@ -46,6 +47,7 @@ Der Lauf erledigt:
 - Preview der Mails `registration_received` und je nach Szenario `email_confirmation_reminder`
 - automatische Verifikation für ausgewählte Szenarien über den zurückgegebenen Verify-Token
 - Status- und Detailprüfung über Admin-Endpunkte
+- Abgleich, dass gespeicherte Consent-Version und Consent-Hash mit der veröffentlichten Fassung übereinstimmen
 - Ablage von JSON-, Text- und HTML-Artefakten unter `artifacts/public-registration-dev-readiness/<timestamp>/`
 
 Wichtige Artefakte:
@@ -53,6 +55,7 @@ Wichtige Artefakte:
 - `summary.json`
 - `summary.md`
 - pro Szenario:
+  - `public-legal-current.json`
   - `request.json`
   - `create-response.json`
   - `*.detail.json`
@@ -166,6 +169,8 @@ Diese Fälle müssen grün sein:
 - [ ] Guardian-Daten vollständig
 - [ ] Ersatzfahrzeugdaten vollständig
 - [ ] Consent-Evidence vollständig
+- [ ] Consent-Version entspricht `GET /public/legal/current`
+- [ ] Consent-Hash entspricht `GET /public/legal/current`
 - [ ] `orgaCode` gesetzt
 - [ ] Zahlungsreferenz enthält `paymentReferencePrefix-orgaCode`
 - [ ] keine Dublette bei identischer Submission

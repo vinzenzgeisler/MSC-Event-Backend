@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/handler.js",
-    "test": "npm run build && node tests/lifecycle-mail.test.js && node tests/mail-rendering-contract.test.js && node tests/pricing-snapshot.test.js && node tests/invoice-status.test.js && node tests/image-validation.test.js && node tests/public-image-upload-contract.test.js && node tests/orga-code.test.js && node tests/payment-reference.test.js && node tests/payment-reminder-schedule.test.js && node tests/entry-confirmation-pdf.test.js && node tests/admin-iam.test.js",
+    "test": "npm run build && node tests/lifecycle-mail.test.js && node tests/mail-rendering-contract.test.js && node tests/pricing-snapshot.test.js && node tests/invoice-status.test.js && node tests/image-validation.test.js && node tests/public-image-upload-contract.test.js && node tests/orga-code.test.js && node tests/payment-reference.test.js && node tests/payment-reminder-schedule.test.js && node tests/entry-confirmation-pdf.test.js && node tests/admin-iam.test.js && node tests/public-legal-contract.test.js && node tests/public-rate-limit.test.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/run-sql-migrations.js",
     "db:migrate:drizzle": "drizzle-kit migrate",

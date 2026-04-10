@@ -16,7 +16,7 @@ const pricingRulesSchema = z.object({
   earlyDeadline: z.string().datetime(),
   lateFeeCents: z.number().int().min(0),
   secondVehicleDiscountCents: z.number().int().min(0).default(8000),
-  classRules: z.array(classRuleSchema).min(1)
+  classRules: z.array(classRuleSchema)
 });
 
 const recalcSchema = z.object({
@@ -114,14 +114,16 @@ export const putPricingRules = async (eventId: string, input: PricingRulesInput,
       });
 
     await tx.delete(classPricingRule).where(eq(classPricingRule.eventId, eventId));
-    await tx.insert(classPricingRule).values(
-      input.classRules.map((rule) => ({
-        eventId,
-        classId: rule.classId,
-        baseFeeCents: rule.baseFeeCents,
-        updatedAt: now
-      }))
-    );
+    if (input.classRules.length > 0) {
+      await tx.insert(classPricingRule).values(
+        input.classRules.map((rule) => ({
+          eventId,
+          classId: rule.classId,
+          baseFeeCents: rule.baseFeeCents,
+          updatedAt: now
+        }))
+      );
+    }
 
     await writeAuditLog(tx as never, {
       eventId,

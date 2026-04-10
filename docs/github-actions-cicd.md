@@ -27,6 +27,7 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
 - Variable: `AWS_ACCOUNT_ID`
 - Variable: `AWS_REGION`
 - Variable: `PROD_PUBLIC_BASE_URL`
+- Optional Variable: `PROD_COGNITO_DOMAIN_PREFIX`
 
 ## Woher kommen die Werte?
 - `AWS_DEPLOY_ROLE_ARN_DEV`
@@ -50,6 +51,9 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
 - `PROD_PUBLIC_BASE_URL`
   - Öffentliche Basis-URL des Prod-Frontends, zum Beispiel `https://event.example.tld`.
   - Daraus werden Prod-Verify-Links, Callback-URLs und Redirect-Basen abgeleitet.
+- `PROD_COGNITO_DOMAIN_PREFIX`
+  - Optionaler expliziter Cognito Hosted-UI-Domain-Präfix für Prod.
+  - Standard ist automatisch `dreiecksrennen-prod-auth-<accountsuffix>`, damit auch Prod im neuen AWS-Konto nicht mit bereits belegten Präfixen kollidiert.
 
 ## Verhalten
 - PRs gegen `dev` oder `main` laufen nur Validierung.

@@ -68,6 +68,7 @@ Hinweis:
 
 - Der Dev-Cognito-Domain-Präfix wird standardmäßig automatisch aus dem AWS-Account abgeleitet, damit er in neuen Konten/Regionen nicht mit bereits belegten Präfixen kollidiert.
 - Optional kann `DEV_COGNITO_DOMAIN_PREFIX` explizit gesetzt werden.
+- Gleiches gilt für Prod über `PROD_COGNITO_DOMAIN_PREFIX`.
 
 ## Stage-Konfiguration
 

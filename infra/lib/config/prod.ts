@@ -8,15 +8,20 @@ const requireEnv = (name: string): string => {
   return value;
 };
 
+const accountSuffix = (process.env.CDK_DEFAULT_ACCOUNT ?? '').trim().slice(-6).toLowerCase();
+
 export const resolveProdConfig = (): StageConfig => {
   const prodPublicBaseUrl = requireEnv('PROD_PUBLIC_BASE_URL').replace(/\/$/, '');
+  const prodCognitoDomainPrefix =
+    (process.env.PROD_COGNITO_DOMAIN_PREFIX ?? '').trim().toLowerCase() ||
+    `dreiecksrennen-prod-auth${accountSuffix ? `-${accountSuffix}` : ''}`;
 
   return {
     stage: 'prod',
     prefix: 'dreiecksrennen-prod',
     cognitoCallbackUrls: [`${prodPublicBaseUrl}/admin/login`],
     cognitoLogoutUrls: [`${prodPublicBaseUrl}/admin/login`],
-    cognitoDomainPrefix: 'dreiecksrennen-prod-auth',
+    cognitoDomainPrefix: prodCognitoDomainPrefix,
     sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
     publicVerifyBaseUrl: `${prodPublicBaseUrl}/anmeldung/verify`,
     assetsCorsAllowedOrigins: [prodPublicBaseUrl],

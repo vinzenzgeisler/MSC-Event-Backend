@@ -64,6 +64,11 @@ npx cdk deploy --all -c stage=dev -c devProfile=idle
 npx cdk deploy --all -c stage=dev -c devProfile=test
 ```
 
+Hinweis:
+
+- Der Dev-Cognito-Domain-Präfix wird standardmäßig automatisch aus dem AWS-Account abgeleitet, damit er in neuen Konten/Regionen nicht mit bereits belegten Präfixen kollidiert.
+- Optional kann `DEV_COGNITO_DOMAIN_PREFIX` explizit gesetzt werden.
+
 ## Stage-Konfiguration
 
 Die zentralen Einstellungen liegen in:

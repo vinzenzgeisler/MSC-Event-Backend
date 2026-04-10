@@ -1564,6 +1564,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
           : `Bei gemeinsamer Überweisung deiner bereits zugelassenen Nennungen beträgt der aktuelle Gesamtbetrag ${acceptedEntriesTotal}.`
     : '';
   const paymentReference = buildPaymentReference({
+    prefix: entryConfirmationConfig.paymentReferencePrefix,
     orgaCode: current.orgaCode,
     firstName: current.firstName,
     lastName: current.lastName
@@ -1957,6 +1958,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     ? templateData.entryStartNumbers.filter((value): value is string => typeof value === 'string')
     : [];
   const paymentReference = buildPaymentReference({
+    prefix: entryConfirmationConfig.paymentReferencePrefix,
     orgaCode: row.orgaCode,
     firstName: row.firstName,
     lastName: row.lastName

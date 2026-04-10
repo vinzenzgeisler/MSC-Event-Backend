@@ -573,6 +573,7 @@ const buildPayload = async (
   const translation = TRANSLATIONS[locale] ?? TRANSLATIONS.en;
   const eventDateText = formatEventDateText(row.eventStartsAt, row.eventEndsAt);
   const paymentReference = buildPaymentReference({
+    prefix: config.paymentReferencePrefix,
     orgaCode: row.orgaCode,
     firstName: row.driverFirstName,
     lastName: row.driverLastName

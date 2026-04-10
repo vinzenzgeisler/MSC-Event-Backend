@@ -1,4 +1,5 @@
 type BuildPaymentReferenceInput = {
+  prefix?: string | null;
   orgaCode?: string | null;
   firstName?: string | null;
   lastName?: string | null;
@@ -17,7 +18,7 @@ export const buildPaymentReference = (input: BuildPaymentReferenceInput): string
     .filter((value): value is string => Boolean(value))
     .join(' ');
 
-  return ['Nennung', normalizeReferencePart(input.orgaCode), fullName]
+  return [normalizeReferencePart(input.prefix) ?? 'Nennung', normalizeReferencePart(input.orgaCode), fullName]
     .filter((value): value is string => Boolean(value && value.trim().length > 0))
     .join(' ');
 };

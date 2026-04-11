@@ -12,7 +12,7 @@ const basePayload = {
     firstName: 'Max',
     lastName: 'Muster',
     birthdate: '1990-01-01',
-    nationality: 'DE',
+    country: 'DE',
     street: 'Musterweg 1',
     zip: '02763',
     city: 'Zittau',

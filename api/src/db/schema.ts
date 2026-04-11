@@ -105,6 +105,7 @@ export const person = pgTable(
     lastName: text('last_name').notNull(),
     birthdate: date('birthdate'),
     nationality: text('nationality'),
+    country: text('country'),
     street: text('street'),
     zip: text('zip'),
     city: text('city'),

@@ -2,20 +2,6 @@ export type SupportedMailLocale = 'de' | 'cs' | 'pl' | 'en';
 
 const SUPPORTED: Set<SupportedMailLocale> = new Set(['de', 'cs', 'pl', 'en']);
 
-const NATIONALITY_TO_LOCALE: Record<string, SupportedMailLocale> = {
-  de: 'de',
-  deu: 'de',
-  germany: 'de',
-  deutschland: 'de',
-  cz: 'cs',
-  cze: 'cs',
-  czechia: 'cs',
-  czech: 'cs',
-  pl: 'pl',
-  pol: 'pl',
-  poland: 'pl'
-};
-
 const normalizeLocaleCandidate = (value: string): string => value.trim().toLowerCase().replace('_', '-').split('-')[0] ?? '';
 
 export const normalizeMailLocale = (value: unknown): SupportedMailLocale | null => {
@@ -32,25 +18,6 @@ export const normalizeMailLocale = (value: unknown): SupportedMailLocale | null 
   return 'en';
 };
 
-const resolveNationalityLocale = (value: unknown): SupportedMailLocale | null => {
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const normalized = normalizeLocaleCandidate(value);
-  if (!normalized) {
-    return null;
-  }
-  return NATIONALITY_TO_LOCALE[normalized] ?? null;
-};
-
-const hasUnmappedNationalityCandidate = (value: unknown): boolean => {
-  if (typeof value !== 'string') {
-    return false;
-  }
-  const normalized = normalizeLocaleCandidate(value);
-  return normalized.length > 0 && !(normalized in NATIONALITY_TO_LOCALE);
-};
-
 export const resolveMailLocale = (data: Record<string, unknown>, defaultLocale: SupportedMailLocale = 'de'): SupportedMailLocale => {
   const explicit =
     normalizeMailLocale(data.locale) ??
@@ -58,20 +25,6 @@ export const resolveMailLocale = (data: Record<string, unknown>, defaultLocale: 
     normalizeMailLocale(data.language);
   if (explicit) {
     return explicit;
-  }
-  const nationality =
-    resolveNationalityLocale(data.nationality) ??
-    resolveNationalityLocale(data.countryCode) ??
-    resolveNationalityLocale(data.country);
-  if (nationality) {
-    return nationality;
-  }
-  if (
-    hasUnmappedNationalityCandidate(data.nationality) ||
-    hasUnmappedNationalityCandidate(data.countryCode) ||
-    hasUnmappedNationalityCandidate(data.country)
-  ) {
-    return 'en';
   }
   return defaultLocale;
 };

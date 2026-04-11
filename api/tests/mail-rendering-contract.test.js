@@ -57,9 +57,9 @@ const buildBasePayload = () => ({
   assert.match(rendered.bodyTextRendered, /Kind regards/);
 }
 
-// Nationality fallback: unmapped countries must fall back to en.
+// Without an explicit locale, the caller default is used.
 {
-  assert.equal(resolveMailLocale({ nationality: 'FR' }), 'en');
+  assert.equal(resolveMailLocale({ country: 'FR' }), 'de');
 }
 
 // Campaign default: badge hidden; entry context visible only when enabled.

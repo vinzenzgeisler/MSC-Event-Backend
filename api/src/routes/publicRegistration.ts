@@ -28,7 +28,7 @@ import { recalculateInvoices } from './adminFinance';
 
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const nonEmptySchema = z.string().trim().min(1);
-const zipSchema = z.string().regex(/^\d{5}$/);
+const zipSchema = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9\- ]{1,11}$/);
 
 const normalizePhone = (value: string): string => value.replace(/\D+/g, '');
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
@@ -120,7 +120,7 @@ const codriverInputSchema = z.object({
   firstName: nonEmptySchema,
   lastName: nonEmptySchema,
   birthdate: birthdateSchema,
-  nationality: nonEmptySchema,
+  country: nonEmptySchema,
   street: nonEmptySchema,
   zip: zipSchema,
   city: nonEmptySchema,
@@ -132,7 +132,7 @@ const driverInputSchema = z.object({
   firstName: nonEmptySchema,
   lastName: nonEmptySchema,
   birthdate: birthdateSchema,
-  nationality: z.string().trim().optional(),
+  country: nonEmptySchema,
   street: nonEmptySchema,
   zip: zipSchema,
   city: nonEmptySchema,
@@ -529,7 +529,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
               firstName: personInput.firstName ?? existing.firstName,
               lastName: personInput.lastName ?? existing.lastName,
               birthdate: personInput.birthdate ?? null,
-              nationality: personInput.nationality ?? null,
+              country: personInput.country ?? null,
               street: personInput.street ?? null,
               zip: personInput.zip ?? null,
               city: personInput.city ?? null,
@@ -553,7 +553,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
             firstName: personInput.firstName as string,
             lastName: personInput.lastName as string,
             birthdate: personInput.birthdate ?? null,
-            nationality: personInput.nationality ?? null,
+            country: personInput.country ?? null,
             street: personInput.street ?? null,
             zip: personInput.zip ?? null,
             city: personInput.city ?? null,

@@ -371,6 +371,12 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/public/legal/current',
+      methods: [apigwv2.HttpMethod.GET],
+      integration
+    });
+
+    this.api.addRoutes({
       path: '/public/events/{id}/entries/batch',
       methods: [apigwv2.HttpMethod.POST],
       integration

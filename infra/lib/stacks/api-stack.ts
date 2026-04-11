@@ -117,7 +117,7 @@ export class ApiStack extends Stack {
         MAIL_PUBLIC_BASE_URL: mailPublicBaseUrl,
         NENNUNGSTOOL_URL: mailPublicBaseUrl,
         EMAIL_VERIFICATION_TOKEN_TTL_DAYS: '30',
-        REQUIRE_ADMIN_MFA: props.config.stage === 'prod' ? 'true' : 'false'
+        REQUIRE_ADMIN_MFA: 'false'
       },
       bundling: {
         target: 'node20',
@@ -154,7 +154,7 @@ export class ApiStack extends Stack {
         MAIL_PUBLIC_BASE_URL: mailPublicBaseUrl,
         NENNUNGSTOOL_URL: mailPublicBaseUrl,
         EMAIL_VERIFICATION_TOKEN_TTL_DAYS: '30',
-        REQUIRE_ADMIN_MFA: props.config.stage === 'prod' ? 'true' : 'false',
+        REQUIRE_ADMIN_MFA: 'false',
         EMAIL_WORKER_BATCH_SIZE: '20',
         PAYMENT_REMINDER_FIRST_DAYS: '30',
         PAYMENT_REMINDER_REPEAT_DAYS: '14'

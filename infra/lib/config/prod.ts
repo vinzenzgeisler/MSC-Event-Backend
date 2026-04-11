@@ -37,7 +37,7 @@ export const resolveProdConfig = (): StageConfig => {
     enableMigrationRunner: false,
     apiInVpc: false,
     dbConnectivityMode: 'public_budget',
-    dbUseIamAuth: true,
+    dbUseIamAuth: false,
     dbRequireTls: true,
     dbName: 'eventdb',
     dbUsername: 'eventadmin',

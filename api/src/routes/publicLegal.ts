@@ -28,13 +28,13 @@ const DEFAULT_LEGAL_TEXTS_CONFIG: PublicLegalTextsConfig = {
     'de-DE': {
       consentLocale: 'de-DE',
       consentVersion: DEFAULT_CONSENT_VERSION,
-      consentTextHash: '5dc00be754ed72311584e7df88460471b8a5d8b979eae41f3e69c742f9a06ddd',
+      consentTextHash: '5d20e2280a66c0d25b80c8e51c8e8e9679e6dda1ba6e0f2f14c048a68b4ed6cb',
       publishedAt: '2026-04-10T00:00:00.000Z'
     },
     'en-GB': {
       consentLocale: 'en-GB',
       consentVersion: DEFAULT_CONSENT_VERSION,
-      consentTextHash: '2d0af1fc20976749575c690623905946ba6726528043bf20b712ce48a545ccdf',
+      consentTextHash: '3cfb21a048a160f90d87aef5bfe284d72c2c04e965358a9784e034718f589408',
       publishedAt: '2026-04-10T00:00:00.000Z'
     },
     'cs-CZ': {

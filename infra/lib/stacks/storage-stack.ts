@@ -9,6 +9,12 @@ interface StorageStackProps extends StackProps {
   config: StageConfig;
 }
 
+function buildBucketName(base: string, account?: string): string {
+  const suffix = (account ?? '').trim().toLowerCase();
+  const full = suffix ? `${base}-${suffix}` : base;
+  return full.slice(0, 63);
+}
+
 export class StorageStack extends Stack {
   public readonly assetsBucket: s3.Bucket;
   public readonly documentsBucket: s3.Bucket;
@@ -18,9 +24,10 @@ export class StorageStack extends Stack {
 
     const removalPolicy = props.config.removalPolicy === 'destroy' ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN;
     const assetsCorsOrigins = props.config.assetsCorsAllowedOrigins;
+    const account = props.config.env?.account;
 
     this.assetsBucket = new s3.Bucket(this, 'AssetsBucket', {
-      bucketName: `${props.config.prefix}-assets`,
+      bucketName: buildBucketName(`${props.config.prefix}-assets`, account),
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
       encryption: s3.BucketEncryption.S3_MANAGED,
@@ -68,7 +75,7 @@ export class StorageStack extends Stack {
     });
 
     this.documentsBucket = new s3.Bucket(this, 'DocumentsBucket', {
-      bucketName: `${props.config.prefix}-documents`,
+      bucketName: buildBucketName(`${props.config.prefix}-documents`, account),
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
       encryption: s3.BucketEncryption.S3_MANAGED,

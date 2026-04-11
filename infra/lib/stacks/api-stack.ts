@@ -190,6 +190,7 @@ export class ApiStack extends Stack {
         RETENTION_VERIFICATION_DAYS: '30',
         RETENTION_IDEMPOTENCY_DAYS: '30',
         RETENTION_UPLOAD_DAYS: '30',
+        RETENTION_RATE_LIMIT_DAYS: '7',
         RETENTION_EXPORT_DAYS: '90',
         RETENTION_OUTBOX_DAYS: '365',
         RETENTION_EMAIL_DELIVERY_DAYS: '365',
@@ -365,6 +366,12 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/public/mail/logo',
+      methods: [apigwv2.HttpMethod.GET],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/legal/current',
       methods: [apigwv2.HttpMethod.GET],
       integration
     });

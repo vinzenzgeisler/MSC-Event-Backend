@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import { sql } from 'drizzle-orm';
 import { getDb } from './db/client';
 import { getAuthContext, hasAnyGroup, hasGroup } from './http/auth';
+import { buildPublicRateLimitKey, enforcePublicRateLimit } from './http/publicRateLimit';
 import { errorJson, json } from './http/response';
 import { parseJsonBody } from './http/parse';
 import { getPresignedAssetsDownloadUrl } from './docs/storage';
@@ -135,6 +136,10 @@ import {
 } from './routes/adminDocs';
 import { setCheckinIdVerified, validateIdVerifyInput } from './routes/adminCheckin';
 import {
+  getPublicLegalCurrent,
+  validatePublicLegalCurrentQuery
+} from './routes/publicLegal';
+import {
   createPublicEntry,
   createPublicEntriesBatch,
   finalizeVehicleImageUpload,
@@ -154,6 +159,57 @@ import {
 
 const isInvalidJson = (error: unknown): boolean =>
   error instanceof Error && error.message === 'Invalid JSON body';
+
+const getClientIp = (event: APIGatewayProxyEventV2): string => {
+  const forwardedFor = event.headers['x-forwarded-for'] ?? event.headers['X-Forwarded-For'];
+  if (forwardedFor) {
+    const first = forwardedFor.split(',')[0]?.trim();
+    if (first) {
+      return first;
+    }
+  }
+  return event.requestContext.http.sourceIp?.trim() || 'unknown';
+};
+
+const publicRateLimitedScopes = {
+  createEntry: { scope: 'public_registration_create_entry', limit: 10, windowSeconds: 600 },
+  createBatch: { scope: 'public_registration_create_batch', limit: 10, windowSeconds: 600 },
+  startNumberValidate: { scope: 'public_registration_start_number_validate', limit: 90, windowSeconds: 60 },
+  uploadInit: { scope: 'public_registration_upload_init', limit: 20, windowSeconds: 600 },
+  uploadFinalize: { scope: 'public_registration_upload_finalize', limit: 30, windowSeconds: 600 },
+  verifyEmail: { scope: 'public_registration_verify_email', limit: 30, windowSeconds: 600 },
+  resendVerification: { scope: 'public_registration_resend_verification', limit: 6, windowSeconds: 3600 }
+} as const;
+
+const enforcePublicRequestRateLimit = async (
+  event: APIGatewayProxyEventV2,
+  config: { scope: string; limit: number; windowSeconds: number },
+  extraKeyParts: Array<string | null | undefined> = []
+) => {
+  const key = buildPublicRateLimitKey([getClientIp(event), ...extraKeyParts]);
+  const result = await enforcePublicRateLimit({
+    scope: config.scope,
+    key,
+    limit: config.limit,
+    windowSeconds: config.windowSeconds
+  });
+  if (result.allowed) {
+    return null;
+  }
+  return errorJson(
+    429,
+    'Too many requests',
+    {
+      scope: config.scope,
+      limit: result.limit
+    },
+    'RATE_LIMITED',
+    undefined,
+    {
+      'retry-after': String(result.retryAfterSeconds)
+    }
+  );
+};
 
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyStructuredResultV2> => {
   try {
@@ -198,9 +254,31 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  if (method === 'GET' && path === '/public/legal/current') {
+    try {
+      const query = validatePublicLegalCurrentQuery(event.queryStringParameters ?? {});
+      const current = await getPublicLegalCurrent(query);
+      return json(200, {
+        ok: true,
+        consent: current.consent,
+        texts: current.texts,
+        availableLocales: current.availableLocales
+      });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      return errorJson(500, 'Get public legal metadata failed');
+    }
+  }
+
   const publicCreateEntryMatch = path.match(/^\/public\/events\/([^/]+)\/entries$/);
   if (method === 'POST' && publicCreateEntryMatch) {
     try {
+      const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.createEntry, [publicCreateEntryMatch[1]]);
+      if (rateLimited) {
+        return rateLimited;
+      }
       const payload = parseJsonBody(event);
       const input = validateCreatePublicEntryInput({
         ...(payload as Record<string, unknown>),
@@ -276,6 +354,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY') {
         return errorJson(409, 'Driver email already used by another active entry in this event', undefined, 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
       }
+      if (error instanceof Error && error.message === 'CONSENT_LOCALE_INVALID') {
+        return errorJson(400, 'Consent locale is invalid', undefined, 'CONSENT_LOCALE_INVALID');
+      }
+      if (error instanceof Error && error.message === 'CONSENT_VERSION_MISMATCH') {
+        return errorJson(409, 'Consent version no longer matches the published legal text', undefined, 'CONSENT_VERSION_MISMATCH');
+      }
       if (error instanceof Error && error.message === 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD') {
         return errorJson(
           409,
@@ -296,6 +380,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const publicCreateEntryBatchMatch = path.match(/^\/public\/events\/([^/]+)\/entries\/batch$/);
   if (method === 'POST' && publicCreateEntryBatchMatch) {
     try {
+      const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.createBatch, [publicCreateEntryBatchMatch[1]]);
+      if (rateLimited) {
+        return rateLimited;
+      }
       const payload = parseJsonBody(event);
       const input = validateCreatePublicEntriesBatchInput({
         ...(payload as Record<string, unknown>),
@@ -365,6 +453,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY') {
         return errorJson(409, 'Driver email already used by another active entry in this event', undefined, 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
       }
+      if (error instanceof Error && error.message === 'CONSENT_LOCALE_INVALID') {
+        return errorJson(400, 'Consent locale is invalid', undefined, 'CONSENT_LOCALE_INVALID');
+      }
+      if (error instanceof Error && error.message === 'CONSENT_VERSION_MISMATCH') {
+        return errorJson(409, 'Consent version no longer matches the published legal text', undefined, 'CONSENT_VERSION_MISMATCH');
+      }
       if (error instanceof Error && error.message === 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD') {
         return errorJson(
           409,
@@ -406,6 +500,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const publicStartNumberValidateMatch = path.match(/^\/public\/events\/([^/]+)\/start-number\/validate$/);
   if (method === 'POST' && publicStartNumberValidateMatch) {
     try {
+      const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.startNumberValidate, [publicStartNumberValidateMatch[1]]);
+      if (rateLimited) {
+        return rateLimited;
+      }
       const payload = parseJsonBody(event);
       const input = validatePublicStartNumberInput({
         ...(payload as Record<string, unknown>),
@@ -429,6 +527,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/public/uploads/vehicle-image/init') {
     try {
+      const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.uploadInit);
+      if (rateLimited) {
+        return rateLimited;
+      }
       const payload = parseJsonBody(event);
       const input = validateVehicleImageUploadInitInput(payload);
       const created = await initVehicleImageUpload(input);
@@ -457,6 +559,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/public/uploads/vehicle-image/finalize') {
     try {
+      const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.uploadFinalize);
+      if (rateLimited) {
+        return rateLimited;
+      }
       const payload = parseJsonBody(event);
       const input = validateVehicleImageUploadFinalizeInput(payload);
       const finalized = await finalizeVehicleImageUpload(input);
@@ -496,6 +602,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const publicVerifyMatch = path.match(/^\/public\/entries\/([^/]+)\/verify-email$/);
   if (method === 'POST' && publicVerifyMatch) {
     try {
+      const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.verifyEmail, [publicVerifyMatch[1]]);
+      if (rateLimited) {
+        return rateLimited;
+      }
       const payload = parseJsonBody(event);
       const input = validateVerifyPublicEntryInput(payload);
       const result = await verifyPublicEntryEmail(publicVerifyMatch[1], input);
@@ -526,6 +636,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const publicVerifyResendMatch = path.match(/^\/public\/entries\/([^/]+)\/verification-resend$/);
   if (method === 'POST' && publicVerifyResendMatch) {
     try {
+      const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.resendVerification, [publicVerifyResendMatch[1]]);
+      if (rateLimited) {
+        return rateLimited;
+      }
       const payload = parseJsonBody(event);
       const input = validateResendPublicEntryVerificationInput(payload);
       const result = await resendPublicEntryVerification(publicVerifyResendMatch[1], input);

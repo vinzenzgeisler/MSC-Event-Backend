@@ -2,6 +2,10 @@ import { StageConfig } from './types';
 
 export type DevProfile = 'idle' | 'test';
 
+const accountSuffix = (process.env.CDK_DEFAULT_ACCOUNT ?? '').trim().slice(-6).toLowerCase();
+const devCognitoDomainPrefix =
+  (process.env.DEV_COGNITO_DOMAIN_PREFIX ?? '').trim().toLowerCase() ||
+  `dreiecksrennen-dev-auth${accountSuffix ? `-${accountSuffix}` : ''}`;
 const devPublicBaseUrl = (process.env.DEV_PUBLIC_BASE_URL ?? '').trim().replace(/\/$/, '');
 const devAdminLoginUrl = devPublicBaseUrl ? `${devPublicBaseUrl}/admin/login` : null;
 const devVerifyUrl = devPublicBaseUrl ? `${devPublicBaseUrl}/anmeldung/verify` : 'http://localhost:5173/anmeldung/verify';
@@ -11,7 +15,7 @@ const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrat
   prefix: 'dreiecksrennen-dev',
   cognitoCallbackUrls: ['http://localhost:5173/admin/login', ...(devAdminLoginUrl ? [devAdminLoginUrl] : [])],
   cognitoLogoutUrls: ['http://localhost:5173/admin/login', ...(devAdminLoginUrl ? [devAdminLoginUrl] : [])],
-  cognitoDomainPrefix: 'dreiecksrennen-dev-auth',
+  cognitoDomainPrefix: devCognitoDomainPrefix,
   sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
   publicVerifyBaseUrl: devVerifyUrl,
   assetsCorsAllowedOrigins: [...(devPublicBaseUrl ? [devPublicBaseUrl] : []), 'http://localhost:5173', 'http://localhost:4173'],

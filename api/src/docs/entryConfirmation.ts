@@ -481,7 +481,6 @@ const buildPayload = async (
       driverStreet: person.street,
       driverZip: person.zip,
       driverCity: person.city,
-      driverNationality: person.nationality,
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleYear: vehicle.year,
@@ -569,10 +568,11 @@ const buildPayload = async (
   const paidAmountCents = isInvoicePaid ? totalCents : 0;
   const openAmountCents = Math.max(0, totalCents - paidAmountCents);
   const driverFullName = `${row.driverFirstName} ${row.driverLastName}`.trim();
-  const locale = resolveMailLocale({ nationality: row.driverNationality }, 'de');
+  const locale = resolveMailLocale({}, 'de');
   const translation = TRANSLATIONS[locale] ?? TRANSLATIONS.en;
   const eventDateText = formatEventDateText(row.eventStartsAt, row.eventEndsAt);
   const paymentReference = buildPaymentReference({
+    prefix: config.paymentReferencePrefix,
     orgaCode: row.orgaCode,
     firstName: row.driverFirstName,
     lastName: row.driverLastName

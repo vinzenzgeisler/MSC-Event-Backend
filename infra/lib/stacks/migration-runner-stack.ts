@@ -71,7 +71,7 @@ export class MigrationRunnerStack extends Stack {
       },
       cache: codebuild.Cache.local(codebuild.LocalCacheMode.CUSTOM),
       source: codebuild.Source.gitHub({
-        owner: 'dariakoz',
+        owner: 'vinzenzgeisler',
         repo: 'MSC-Event-Backend',
         branchOrRef: 'main',
         cloneDepth: 1,

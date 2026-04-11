@@ -35,7 +35,6 @@ const buildPayload = async (input: DocumentRequest) => {
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
       driverBirthdate: person.birthdate,
-      driverNationality: person.nationality,
       driverStreet: person.street,
       driverZip: person.zip,
       driverCity: person.city,
@@ -43,7 +42,6 @@ const buildPayload = async (input: DocumentRequest) => {
       codriverFirstName: person.firstName,
       codriverLastName: person.lastName,
       codriverBirthdate: person.birthdate,
-      codriverNationality: person.nationality,
       codriverStreet: person.street,
       codriverZip: person.zip,
       codriverCity: person.city,
@@ -79,7 +77,6 @@ const buildPayload = async (input: DocumentRequest) => {
     driver: {
       fullName: `${row.driverFirstName} ${row.driverLastName}`,
       birthdate: row.driverBirthdate?.toString() ?? null,
-      nationality: row.driverNationality ?? null,
       address: driverAddress || null,
       phone: row.driverPhone ?? null
     },

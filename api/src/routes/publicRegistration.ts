@@ -22,12 +22,13 @@ import { validateImageBuffer } from '../domain/imageValidation';
 import { normalizeStartNumber } from '../domain/startNumber';
 import { buildOrgaCode } from '../domain/orgaCode';
 import { isPgUniqueViolation } from '../http/dbErrors';
+import { getPublicLegalCurrent, resolvePublicLegalLocale } from './publicLegal';
 import { DuplicateRequestError, queueLifecycleMail, queueMail } from './adminMail';
 import { recalculateInvoices } from './adminFinance';
 
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const nonEmptySchema = z.string().trim().min(1);
-const zipSchema = z.string().regex(/^\d{5}$/);
+const zipSchema = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9\- ]{1,11}$/);
 
 const normalizePhone = (value: string): string => value.replace(/\D+/g, '');
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
@@ -119,7 +120,7 @@ const codriverInputSchema = z.object({
   firstName: nonEmptySchema,
   lastName: nonEmptySchema,
   birthdate: birthdateSchema,
-  nationality: nonEmptySchema,
+  country: nonEmptySchema,
   street: nonEmptySchema,
   zip: zipSchema,
   city: nonEmptySchema,
@@ -131,7 +132,7 @@ const driverInputSchema = z.object({
   firstName: nonEmptySchema,
   lastName: nonEmptySchema,
   birthdate: birthdateSchema,
-  nationality: z.string().trim().optional(),
+  country: nonEmptySchema,
   street: nonEmptySchema,
   zip: zipSchema,
   city: nonEmptySchema,
@@ -234,7 +235,6 @@ const consentInputSchema = z.object({
   mediaAccepted: z.boolean().optional().default(false),
   clubInfoAccepted: z.boolean().optional().default(false),
   consentVersion: nonEmptySchema,
-  consentTextHash: z.string().trim().regex(/^[a-fA-F0-9]{64}$/),
   locale: z.string().trim().min(2).max(16),
   consentSource: z.enum(['public_form', 'admin_ui']).optional().default('public_form'),
   consentCapturedAt: z.string().datetime()
@@ -435,12 +435,27 @@ const verificationTokenExpiry = (now = new Date()): Date => {
   return new Date(now.getTime() + ttlDays * 24 * 60 * 60 * 1000);
 };
 
+const assertConsentMetadataMatchesPublishedLegalTexts = async (
+  consent: Pick<z.infer<typeof consentInputSchema>, 'locale' | 'consentVersion'>
+) => {
+  const normalizedLocale = resolvePublicLegalLocale(consent.locale);
+  if (normalizedLocale !== consent.locale) {
+    throw new Error('CONSENT_LOCALE_INVALID');
+  }
+  const legal = await getPublicLegalCurrent({ locale: consent.locale });
+  if (legal.consent.consentVersion !== consent.consentVersion) {
+    throw new Error('CONSENT_VERSION_MISMATCH');
+  }
+  return legal.internalConsentTextHash.toLowerCase();
+};
+
 export const createPublicEntriesBatch = async (input: CreateBatchInput) => {
   return createPublicEntriesBatchInternal(input);
 };
 
 const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput): Promise<BatchResponse> => {
   await assertRegistrationOpen(input.eventId);
+  const publishedConsentTextHash = await assertConsentMetadataMatchesPublishedLegalTexts(input.consent);
   const db = await getDb();
   const now = new Date();
   const token = createHash('sha256').update(`${randomUUID()}:${input.driver.email}:${Date.now()}`).digest('hex');
@@ -511,7 +526,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
               firstName: personInput.firstName ?? existing.firstName,
               lastName: personInput.lastName ?? existing.lastName,
               birthdate: personInput.birthdate ?? null,
-              nationality: personInput.nationality ?? null,
+              country: personInput.country ?? null,
               street: personInput.street ?? null,
               zip: personInput.zip ?? null,
               city: personInput.city ?? null,
@@ -535,7 +550,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
             firstName: personInput.firstName as string,
             lastName: personInput.lastName as string,
             birthdate: personInput.birthdate ?? null,
-            nationality: personInput.nationality ?? null,
+            country: personInput.country ?? null,
             street: personInput.street ?? null,
             zip: personInput.zip ?? null,
             city: personInput.city ?? null,
@@ -593,7 +608,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         }
 
         const classRows = await tx
-          .select({ id: eventClass.id, eventId: eventClass.eventId, vehicleType: eventClass.vehicleType })
+          .select({ id: eventClass.id, eventId: eventClass.eventId, vehicleType: eventClass.vehicleType, allowsCodriver: eventClass.allowsCodriver })
           .from(eventClass)
           .where(eq(eventClass.id, item.classId))
           .limit(1);
@@ -603,6 +618,9 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         }
         if (item.vehicle.vehicleType && clazz.vehicleType !== item.vehicle.vehicleType) {
           throw new Error('CLASS_VEHICLE_TYPE_MISMATCH');
+        }
+        if ((item.codriverEnabled || item.codriver) && !clazz.allowsCodriver) {
+          throw new Error('CLASS_CODRIVER_NOT_ALLOWED');
         }
 
         const activeStartNumberConflict = await tx
@@ -767,7 +785,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         await tx.insert(consentEvidence).values({
           entryId: createdEntry.id,
           consentVersion: input.consent.consentVersion,
-          consentTextHash: input.consent.consentTextHash.toLowerCase(),
+          consentTextHash: publishedConsentTextHash,
           locale: input.consent.locale,
           consentSource: input.consent.consentSource,
           termsAccepted: input.consent.termsAccepted,
@@ -1114,7 +1132,8 @@ export const getPublicCurrentEventWithClasses = async () => {
       id: eventClass.id,
       eventId: eventClass.eventId,
       name: eventClass.name,
-      vehicleType: eventClass.vehicleType
+      vehicleType: eventClass.vehicleType,
+      allowsCodriver: eventClass.allowsCodriver
     })
     .from(eventClass)
     .where(eq(eventClass.eventId, current.id))

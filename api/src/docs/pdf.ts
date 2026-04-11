@@ -9,7 +9,6 @@ import { renderMotoChecklistV1 } from './templates/tech-check/moto/v1';
 type PersonInfo = {
   fullName: string;
   birthdate?: string | null;
-  nationality?: string | null;
   address?: string | null;
   phone?: string | null;
 };
@@ -173,7 +172,6 @@ const renderPdf = (title: string, bodyLines: string[]): Promise<Buffer> =>
 const formatPerson = (person: PersonInfo): string[] => [
   format('Name: %s', person.fullName),
   format('Geburtsdatum: %s', person.birthdate ?? '-'),
-  format('Nationalität: %s', person.nationality ?? '-'),
   format('Adresse: %s', person.address ?? '-'),
   format('Telefon: %s', person.phone ?? '-')
 ];

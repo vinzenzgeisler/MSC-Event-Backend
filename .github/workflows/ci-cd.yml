@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  validate_common:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -48,32 +48,11 @@ jobs:
       - name: Infra build
         run: npm --workspace infra run build
 
-      - name: CDK synth (dev)
-        if: github.base_ref == 'dev' || github.ref == 'refs/heads/dev'
-        run: npm --workspace infra run synth -- -c stage=dev -c devProfile=test
-        env:
-          DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
-          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
-          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
-
-      - name: CDK synth (prod)
-        if: github.base_ref == 'main' || github.ref == 'refs/heads/main'
-        run: npm --workspace infra run synth -- -c stage=prod
-        env:
-          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
-          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
-          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
-
-  deploy_dev:
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
-      (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'schedule')
-    needs: validate
+  validate_dev:
+    if: github.base_ref == 'dev' || github.ref == 'refs/heads/dev' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    needs: validate_common
     runs-on: ubuntu-latest
     environment: dev
-    env:
-      DEV_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dev_profile || github.event_name == 'push' && 'test' || 'idle' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -112,17 +91,16 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Deploy Dev stacks
-        run: npx cdk deploy --all -c stage=dev -c devProfile=${DEV_PROFILE} --require-approval never
-        working-directory: infra
+      - name: CDK synth (dev)
+        run: npm --workspace infra run synth -- -c stage=dev -c devProfile=test
         env:
           DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
 
-  deploy_prod:
+  validate_prod:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: validate
+    needs: validate_common
     runs-on: ubuntu-latest
     environment: prod
     steps:
@@ -163,8 +141,219 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Deploy Prod stacks
-        run: npx cdk deploy --all -c stage=prod --require-approval never
+      - name: CDK synth (prod)
+        run: npm --workspace infra run synth -- -c stage=prod
+        env:
+          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+
+  deploy_dev:
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'schedule')
+    needs:
+      - validate_common
+      - validate_dev
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      DEV_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dev_profile || github.event_name == 'push' && 'test' || 'idle' }}
+      STACK_PREFIX: dreiecksrennen-dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Validate Dev environment configuration
+        run: |
+          if [ -z "${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}" ]; then
+            echo "AWS_DEPLOY_ROLE_ARN_DEV is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_ACCOUNT_ID }}" ]; then
+            echo "AWS_ACCOUNT_ID is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_REGION }}" ]; then
+            echo "AWS_REGION is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+          if [ -z "${{ vars.DEV_PUBLIC_BASE_URL }}" ]; then
+            echo "DEV_PUBLIC_BASE_URL is missing in GitHub Environment 'dev'."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy Dev base stacks
+        run: >
+          npx cdk deploy
+          ${STACK_PREFIX}-auth-stack
+          ${STACK_PREFIX}-data-stack
+          ${STACK_PREFIX}-storage-stack
+          -c stage=dev
+          -c devProfile=${DEV_PROFILE}
+          --require-approval never
+        working-directory: infra
+        env:
+          DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Run Dev database migrations
+        if: env.DEV_PROFILE != 'idle'
+        run: |
+          set -euo pipefail
+          secret_arn="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_PREFIX}-data-stack" \
+            --region "${AWS_REGION}" \
+            --query "Stacks[0].Outputs[?OutputKey=='DbSecretArn'].OutputValue" \
+            --output text)"
+          if [ -z "${secret_arn}" ] || [ "${secret_arn}" = "None" ]; then
+            echo "DbSecretArn output not found on ${STACK_PREFIX}-data-stack."
+            exit 1
+          fi
+          secret_json="$(aws secretsmanager get-secret-value \
+            --secret-id "${secret_arn}" \
+            --region "${AWS_REGION}" \
+            --query SecretString \
+            --output text)"
+          db_user="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.username||'')))")"
+          db_pass="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.password||'')))")"
+          db_host="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.host||''))")"
+          db_port="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.port||''))")"
+          db_name="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.dbname||''))")"
+          curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-global-bundle.pem
+          export DATABASE_URL="postgres://${db_user}:${db_pass}@${db_host}:${db_port}/${db_name}"
+          export DB_SSL_CA_PATH="/tmp/rds-global-bundle.pem"
+          npm --workspace api run db:migrate
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Deploy Dev API stack
+        if: env.DEV_PROFILE != 'idle'
+        run: >
+          npx cdk deploy
+          ${STACK_PREFIX}-api-stack
+          -c stage=dev
+          -c devProfile=${DEV_PROFILE}
+          --require-approval never
+        working-directory: infra
+        env:
+          DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+
+  deploy_prod:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - validate_common
+      - validate_prod
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      STACK_PREFIX: dreiecksrennen-prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Validate Prod environment configuration
+        run: |
+          if [ -z "${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}" ]; then
+            echo "AWS_DEPLOY_ROLE_ARN_PROD is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_ACCOUNT_ID }}" ]; then
+            echo "AWS_ACCOUNT_ID is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+          if [ -z "${{ vars.AWS_REGION }}" ]; then
+            echo "AWS_REGION is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+          if [ -z "${{ vars.PROD_PUBLIC_BASE_URL }}" ]; then
+            echo "PROD_PUBLIC_BASE_URL is missing in GitHub Environment 'prod'."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy Prod base stacks
+        run: >
+          npx cdk deploy
+          ${STACK_PREFIX}-auth-stack
+          ${STACK_PREFIX}-data-stack
+          ${STACK_PREFIX}-storage-stack
+          -c stage=prod
+          --require-approval never
+        working-directory: infra
+        env:
+          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Run Prod database migrations
+        run: |
+          set -euo pipefail
+          secret_arn="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_PREFIX}-data-stack" \
+            --region "${AWS_REGION}" \
+            --query "Stacks[0].Outputs[?OutputKey=='DbSecretArn'].OutputValue" \
+            --output text)"
+          if [ -z "${secret_arn}" ] || [ "${secret_arn}" = "None" ]; then
+            echo "DbSecretArn output not found on ${STACK_PREFIX}-data-stack."
+            exit 1
+          fi
+          secret_json="$(aws secretsmanager get-secret-value \
+            --secret-id "${secret_arn}" \
+            --region "${AWS_REGION}" \
+            --query SecretString \
+            --output text)"
+          db_user="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.username||'')))")"
+          db_pass="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.password||'')))")"
+          db_host="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.host||''))")"
+          db_port="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.port||''))")"
+          db_name="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.dbname||''))")"
+          curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-global-bundle.pem
+          export DATABASE_URL="postgres://${db_user}:${db_pass}@${db_host}:${db_port}/${db_name}"
+          export DB_SSL_CA_PATH="/tmp/rds-global-bundle.pem"
+          npm --workspace api run db:migrate
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Deploy Prod API stack
+        run: >
+          npx cdk deploy
+          ${STACK_PREFIX}-api-stack
+          -c stage=prod
+          --require-approval never
         working-directory: infra
         env:
           PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}

@@ -30,6 +30,8 @@ Für GitHub Actions gilt:
 - Push auf `main` deployt `prod`
 - `prod` sollte über GitHub Environment Approval geschützt werden
 - `devProfile=test` oder `idle` kann zusätzlich jederzeit manuell gestartet werden
+- Bei `devProfile=test` und in `prod` werden die SQL-Migrationen in der Pipeline automatisch ausgeführt
+- Bei `devProfile=idle` laufen keine Migrationen
 
 ## Cognito Hosted UI (OAuth) und Verify-Link
 
@@ -63,6 +65,12 @@ npx cdk deploy --all -c stage=dev -c devProfile=idle
 # Dev test (API + DB aktiv)
 npx cdk deploy --all -c stage=dev -c devProfile=test
 ```
+
+Hinweis:
+
+- Der Dev-Cognito-Domain-Präfix wird standardmäßig automatisch aus dem AWS-Account abgeleitet, damit er in neuen Konten/Regionen nicht mit bereits belegten Präfixen kollidiert.
+- Optional kann `DEV_COGNITO_DOMAIN_PREFIX` explizit gesetzt werden.
+- Gleiches gilt für Prod über `PROD_COGNITO_DOMAIN_PREFIX`.
 
 ## Stage-Konfiguration
 

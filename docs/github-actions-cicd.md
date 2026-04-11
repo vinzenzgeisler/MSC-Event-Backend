@@ -20,12 +20,14 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
 - Variable: `AWS_ACCOUNT_ID`
 - Variable: `AWS_REGION`
 - Variable: `DEV_PUBLIC_BASE_URL`
+- Optional Variable: `DEV_COGNITO_DOMAIN_PREFIX`
 
 ### Environment `prod`
 - Secret: `AWS_DEPLOY_ROLE_ARN_PROD`
 - Variable: `AWS_ACCOUNT_ID`
 - Variable: `AWS_REGION`
 - Variable: `PROD_PUBLIC_BASE_URL`
+- Optional Variable: `PROD_COGNITO_DOMAIN_PREFIX`
 
 ## Woher kommen die Werte?
 - `AWS_DEPLOY_ROLE_ARN_DEV`
@@ -43,9 +45,15 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
 - `DEV_PUBLIC_BASE_URL`
   - Öffentliche Basis-URL des Dev-Frontends, zum Beispiel `https://dev.example.tld`.
   - Daraus werden Dev-Verify-Links, Callback-URLs und Redirect-Basen abgeleitet.
+- `DEV_COGNITO_DOMAIN_PREFIX`
+  - Optionaler expliziter Cognito Hosted-UI-Domain-Präfix für Dev.
+  - Standard ist automatisch `dreiecksrennen-dev-auth-<accountsuffix>`, damit neue AWS-Konten keine Kollision mit bereits belegten Präfixen erzeugen.
 - `PROD_PUBLIC_BASE_URL`
   - Öffentliche Basis-URL des Prod-Frontends, zum Beispiel `https://event.example.tld`.
   - Daraus werden Prod-Verify-Links, Callback-URLs und Redirect-Basen abgeleitet.
+- `PROD_COGNITO_DOMAIN_PREFIX`
+  - Optionaler expliziter Cognito Hosted-UI-Domain-Präfix für Prod.
+  - Standard ist automatisch `dreiecksrennen-prod-auth-<accountsuffix>`, damit auch Prod im neuen AWS-Konto nicht mit bereits belegten Präfixen kollidiert.
 
 ## Verhalten
 - PRs gegen `dev` oder `main` laufen nur Validierung.
@@ -53,6 +61,21 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
 - Ein täglicher Scheduler deployt `stage=dev` automatisch mit `devProfile=idle`, um Kosten zu sparen.
 - Manueller `workflow_dispatch` kann `stage=dev` mit `devProfile=test` oder `idle` deployen.
 - Push auf `main` deployt `stage=prod`.
+
+## Deploy-Reihenfolge
+- `dev` mit `test`:
+  - Auth/Data/Storage deploy
+  - SQL-Migrationen automatisch gegen die Dev-Datenbank
+  - danach API-Stack deploy
+- `dev` mit `idle`:
+  - keine Migrationen
+  - kein API-Deploy
+- `prod`:
+  - Auth/Data/Storage deploy
+  - SQL-Migrationen automatisch gegen die Prod-Datenbank
+  - danach API-Stack deploy
+
+Die Pipeline geht davon aus, dass DB-Änderungen als vorwärtskompatible Migrationen ins Repo eingecheckt werden.
 
 ## AWS-Vorbereitung
 - Für Dev und Prod werden getrennte GitHub-Deploy-Roles erwartet: `AWS_DEPLOY_ROLE_ARN_DEV` und `AWS_DEPLOY_ROLE_ARN_PROD`.

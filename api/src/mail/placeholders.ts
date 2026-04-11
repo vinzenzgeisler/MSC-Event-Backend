@@ -36,7 +36,7 @@ export const PLACEHOLDER_CATALOG: PlaceholderCatalogItem[] = [
   { name: 'paymentRecipient', description: 'Zahlungsempfänger', example: 'MSC Oberlausitzer Dreiländereck e.V.' },
   { name: 'paymentIban', description: 'IBAN für Überweisung', example: 'DE38 8505 0100 0232 0498 07' },
   { name: 'paymentBic', description: 'BIC für Überweisung', example: 'WELADED1GRL' },
-  { name: 'paymentReference', description: 'Verwendungszweck für Überweisung', example: 'Nennung 11OLD-7K4P9 Max Musterfahrer' },
+  { name: 'paymentReference', description: 'Verwendungszweck für Überweisung', example: 'Nennung 12OLD-7K4P9 Max Musterfahrer' },
   {
     name: 'paymentInstructionText',
     description: 'Vollständiger Zahlungsabschnitt als Mailtext',

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, isNull, or, sql, SQL } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import {
+  consentEvidence,
   emailOutboxAttachment,
   emailOutbox,
   emailTemplate,
@@ -1473,7 +1474,6 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
       email: person.email,
       firstName: person.firstName,
       lastName: person.lastName,
-      nationality: person.nationality,
       eventName: event.name
     })
     .from(entry)
@@ -1520,7 +1520,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
   }
   const amountOpenEur = formatEuroFromCents(amountOpenCents);
   const amountOpen = `${amountOpenEur} EUR`;
-  const locale = resolveMailLocale({ nationality: current.nationality ?? null });
+  const locale = resolveMailLocale({}, 'de');
   const eventRows = await db
     .select({
       eventEntryConfirmationConfig: event.entryConfirmationConfig
@@ -1564,6 +1564,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
           : `Bei gemeinsamer Überweisung deiner bereits zugelassenen Nennungen beträgt der aktuelle Gesamtbetrag ${acceptedEntriesTotal}.`
     : '';
   const paymentReference = buildPaymentReference({
+    prefix: entryConfirmationConfig.paymentReferencePrefix,
     orgaCode: current.orgaCode,
     firstName: current.firstName,
     lastName: current.lastName
@@ -1596,7 +1597,6 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     driverPersonId: current.driverPersonId,
     driverName: `${current.firstName} ${current.lastName}`,
     eventName: current.eventName,
-    nationality: current.nationality ?? null,
     locale,
     totalCents: focusedEntryFeeCents,
     paidAmountCents: effectivePaidAmountCents,
@@ -1741,7 +1741,6 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       email: person.email,
       firstName: person.firstName,
       lastName: person.lastName,
-      nationality: person.nationality
     })
     .from(entry)
     .innerJoin(event, eq(entry.eventId, event.id))
@@ -1803,9 +1802,17 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     row.entryId,
     ...siblingEntries.filter((item) => item.acceptanceStatus === 'accepted').map((item) => item.id)
   ];
+  const consentRows = await db
+    .select({
+      locale: consentEvidence.locale
+    })
+    .from(consentEvidence)
+    .where(eq(consentEvidence.entryId, row.entryId))
+    .orderBy(desc(consentEvidence.createdAt))
+    .limit(1);
+  const preferredMailLocale = consentRows[0]?.locale ?? null;
   const locale = resolveMailLocale({
-    locale: null,
-    nationality: row.nationality
+    locale: preferredMailLocale
   });
   const chromeCopy = getMailChromeCopy(locale);
   const processTemplateCopy = (
@@ -1957,6 +1964,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     ? templateData.entryStartNumbers.filter((value): value is string => typeof value === 'string')
     : [];
   const paymentReference = buildPaymentReference({
+    prefix: entryConfirmationConfig.paymentReferencePrefix,
     orgaCode: row.orgaCode,
     firstName: row.firstName,
     lastName: row.lastName
@@ -2210,7 +2218,6 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
       driverPersonId: entry.driverPersonId,
       firstName: person.firstName,
       lastName: person.lastName,
-      nationality: person.nationality,
       paymentStatus: invoice.paymentStatus
     })
     .from(entry)
@@ -2246,7 +2253,6 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
         entryId: row.entryId,
         driverPersonId: row.driverPersonId,
         driverName: `${row.firstName} ${row.lastName}`,
-        nationality: row.nationality,
         paymentStatus: row.paymentStatus ?? null
       }
     ])
@@ -2262,7 +2268,7 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
         driverPersonId: source?.driverPersonId ?? null,
         driverName: source?.driverName ?? null,
         paymentStatus: source?.paymentStatus ?? null,
-        locale: resolveMailLocale({ nationality: source?.nationality ?? null })
+        locale: resolveMailLocale({}, 'de')
       },
       idempotencyKey: buildDedupeKey(
         'broadcast',

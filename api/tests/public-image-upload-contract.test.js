@@ -12,7 +12,7 @@ const basePayload = {
     firstName: 'Max',
     lastName: 'Muster',
     birthdate: '1990-01-01',
-    nationality: 'DE',
+    country: 'DE',
     street: 'Musterweg 1',
     zip: '02763',
     city: 'Zittau',
@@ -28,7 +28,6 @@ const basePayload = {
     mediaAccepted: false,
     clubInfoAccepted: false,
     consentVersion: '2026-03',
-    consentTextHash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     locale: 'de',
     consentSource: 'public_form',
     consentCapturedAt: '2026-03-21T10:00:00.000Z'

@@ -611,7 +611,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         }
 
         const classRows = await tx
-          .select({ id: eventClass.id, eventId: eventClass.eventId, vehicleType: eventClass.vehicleType })
+          .select({ id: eventClass.id, eventId: eventClass.eventId, vehicleType: eventClass.vehicleType, allowsCodriver: eventClass.allowsCodriver })
           .from(eventClass)
           .where(eq(eventClass.id, item.classId))
           .limit(1);
@@ -621,6 +621,9 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         }
         if (item.vehicle.vehicleType && clazz.vehicleType !== item.vehicle.vehicleType) {
           throw new Error('CLASS_VEHICLE_TYPE_MISMATCH');
+        }
+        if ((item.codriverEnabled || item.codriver) && !clazz.allowsCodriver) {
+          throw new Error('CLASS_CODRIVER_NOT_ALLOWED');
         }
 
         const activeStartNumberConflict = await tx
@@ -1132,7 +1135,8 @@ export const getPublicCurrentEventWithClasses = async () => {
       id: eventClass.id,
       eventId: eventClass.eventId,
       name: eventClass.name,
-      vehicleType: eventClass.vehicleType
+      vehicleType: eventClass.vehicleType,
+      allowsCodriver: eventClass.allowsCodriver
     })
     .from(eventClass)
     .where(eq(eventClass.eventId, current.id))

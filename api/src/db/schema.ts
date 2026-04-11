@@ -87,6 +87,7 @@ export const eventClass = pgTable(
       .references(() => event.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     vehicleType: text('vehicle_type').notNull(),
+    allowsCodriver: boolean('allows_codriver').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },

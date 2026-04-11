@@ -8,13 +8,15 @@ import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const classInputSchema = z.object({
   name: z.string().min(1),
-  vehicleType: z.enum(['moto', 'auto'])
+  vehicleType: z.enum(['moto', 'auto']),
+  allowsCodriver: z.boolean().default(false)
 });
 
 const classUpdateSchema = z
   .object({
     name: z.string().min(1).optional(),
-    vehicleType: z.enum(['moto', 'auto']).optional()
+    vehicleType: z.enum(['moto', 'auto']).optional(),
+    allowsCodriver: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'Provide at least one field to update.' });
 
@@ -29,6 +31,7 @@ export const listClassesByEvent = async (eventId: string) => {
       eventId: eventClass.eventId,
       name: eventClass.name,
       vehicleType: eventClass.vehicleType,
+      allowsCodriver: eventClass.allowsCodriver,
       createdAt: eventClass.createdAt,
       updatedAt: eventClass.updatedAt
     })
@@ -50,6 +53,7 @@ export const listClassesByEventWithQuery = async (
       eventId: eventClass.eventId,
       name: eventClass.name,
       vehicleType: eventClass.vehicleType,
+      allowsCodriver: eventClass.allowsCodriver,
       createdAt: eventClass.createdAt,
       updatedAt: eventClass.updatedAt
     })
@@ -79,6 +83,7 @@ export const createClass = async (eventId: string, input: ClassInput, actorUserI
       eventId,
       name: input.name,
       vehicleType: input.vehicleType,
+      allowsCodriver: input.allowsCodriver,
       createdAt: now,
       updatedAt: now
     })
@@ -92,7 +97,8 @@ export const createClass = async (eventId: string, input: ClassInput, actorUserI
     entityId: created?.id ?? null,
     payload: {
       name: input.name,
-      vehicleType: input.vehicleType
+      vehicleType: input.vehicleType,
+      allowsCodriver: input.allowsCodriver
     }
   });
 
@@ -113,6 +119,7 @@ export const updateClass = async (classId: string, input: ClassUpdateInput, acto
     .set({
       name: input.name ?? existing.name,
       vehicleType: input.vehicleType ?? existing.vehicleType,
+      allowsCodriver: input.allowsCodriver ?? existing.allowsCodriver,
       updatedAt: new Date()
     })
     .where(eq(eventClass.id, classId))

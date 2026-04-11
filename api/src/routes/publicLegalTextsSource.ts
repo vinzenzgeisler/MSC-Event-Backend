@@ -20,6 +20,8 @@ export type LegalDoc = {
 
 type SummaryTexts = {
   title: string;
+  mandatoryHintsTitle: string;
+  mandatoryHints: string[];
   introTitle: string;
   introBody: string[];
   voluntaryTitle: string;
@@ -528,6 +530,15 @@ const legalTextsDe: LegalTexts = {
   legalPageBackLabel: "Zurück zur Anmeldung",
   summary: {
     title: "Rechtliche Hinweise und Einwilligungen",
+    mandatoryHintsTitle: "Wichtige Teilnahmehinweise",
+    mandatoryHints: [
+      "Minderjährige dürfen nur mit Zustimmung eines gesetzlichen Vertreters angemeldet werden. Der Veranstalter kann einen entsprechenden Nachweis oder eine zusätzliche Unterschrift verlangen.",
+      "Wichtiger Hinweis zum Haftungsverzicht: Der Haftungsverzicht ist Bestandteil der Veranstaltungsunterlagen. Die verbindliche Unterschrift erfolgt zusätzlich vor Ort bei der Anmeldung in Schriftform.",
+      "Starter ab 70 Jahren müssen bei der Anmeldung ein aktuelles ärztliches Attest zur Teilnahmefähigkeit vorlegen.",
+      "Vereinsmitglieder des MSC Oberlausitzer Dreilaendereck e.V. zahlen kein Nenngeld.",
+      "Ein Nachweis einer Unfallversicherung wird empfohlen. Fahrer und Beifahrer können bei der Anmeldung eine DMV-Tagesversicherung für 9,00 EUR (gesamtes Wochenende) abschließen.",
+      "Bei Nutzung eines nicht eigenen Fahrzeugs muss bei der Anmeldung eine unterschriebene Verzichtserklärung des Fahrzeugeigentümers vorgelegt werden (Formular im Downloadbereich)."
+    ],
     introTitle: "Hinweise zur Anmeldung",
     introBody: [
       "Mit dem Absenden der Anmeldung verarbeitet der MSC Oberlausitzer Dreiländereck e.V. die von Ihnen angegebenen personenbezogenen Daten zur Durchführung der Veranstaltung, zur Teilnehmerverwaltung, zur Kommunikation im Zusammenhang mit Ihrer Anmeldung, zur Erstellung veranstaltungsbezogener Unterlagen sowie zur organisatorischen und rechtlichen Abwicklung der Teilnahme.",
@@ -575,6 +586,15 @@ const legalTextsEn: LegalTexts = {
   legalPageBackLabel: "Back to registration",
   summary: {
     title: "Legal notices and consents",
+    mandatoryHintsTitle: "Important participation notes",
+    mandatoryHints: [
+      "Minors may only be registered with the consent of a legal representative. The organizer may request corresponding proof or an additional signature.",
+      "Important waiver notice: The waiver is part of the event documents. The binding signature is additionally provided on site during registration in writing.",
+      "Starters aged 70 and above must provide a current medical fitness certificate at registration.",
+      "Members of MSC Oberlausitzer Dreilaendereck e.V. do not pay an entry fee.",
+      "Proof of accident insurance is recommended. Driver and codriver can purchase a DMV day insurance for EUR 9.00 (full weekend) during registration.",
+      "If the vehicle is not owned by the driver, a signed owner waiver must be submitted at registration (download available in the event download section)."
+    ],
     introTitle: "Registration notice",
     introBody: [
       "By submitting the registration, MSC Oberlausitzer Dreiländereck e.V. processes the personal data you provide for event execution, participant management, communication related to your registration, preparation of event-related documents and the organizational and legal handling of participation.",
@@ -621,6 +641,15 @@ const legalTextsCz: LegalTexts = {
   legalPageBackLabel: "Zpet k registraci",
   summary: {
     title: "Pravni informace a souhlasy",
+    mandatoryHintsTitle: "Dulezite informace k ucasti",
+    mandatoryHints: [
+      "Nezletile osoby mohou byt registrovany pouze se souhlasem zakonneho zastupce. Poradatel muze vyzadovat odpovidajici potvrzeni nebo dalsi podpis.",
+      "Dulezite upozorneni k prohlaseni o vzdani se odpovednosti: Prohlaseni o vzdani se odpovednosti je soucasti dokumentace k akci. Zavazny podpis probiha navic osobne pri registraci na miste.",
+      "Jezdci od 70 let musi pri registraci predlozit aktualni lekarske potvrzeni o zdravotni zpusobilosti.",
+      "Clenove MSC Oberlausitzer Dreilaendereck e.V. neplati startovne.",
+      "Doporucujeme dolozit urazove pojisteni. Jezdec i spolujezdec si mohou pri registraci sjednat denni DMV pojisteni za 9,00 EUR (cely vikend).",
+      "Pokud vozidlo neni ve vlastnictvi jezdce, je nutne pri registraci predlozit podepsane prohlaseni vlastnika (formular je v sekci ke stazeni)."
+    ],
     introTitle: "Informace k registraci",
     introBody: [
       "Odeslanim registrace zpracovava MSC Oberlausitzer Dreiländereck e.V. vami zadane osobni udaje pro provedeni akce, spravu ucastniku, komunikaci k registraci, pripravu dokumentu k akci a organizacni i pravni vyrizeni ucasti.",
@@ -667,6 +696,15 @@ const legalTextsPl: LegalTexts = {
   legalPageBackLabel: "Powrot do rejestracji",
   summary: {
     title: "Informacje prawne i zgody",
+    mandatoryHintsTitle: "Wazne informacje o udziale",
+    mandatoryHints: [
+      "Osoby niepelnoletnie moga zostac zarejestrowane tylko za zgoda przedstawiciela ustawowego. Organizator moze zazadac odpowiedniego potwierdzenia lub dodatkowego podpisu.",
+      "Wazna informacja o zrzeczeniu odpowiedzialnosci: Zrzeczenie odpowiedzialnosci jest czescia dokumentow wydarzenia. Wiazacy podpis skladany jest dodatkowo na miejscu podczas rejestracji w formie pisemnej.",
+      "Zawodnicy w wieku 70+ musza przy rejestracji okazac aktualne zaswiadczenie lekarskie o zdolnosci do udzialu.",
+      "Czlonkowie MSC Oberlausitzer Dreilaendereck e.V. sa zwolnieni z oplaty wpisowej.",
+      "Zalecany jest dowod ubezpieczenia od nieszczesliwych wypadkow. Kierowca i pilot moga przy rejestracji wykupic dzienne ubezpieczenie DMV za 9,00 EUR (caly weekend).",
+      "Jesli pojazd nie jest wlasnoscia kierowcy, przy rejestracji nalezy zlozyc podpisane oswiadczenie wlasciciela o zrzeczeniu roszczen (formularz dostepny w sekcji pobran)."
+    ],
     introTitle: "Informacje o rejestracji",
     introBody: [
       "Po wyslaniu rejestracji MSC Oberlausitzer Dreiländereck e.V. przetwarza podane przez Ciebie dane osobowe w celu przeprowadzenia wydarzenia, zarzadzania uczestnikami, komunikacji dotyczacej zgloszenia, przygotowania dokumentow zwiazanych z wydarzeniem oraz organizacyjnej i prawnej obslugi uczestnictwa.",
@@ -747,6 +785,8 @@ export function buildConsentDisplayText(locale: string): string {
   return normalizeForHash(
     [
       texts.summary.title,
+      texts.summary.mandatoryHintsTitle,
+      ...texts.summary.mandatoryHints,
       texts.summary.introTitle,
       ...texts.summary.introBody,
       texts.summary.waiverNoticeTitle,

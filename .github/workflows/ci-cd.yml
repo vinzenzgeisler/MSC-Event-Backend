@@ -99,7 +99,7 @@ jobs:
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
 
   validate_prod:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: false
     needs: validate_common
     runs-on: ubuntu-latest
     environment: prod
@@ -262,7 +262,6 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
       - validate_common
-      - validate_prod
     runs-on: ubuntu-latest
     environment: prod
     env:

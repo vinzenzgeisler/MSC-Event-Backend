@@ -1512,9 +1512,9 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
   }
 
   const focusedEntryFeeCents =
-    getEntryLineTotalCents(current.pricingSnapshot, current.entryId) ?? current.entryFeeCents ?? 0;
-  const effectivePaidAmountCents = current.paidAmountCents ?? 0;
-  const amountOpenCents = Math.max(0, focusedEntryFeeCents);
+    getEntryLineTotalCents(current.pricingSnapshot, current.entryId) ?? current.entryFeeCents ?? current.totalCents ?? 0;
+  const effectivePaidAmountCents = Math.max(0, current.paidAmountCents ?? 0);
+  const amountOpenCents = Math.max(0, focusedEntryFeeCents - Math.min(effectivePaidAmountCents, focusedEntryFeeCents));
   if (amountOpenCents <= 0) {
     return { queued: 0, skipped: 1, reason: 'not_allowed', outboxIds: [] as string[] };
   }
@@ -1839,7 +1839,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     getEntryLineTotalCents(row.pricingSnapshot, row.entryId) ?? row.entryFeeCents ?? row.totalCents ?? 0;
   const amountOpenCents =
     template.templateKey === 'accepted_open_payment'
-      ? Math.max(0, focusedEntryFeeCents)
+      ? Math.max(0, focusedEntryFeeCents - Math.min(Math.max(0, row.paidAmountCents ?? 0), focusedEntryFeeCents))
       : Math.max(0, (row.totalCents ?? 0) - (row.paidAmountCents ?? 0));
   const amountOpen = `${formatEuroFromCents(amountOpenCents)} EUR`;
   const acceptedEntriesTotalCents =

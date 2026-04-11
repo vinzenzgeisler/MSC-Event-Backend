@@ -654,22 +654,22 @@ const buildPayload = async (
     { label: TRANSLATIONS.de.labels.status, value: translateStatus(openAmountCents, 'de', isInvoicePaid, TRANSLATIONS.de) },
     { label: TRANSLATIONS.de.labels.fee, value: formatCurrencyCents(totalCents) },
     paymentDueDate ? { label: TRANSLATIONS.de.labels.dueDate, value: paymentDueDate } : null,
+    normalizeText(paymentReference) ? { label: TRANSLATIONS.de.labels.reference, value: paymentReference } : null,
     normalizeText(config.paymentRecipient) ? { label: TRANSLATIONS.de.labels.recipient, value: config.paymentRecipient as string } : null,
     normalizeText(config.paymentIban) ? { label: TRANSLATIONS.de.labels.iban, value: config.paymentIban as string } : null,
     normalizeText(config.paymentBic) ? { label: TRANSLATIONS.de.labels.bic, value: config.paymentBic as string } : null,
-    normalizeText(config.paymentBankName) ? { label: TRANSLATIONS.de.labels.bank, value: config.paymentBankName as string } : null,
-    openAmountCents > 0 ? { label: TRANSLATIONS.de.labels.reference, value: paymentReference } : null
+    normalizeText(config.paymentBankName) ? { label: TRANSLATIONS.de.labels.bank, value: config.paymentBankName as string } : null
   ].filter((item): item is { label: string; value: string } => Boolean(item));
 
   const translatedPaymentDetails = [
     { label: translation.labels.status, value: translateStatus(openAmountCents, locale, isInvoicePaid, translation) },
     { label: translation.labels.fee, value: formatCurrencyCents(totalCents) },
     paymentDueDate ? { label: translation.labels.dueDate, value: paymentDueDate } : null,
+    normalizeText(paymentReference) ? { label: translation.labels.reference, value: paymentReference } : null,
     normalizeText(config.paymentRecipient) ? { label: translation.labels.recipient, value: config.paymentRecipient as string } : null,
     normalizeText(config.paymentIban) ? { label: translation.labels.iban, value: config.paymentIban as string } : null,
     normalizeText(config.paymentBic) ? { label: translation.labels.bic, value: config.paymentBic as string } : null,
-    normalizeText(config.paymentBankName) ? { label: translation.labels.bank, value: config.paymentBankName as string } : null,
-    openAmountCents > 0 ? { label: translation.labels.reference, value: paymentReference } : null
+    normalizeText(config.paymentBankName) ? { label: translation.labels.bank, value: config.paymentBankName as string } : null
   ].filter((item): item is { label: string; value: string } => Boolean(item));
 
   let paymentQrCode: ReturnType<typeof buildGiroCodeMatrix> | null = null;

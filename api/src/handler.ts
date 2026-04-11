@@ -258,7 +258,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     try {
       const query = validatePublicLegalCurrentQuery(event.queryStringParameters ?? {});
       const current = await getPublicLegalCurrent(query);
-      return json(200, { ok: true, ...current });
+      return json(200, {
+        ok: true,
+        consent: current.consent,
+        texts: current.texts,
+        availableLocales: current.availableLocales
+      });
     } catch (error) {
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
@@ -354,9 +359,6 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'CONSENT_VERSION_MISMATCH') {
         return errorJson(409, 'Consent version no longer matches the published legal text', undefined, 'CONSENT_VERSION_MISMATCH');
-      }
-      if (error instanceof Error && error.message === 'CONSENT_TEXT_HASH_MISMATCH') {
-        return errorJson(409, 'Consent text no longer matches the published legal text', undefined, 'CONSENT_TEXT_HASH_MISMATCH');
       }
       if (error instanceof Error && error.message === 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD') {
         return errorJson(
@@ -456,9 +458,6 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'CONSENT_VERSION_MISMATCH') {
         return errorJson(409, 'Consent version no longer matches the published legal text', undefined, 'CONSENT_VERSION_MISMATCH');
-      }
-      if (error instanceof Error && error.message === 'CONSENT_TEXT_HASH_MISMATCH') {
-        return errorJson(409, 'Consent text no longer matches the published legal text', undefined, 'CONSENT_TEXT_HASH_MISMATCH');
       }
       if (error instanceof Error && error.message === 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD') {
         return errorJson(

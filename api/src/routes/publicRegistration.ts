@@ -235,7 +235,6 @@ const consentInputSchema = z.object({
   mediaAccepted: z.boolean().optional().default(false),
   clubInfoAccepted: z.boolean().optional().default(false),
   consentVersion: nonEmptySchema,
-  consentTextHash: z.string().trim().regex(/^[a-fA-F0-9]{64}$/),
   locale: z.string().trim().min(2).max(16),
   consentSource: z.enum(['public_form', 'admin_ui']).optional().default('public_form'),
   consentCapturedAt: z.string().datetime()
@@ -437,7 +436,7 @@ const verificationTokenExpiry = (now = new Date()): Date => {
 };
 
 const assertConsentMetadataMatchesPublishedLegalTexts = async (
-  consent: Pick<z.infer<typeof consentInputSchema>, 'locale' | 'consentVersion' | 'consentTextHash'>
+  consent: Pick<z.infer<typeof consentInputSchema>, 'locale' | 'consentVersion'>
 ) => {
   const normalizedLocale = resolvePublicLegalLocale(consent.locale);
   if (normalizedLocale !== consent.locale) {
@@ -447,9 +446,7 @@ const assertConsentMetadataMatchesPublishedLegalTexts = async (
   if (legal.consent.consentVersion !== consent.consentVersion) {
     throw new Error('CONSENT_VERSION_MISMATCH');
   }
-  if (legal.consent.consentTextHash.toLowerCase() !== consent.consentTextHash.toLowerCase()) {
-    throw new Error('CONSENT_TEXT_HASH_MISMATCH');
-  }
+  return legal.internalConsentTextHash.toLowerCase();
 };
 
 export const createPublicEntriesBatch = async (input: CreateBatchInput) => {
@@ -458,7 +455,7 @@ export const createPublicEntriesBatch = async (input: CreateBatchInput) => {
 
 const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput): Promise<BatchResponse> => {
   await assertRegistrationOpen(input.eventId);
-  await assertConsentMetadataMatchesPublishedLegalTexts(input.consent);
+  const publishedConsentTextHash = await assertConsentMetadataMatchesPublishedLegalTexts(input.consent);
   const db = await getDb();
   const now = new Date();
   const token = createHash('sha256').update(`${randomUUID()}:${input.driver.email}:${Date.now()}`).digest('hex');
@@ -788,7 +785,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         await tx.insert(consentEvidence).values({
           entryId: createdEntry.id,
           consentVersion: input.consent.consentVersion,
-          consentTextHash: input.consent.consentTextHash.toLowerCase(),
+          consentTextHash: publishedConsentTextHash,
           locale: input.consent.locale,
           consentSource: input.consent.consentSource,
           termsAccepted: input.consent.termsAccepted,

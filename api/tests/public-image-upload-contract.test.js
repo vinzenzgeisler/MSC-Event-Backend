@@ -28,7 +28,6 @@ const basePayload = {
     mediaAccepted: false,
     clubInfoAccepted: false,
     consentVersion: '2026-03',
-    consentTextHash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     locale: 'de',
     consentSource: 'public_form',
     consentCapturedAt: '2026-03-21T10:00:00.000Z'

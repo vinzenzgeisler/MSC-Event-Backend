@@ -534,7 +534,10 @@ const legalTextsDe: LegalTexts = {
     mandatoryHints: [
       "Minderjährige dürfen nur mit Zustimmung eines gesetzlichen Vertreters angemeldet werden. Der Veranstalter kann einen entsprechenden Nachweis oder eine zusätzliche Unterschrift verlangen.",
       "Wichtiger Hinweis zum Haftungsverzicht: Der Haftungsverzicht ist Bestandteil der Veranstaltungsunterlagen. Die verbindliche Unterschrift erfolgt zusätzlich vor Ort bei der Anmeldung in Schriftform.",
-      "Starter ab 70 Jahren müssen bei der Anmeldung ein aktuelles ärztliches Attest zur Teilnahmefähigkeit vorlegen.",
+      "Für die Teilnahme gilt striktes Alkoholverbot. Der Veranstalter kann Alkoholkontrollen durchführen.",
+      "Bei der Anmeldung vor Ort sind Teilnahmebedingungen/Haftungsverzicht handschriftlich zu unterzeichnen.",
+      "Personalausweis und Führerschein sind bei der Anmeldung vorzulegen.",
+      "Teilnehmer ab 70 Jahren müssen ein ärztliches Attest vorlegen.",
       "Vereinsmitglieder des MSC Oberlausitzer Dreilaendereck e.V. zahlen kein Nenngeld.",
       "Ein Nachweis einer Unfallversicherung wird empfohlen. Fahrer und Beifahrer können bei der Anmeldung eine DMV-Tagesversicherung für 9,00 EUR (gesamtes Wochenende) abschließen.",
       "Bei Nutzung eines nicht eigenen Fahrzeugs muss bei der Anmeldung eine unterschriebene Verzichtserklärung des Fahrzeugeigentümers vorgelegt werden (Formular im Downloadbereich)."

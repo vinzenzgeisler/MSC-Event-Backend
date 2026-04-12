@@ -25,6 +25,7 @@ import { isPgUniqueViolation } from '../http/dbErrors';
 import { getPublicLegalCurrent, resolvePublicLegalLocale } from './publicLegal';
 import { DuplicateRequestError, queueLifecycleMail, queueMail } from './adminMail';
 import { recalculateInvoices } from './adminFinance';
+import { sendEmail } from '../mail/ses';
 
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const nonEmptySchema = z.string().trim().min(1);
@@ -32,11 +33,25 @@ const zipSchema = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9\- ]{1,11}$/);
 
 const normalizePhone = (value: string): string => value.replace(/\D+/g, '');
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+const DEFAULT_REGISTRATION_ALERT_RECIPIENT = 'geisler10@gmx.net';
 const phoneSchema = z
   .string()
   .trim()
   .transform(normalizePhone)
   .refine((value) => value.length >= 6 && value.length <= 15, 'Phone must have 6 to 15 digits');
+
+const getRegistrationAlertRecipients = (): string[] => {
+  const raw = (process.env.REGISTRATION_ALERT_RECIPIENTS ?? DEFAULT_REGISTRATION_ALERT_RECIPIENT).trim();
+  if (!raw) {
+    return [];
+  }
+  const values = raw
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0 && EMAIL_PATTERN.test(item));
+  return Array.from(new Set(values));
+};
 
 const parseNumericDigits = (value: unknown): number | undefined => {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -934,6 +949,18 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       // Codriver mail is informational only and must not block registration completion.
     }
 
+    try {
+      await sendRegistrationAlertMails({
+        eventId: input.eventId,
+        groupId: created.response.groupId,
+        eventName: created.eventName ?? 'Unbekannte Veranstaltung',
+        driverName,
+        driverEmail: input.driver.email
+      });
+    } catch {
+      // Admin alert is informational only and must not block registration completion.
+    }
+
     return {
       ...created.response,
       confirmationMailSent: true
@@ -1070,6 +1097,66 @@ const queueCodriverInfoMails = async (
       );
     } catch {
       // Keep processing other codriver recipients.
+    }
+  }
+};
+
+const sendRegistrationAlertMails = async (input: {
+  eventId: string;
+  groupId: string;
+  eventName: string;
+  driverName: string;
+  driverEmail: string;
+}) => {
+  const recipients = getRegistrationAlertRecipients();
+  if (recipients.length === 0) {
+    return;
+  }
+
+  const db = await getDb();
+  const entryRows = await db
+    .select({
+      className: eventClass.name,
+      startNumber: entry.startNumberNorm,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model
+    })
+    .from(entry)
+    .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .leftJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+    .where(and(eq(entry.eventId, input.eventId), eq(entry.registrationGroupId, input.groupId), sql`${entry.deletedAt} is null`))
+    .orderBy(asc(eventClass.name), asc(entry.startNumberNorm));
+
+  const entryLines = entryRows.length
+    ? entryRows.map((row, index) => {
+        const vehicleLabel = [row.vehicleMake ?? '', row.vehicleModel ?? ''].join(' ').trim();
+        const parts = [`${index + 1}.`, row.className ?? '-', row.startNumber ?? '-'];
+        if (vehicleLabel) {
+          parts.push(vehicleLabel);
+        }
+        return parts.join(' | ');
+      })
+    : ['Keine Startdetails gefunden.'];
+
+  const subject = `[Nennungstool] Neue Nennung eingegangen (${input.eventName})`;
+  const body = [
+    'Es ist eine neue Nennung im Nennungstool eingegangen.',
+    '',
+    `Veranstaltung: ${input.eventName}`,
+    `Fahrer: ${input.driverName}`,
+    `E-Mail: ${input.driverEmail}`,
+    `Group-ID: ${input.groupId}`,
+    `Zeitpunkt: ${new Date().toISOString()}`,
+    '',
+    'Startdetails:',
+    ...entryLines
+  ].join('\n');
+
+  for (const recipient of recipients) {
+    try {
+      await sendEmail(recipient, subject, body);
+    } catch {
+      // Informational alert must not block public registration.
     }
   }
 };

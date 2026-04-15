@@ -534,7 +534,10 @@ const legalTextsDe: LegalTexts = {
     mandatoryHints: [
       "Minderjährige dürfen nur mit Zustimmung eines gesetzlichen Vertreters angemeldet werden. Der Veranstalter kann einen entsprechenden Nachweis oder eine zusätzliche Unterschrift verlangen.",
       "Wichtiger Hinweis zum Haftungsverzicht: Der Haftungsverzicht ist Bestandteil der Veranstaltungsunterlagen. Die verbindliche Unterschrift erfolgt zusätzlich vor Ort bei der Anmeldung in Schriftform.",
-      "Starter ab 70 Jahren müssen bei der Anmeldung ein aktuelles ärztliches Attest zur Teilnahmefähigkeit vorlegen.",
+      "Für die Teilnahme gilt striktes Alkoholverbot. Der Veranstalter kann Alkoholkontrollen durchführen.",
+      "Bei der Anmeldung vor Ort sind Teilnahmebedingungen/Haftungsverzicht handschriftlich zu unterzeichnen.",
+      "Personalausweis und Führerschein sind bei der Anmeldung vorzulegen.",
+      "Teilnehmer ab 70 Jahren müssen ein ärztliches Attest vorlegen.",
       "Vereinsmitglieder des MSC Oberlausitzer Dreilaendereck e.V. zahlen kein Nenngeld.",
       "Ein Nachweis einer Unfallversicherung wird empfohlen. Fahrer und Beifahrer können bei der Anmeldung eine DMV-Tagesversicherung für 9,00 EUR (gesamtes Wochenende) abschließen.",
       "Bei Nutzung eines nicht eigenen Fahrzeugs muss bei der Anmeldung eine unterschriebene Verzichtserklärung des Fahrzeugeigentümers vorgelegt werden (Formular im Downloadbereich)."
@@ -590,6 +593,9 @@ const legalTextsEn: LegalTexts = {
     mandatoryHints: [
       "Minors may only be registered with the consent of a legal representative. The organizer may request corresponding proof or an additional signature.",
       "Important waiver notice: The waiver is part of the event documents. The binding signature is additionally provided on site during registration in writing.",
+      "Strict alcohol ban applies to participation. The organizer may carry out alcohol checks.",
+      "At on-site registration, the participation terms/waiver must be signed by hand.",
+      "Identity card and driving licence must be presented at registration.",
       "Starters aged 70 and above must provide a current medical fitness certificate at registration.",
       "Members of MSC Oberlausitzer Dreilaendereck e.V. do not pay an entry fee.",
       "Proof of accident insurance is recommended. Driver and codriver can purchase a DMV day insurance for EUR 9.00 (full weekend) during registration.",
@@ -645,6 +651,9 @@ const legalTextsCz: LegalTexts = {
     mandatoryHints: [
       "Nezletile osoby mohou byt registrovany pouze se souhlasem zakonneho zastupce. Poradatel muze vyzadovat odpovidajici potvrzeni nebo dalsi podpis.",
       "Dulezite upozorneni k prohlaseni o vzdani se odpovednosti: Prohlaseni o vzdani se odpovednosti je soucasti dokumentace k akci. Zavazny podpis probiha navic osobne pri registraci na miste.",
+      "Pro ucast plati prisny zakaz alkoholu. Poradatel muze provadet alkoholove kontroly.",
+      "Pri registraci na miste je nutne vlastnorucne podepsat podminky ucasti/prohlaseni o vzdani se odpovednosti.",
+      "Pri registraci je nutne predlozit obcansky prukaz a ridicsky prukaz.",
       "Jezdci od 70 let musi pri registraci predlozit aktualni lekarske potvrzeni o zdravotni zpusobilosti.",
       "Clenove MSC Oberlausitzer Dreilaendereck e.V. neplati startovne.",
       "Doporucujeme dolozit urazove pojisteni. Jezdec i spolujezdec si mohou pri registraci sjednat denni DMV pojisteni za 9,00 EUR (cely vikend).",
@@ -700,6 +709,9 @@ const legalTextsPl: LegalTexts = {
     mandatoryHints: [
       "Osoby niepelnoletnie moga zostac zarejestrowane tylko za zgoda przedstawiciela ustawowego. Organizator moze zazadac odpowiedniego potwierdzenia lub dodatkowego podpisu.",
       "Wazna informacja o zrzeczeniu odpowiedzialnosci: Zrzeczenie odpowiedzialnosci jest czescia dokumentow wydarzenia. Wiazacy podpis skladany jest dodatkowo na miejscu podczas rejestracji w formie pisemnej.",
+      "W uczestnictwie obowiazuje bezwzgledny zakaz alkoholu. Organizator moze przeprowadzac kontrole alkoholu.",
+      "Podczas rejestracji na miejscu warunki udzialu/zrzeczenie odpowiedzialnosci musza zostac podpisane odręcznie.",
+      "Przy rejestracji nalezy okazac dowod osobisty i prawo jazdy.",
       "Zawodnicy w wieku 70+ musza przy rejestracji okazac aktualne zaswiadczenie lekarskie o zdolnosci do udzialu.",
       "Czlonkowie MSC Oberlausitzer Dreilaendereck e.V. sa zwolnieni z oplaty wpisowej.",
       "Zalecany jest dowod ubezpieczenia od nieszczesliwych wypadkow. Kierowca i pilot moga przy rejestracji wykupic dzienne ubezpieczenie DMV za 9,00 EUR (caly weekend).",

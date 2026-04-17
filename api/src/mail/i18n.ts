@@ -33,6 +33,7 @@ type MailChromeCopy = {
   highlightsTitle: string;
   detailsTitle: string;
   nextStepsTitle: string;
+  paymentDeadlineTitle: string;
   organizerNoteTitle: string;
   entryContextTitle: string;
   codriverEntryContextTitle: string;
@@ -54,6 +55,7 @@ const CHROME_COPY: Record<SupportedMailLocale, MailChromeCopy> = {
     highlightsTitle: 'Highlights',
     detailsTitle: 'Details',
     nextStepsTitle: 'Nächste Schritte',
+    paymentDeadlineTitle: 'Zahlungsfrist',
     organizerNoteTitle: 'Hinweis vom Veranstalter',
     entryContextTitle: 'Deine Anmeldung',
     codriverEntryContextTitle: 'Eintragung als Beifahrer',
@@ -73,6 +75,7 @@ const CHROME_COPY: Record<SupportedMailLocale, MailChromeCopy> = {
     highlightsTitle: 'Highlights',
     detailsTitle: 'Details',
     nextStepsTitle: 'Next steps',
+    paymentDeadlineTitle: 'Payment deadline',
     organizerNoteTitle: 'Organizer note',
     entryContextTitle: 'Your registration',
     codriverEntryContextTitle: 'Codriver assignment',
@@ -92,6 +95,7 @@ const CHROME_COPY: Record<SupportedMailLocale, MailChromeCopy> = {
     highlightsTitle: 'Hlavní body',
     detailsTitle: 'Detaily',
     nextStepsTitle: 'Další kroky',
+    paymentDeadlineTitle: 'Termín platby',
     organizerNoteTitle: 'Poznámka pořadatele',
     entryContextTitle: 'Vaše přihláška',
     codriverEntryContextTitle: 'Zařazení jako spolujezdec',
@@ -111,6 +115,7 @@ const CHROME_COPY: Record<SupportedMailLocale, MailChromeCopy> = {
     highlightsTitle: 'Najważniejsze informacje',
     detailsTitle: 'Szczegóły',
     nextStepsTitle: 'Kolejne kroki',
+    paymentDeadlineTitle: 'Termin płatności',
     organizerNoteTitle: 'Informacja od organizatora',
     entryContextTitle: 'Twoje zgłoszenie',
     codriverEntryContextTitle: 'Wpis jako pilot',

@@ -37,6 +37,37 @@ export type TemplateContract = {
   };
 };
 
+const FREE_FORM_FIELDS: ComposerField[] = [
+  {
+    key: 'greetingText',
+    label: 'Begrüßung',
+    type: 'text',
+    required: false,
+    multiline: true,
+    placeholder: '{{fallbackGreeting}} {{driverName}},',
+    helpText: 'Freie Anrede oberhalb des Inhalts. Ohne Wert wird eine lokalisierte Standardbegrüßung verwendet.',
+    defaultValue: '{{fallbackGreeting}} {{driverName}},'
+  },
+  {
+    key: 'contentText',
+    label: 'Inhalt',
+    type: 'text',
+    required: false,
+    multiline: true,
+    placeholder: 'Deine eigentliche Mitteilung',
+    helpText: 'Hauptinhalt der Nachricht. Der CTA wird darunter eingefügt.'
+  },
+  {
+    key: 'closingText',
+    label: 'Abschluss',
+    type: 'text',
+    required: false,
+    multiline: true,
+    placeholder: 'Viele Grüße, euer Team',
+    helpText: 'Freier Abschlusstext unterhalb des CTA.'
+  }
+];
+
 const CAMPAIGN_TEXT_BASE_FIELDS: ComposerField[] = [
   {
     key: 'introText',
@@ -99,6 +130,8 @@ const CAMPAIGN_ALLOWED_PLACEHOLDERS = [
   'startNumber',
   'amountOpen',
   'verificationUrl',
+  'greetingText',
+  'contentText',
   'introText',
   'detailsText',
   'closingText',
@@ -120,6 +153,7 @@ const makeCampaignContract = (overrides?: {
   additionalFields?: ComposerField[];
   includeCtaFields?: boolean;
   includeEntryContextDefault?: boolean;
+  fields?: ComposerField[];
 }): TemplateContract => {
   const requiredPlaceholders = overrides?.requiredPlaceholders ?? [];
   const includeCtaFields = overrides?.includeCtaFields ?? true;
@@ -128,11 +162,13 @@ const makeCampaignContract = (overrides?: {
     channels: ['campaign'],
     composer: {
       enabled: true,
-      fields: [
-        ...CAMPAIGN_TEXT_BASE_FIELDS,
-        ...(includeCtaFields ? CAMPAIGN_CTA_FIELDS : []),
-        ...(overrides?.additionalFields ?? [])
-      ],
+      fields:
+        overrides?.fields ??
+        [
+          ...CAMPAIGN_TEXT_BASE_FIELDS,
+          ...(includeCtaFields ? CAMPAIGN_CTA_FIELDS : []),
+          ...(overrides?.additionalFields ?? [])
+        ],
       allowedPlaceholders: CAMPAIGN_ALLOWED_PLACEHOLDERS,
       requiredPlaceholders
     },
@@ -250,6 +286,7 @@ const CONTRACTS: Record<string, TemplateContract> = {
   }),
   free_form: makeCampaignContract({
     requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.free_form ?? [],
+    fields: [...FREE_FORM_FIELDS, ...CAMPAIGN_CTA_FIELDS],
     includeEntryContextDefault: false
   }),
   payment_reminder_followup: makeCampaignContract({

@@ -52,6 +52,8 @@ export const PLACEHOLDER_CATALOG: PlaceholderCatalogItem[] = [
     description: 'Verifizierungslink',
     example: 'https://example.org/verify?token=abc123'
   },
+  { name: 'greetingText', description: 'Freie Begrüßung für Kampagnenmails', example: '{{fallbackGreeting}} {{driverName}},' },
+  { name: 'contentText', description: 'Hauptinhalt der freien Kampagnenmail', example: 'Hier sind die wichtigsten Informationen für dich.' },
   { name: 'introText', description: 'Einleitender Kampagnentext', example: 'Hier sind aktuelle Informationen zu deiner Teilnahme.' },
   { name: 'detailsText', description: 'Weiterer Detailabschnitt', example: 'Zeitplan und Anreisehinweise wurden aktualisiert.' },
   { name: 'ctaText', description: 'Button-Beschriftung für Kampagneninhalt', example: 'Alle Infos ansehen' },

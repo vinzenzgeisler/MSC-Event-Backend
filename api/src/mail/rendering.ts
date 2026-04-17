@@ -271,6 +271,10 @@ const parseMultiline = (value: unknown): string[] => {
     .filter((line) => line.length > 0);
 };
 
+const renderTemplateText = (template: string, data: TemplateData): string => renderString(template, data, false).rendered.trim();
+
+const renderTextBlocksToHtml = (blocks: string[]): string => textToHtml(blocks.filter((block) => block.trim().length > 0).join('\n\n'));
+
 const resolveVehicleLabel = (data: TemplateData): string => {
   if (isPresentValue(data.vehicleLabel)) {
     return toStringValue(data.vehicleLabel);
@@ -534,11 +538,8 @@ const buildAccentBar = (color: string): string =>
 
 const buildStructuredSections = (data: TemplateData, locale: SupportedMailLocale): { html: string; text: string } => {
   const copy = getMailChromeCopy(locale);
-  const introText = isPresentValue(data.introText) ? toStringValue(data.introText).trim() : '';
-  const detailsText = isPresentValue(data.detailsText) ? toStringValue(data.detailsText).trim() : '';
-  const closingText = isPresentValue(data.closingText) ? toStringValue(data.closingText).trim() : '';
-  const highlightLines = parseMultiline(data.highlights);
-  const paymentDeadline = isPresentValue(data.paymentDeadline) ? toStringValue(data.paymentDeadline).trim() : '';
+  const highlightLines = parseMultiline(data.highlights).map((line) => renderTemplateText(line, data)).filter((line) => line.length > 0);
+  const paymentDeadline = isPresentValue(data.paymentDeadline) ? renderTemplateText(toStringValue(data.paymentDeadline), data) : '';
 
   const htmlParts: string[] = [];
   const textParts: string[] = [];
@@ -551,27 +552,34 @@ const buildStructuredSections = (data: TemplateData, locale: SupportedMailLocale
     textParts.push(`${copy.highlightsTitle}:\n${highlightLines.map((line) => `- ${line}`).join('\n')}`);
   }
 
-  const detailsChunks = [introText, detailsText].filter((chunk) => chunk.length > 0);
-  if (detailsChunks.length > 0) {
-    htmlParts.push(buildSectionCard(copy.detailsTitle, detailsChunks.map((chunk) => escapeHtml(chunk).replace(/\r?\n/g, '<br />')).join('<br /><br />')));
-    textParts.push(`${copy.detailsTitle}:\n${detailsChunks.join('\n\n')}`);
-  }
-
-  const nextStepsLines: string[] = [];
   if (paymentDeadline) {
-    nextStepsLines.push(`Zahlungsfrist: ${paymentDeadline}`);
-  }
-  if (closingText) {
-    nextStepsLines.push(closingText);
-  }
-  if (nextStepsLines.length > 0) {
-    htmlParts.push(buildSectionCard(copy.nextStepsTitle, nextStepsLines.map((line) => escapeHtml(line).replace(/\r?\n/g, '<br />')).join('<br />')));
-    textParts.push(`${copy.nextStepsTitle}:\n${nextStepsLines.join('\n')}`);
+    htmlParts.push(buildSectionCard(copy.paymentDeadlineTitle, escapeHtml(paymentDeadline).replace(/\r?\n/g, '<br />')));
+    textParts.push(`${copy.paymentDeadlineTitle}:\n${paymentDeadline}`);
   }
 
   return {
     html: htmlParts.join(''),
     text: textParts.join('\n\n').trim()
+  };
+};
+
+const resolveFreeFormBlocks = (data: TemplateData): {
+  bodyBlocks: string[];
+  closingText: string;
+} => {
+  const explicitGreeting = isPresentValue(data.greetingText) ? renderTemplateText(toStringValue(data.greetingText), data) : '';
+  const explicitContent = isPresentValue(data.contentText) ? renderTemplateText(toStringValue(data.contentText), data) : '';
+  const legacyIntro = isPresentValue(data.introText) ? renderTemplateText(toStringValue(data.introText), data) : '';
+  const legacyDetails = isPresentValue(data.detailsText) ? renderTemplateText(toStringValue(data.detailsText), data) : '';
+  const closingText = isPresentValue(data.closingText) ? renderTemplateText(toStringValue(data.closingText), data) : '';
+
+  const greeting = explicitGreeting || renderTemplateText('{{fallbackGreeting}} {{driverName}},', data);
+  const contentBlocks =
+    explicitContent.length > 0 ? [explicitContent] : [legacyIntro, legacyDetails].filter((item) => item.length > 0);
+
+  return {
+    bodyBlocks: [greeting, ...contentBlocks].filter((item) => item.length > 0),
+    closingText
   };
 };
 
@@ -677,6 +685,7 @@ const buildHtmlDocument = (input: {
   templateKey: string;
   subjectRendered: string;
   bodyHtmlRendered: string;
+  postCtaHtmlRendered?: string;
   structuredSectionsHtml: string;
   entryContextHtml: string;
   verificationUrl: string | null;
@@ -834,6 +843,7 @@ const buildHtmlDocument = (input: {
     sectionsHtml,
     `<div class="mail-body">${input.bodyHtmlRendered}</div>`,
     ctaBlock,
+    input.postCtaHtmlRendered ? `<div class="mail-body">${input.postCtaHtmlRendered}</div>` : '',
     signoffHtml,
     '</td></tr>',
     `<tr><td class="mail-footer" bgcolor="#F8FAFC" style="border-top:1px solid #E2E8F0;background:#F8FAFC;background-color:#F8FAFC;padding:14px 26px;font-size:12px;line-height:1.5;color:#64748B;">${dateHtml}${contactHtml}${replyHintHtml}${legalLinks}</td></tr>`,
@@ -997,6 +1007,7 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
   let bodyHtmlRendered = htmlSource.length > 0
     ? sanitizeHtmlFragment(renderString(htmlSource, templateData, true).rendered.trim())
     : textToHtml(bodyText.rendered.trim());
+  let postCtaHtmlRendered = '';
 
   const usedSet = new Set<string>([...subject.placeholders, ...bodyText.placeholders]);
   const htmlTemplatePlaceholders = htmlSource.length > 0 ? renderString(htmlSource, templateData, true).placeholders : [];
@@ -1011,26 +1022,48 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
 
   const verificationUrl = normalizePublicUrl(templateData.verificationUrl);
   let bodyTextRendered = bodyText.rendered.trim();
+  let postCtaTextRendered = '';
   const driverNote = isPresentValue(templateData.driverNote) ? toStringValue(templateData.driverNote).trim() : '';
 
-  if (!input.hasContentOverride && isCampaignTemplate(input.templateKey) && structuredSections.text.length > 0) {
-    bodyTextRendered = `${bodyTextRendered}\n\n${structuredSections.text}`.trim();
+  if (!input.hasContentOverride && input.templateKey === 'free_form') {
+    const freeFormBlocks = resolveFreeFormBlocks(templateData);
+    bodyTextRendered = freeFormBlocks.bodyBlocks.join('\n\n').trim();
+    bodyHtmlRendered = renderTextBlocksToHtml(freeFormBlocks.bodyBlocks);
+    postCtaTextRendered = freeFormBlocks.closingText;
+    postCtaHtmlRendered = renderTextBlocksToHtml(postCtaTextRendered ? [postCtaTextRendered] : []);
   }
 
   bodyTextRendered = stripLegacySupportHintsText(bodyTextRendered);
   bodyHtmlRendered = stripLegacySupportHintsHtml(bodyHtmlRendered);
+  postCtaTextRendered = stripLegacySupportHintsText(postCtaTextRendered);
+  postCtaHtmlRendered = stripLegacySupportHintsHtml(postCtaHtmlRendered);
   if (input.templateKey === 'codriver_info') {
     bodyTextRendered = stripCodriverSupportSentenceText(bodyTextRendered);
     bodyHtmlRendered = stripCodriverSupportSentenceHtml(bodyHtmlRendered);
   }
   bodyHtmlRendered = normalizeInlineTypographyHtml(bodyHtmlRendered);
+  postCtaHtmlRendered = normalizeInlineTypographyHtml(postCtaHtmlRendered);
   bodyTextRendered = applyEventArticleHeuristic(bodyTextRendered, eventName);
   bodyHtmlRendered = applyEventArticleHeuristic(bodyHtmlRendered, eventName);
+  postCtaTextRendered = applyEventArticleHeuristic(postCtaTextRendered, eventName);
+  postCtaHtmlRendered = applyEventArticleHeuristic(postCtaHtmlRendered, eventName);
   bodyTextRendered = normalizeClassPrefixDuplicates(bodyTextRendered);
   bodyHtmlRendered = normalizeClassPrefixDuplicates(bodyHtmlRendered);
+  postCtaTextRendered = normalizeClassPrefixDuplicates(postCtaTextRendered);
+  postCtaHtmlRendered = normalizeClassPrefixDuplicates(postCtaHtmlRendered);
   if (shouldInjectDriverNote(input.templateKey, driverNote)) {
     bodyTextRendered = appendDriverNoteText(bodyTextRendered, driverNote, chromeCopy.organizerNoteTitle);
     bodyHtmlRendered = appendDriverNoteHtml(bodyHtmlRendered, driverNote, chromeCopy.organizerNoteTitle);
+  }
+
+  const campaignCtaUrl = isCampaignTemplate(input.templateKey) ? normalizePublicUrl(templateData.ctaUrl) : null;
+  const campaignCtaText = isPresentValue(templateData.ctaText) ? toStringValue(templateData.ctaText).trim() : '';
+  if (isCampaignTemplate(input.templateKey) && campaignCtaUrl) {
+    const ctaTextForPlain = campaignCtaText || (locale === 'de' ? 'Mehr erfahren' : 'Learn more');
+    bodyTextRendered = `${bodyTextRendered}\n\n${ctaTextForPlain}: ${campaignCtaUrl}`.trim();
+  }
+  if (postCtaTextRendered) {
+    bodyTextRendered = `${bodyTextRendered}\n\n${postCtaTextRendered}`.trim();
   }
 
   if (
@@ -1070,6 +1103,7 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
     templateKey: input.templateKey,
     subjectRendered: subject.rendered.trim(),
     bodyHtmlRendered,
+    postCtaHtmlRendered,
     structuredSectionsHtml: structuredSections.html,
     entryContextHtml,
     verificationUrl,

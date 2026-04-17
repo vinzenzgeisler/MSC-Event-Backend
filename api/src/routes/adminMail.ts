@@ -935,6 +935,38 @@ const findOutboxByIdempotencyKey = async (idempotencyKey: string) => {
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
+const resolveRecipientPreferredLocale = async (eventId: string, target: RecipientTarget): Promise<string | null> => {
+  const db = await getDb();
+
+  if (target.entryId) {
+    const rows = await db
+      .select({
+        locale: consentEvidence.locale
+      })
+      .from(consentEvidence)
+      .innerJoin(entry, eq(consentEvidence.entryId, entry.id))
+      .where(and(eq(entry.eventId, eventId), eq(entry.id, target.entryId), sql`${entry.deletedAt} is null`))
+      .orderBy(desc(consentEvidence.createdAt))
+      .limit(1);
+    return rows[0]?.locale ?? null;
+  }
+
+  if (target.driverPersonId) {
+    const rows = await db
+      .select({
+        locale: consentEvidence.locale
+      })
+      .from(entry)
+      .innerJoin(consentEvidence, eq(consentEvidence.entryId, entry.id))
+      .where(and(eq(entry.eventId, eventId), eq(entry.driverPersonId, target.driverPersonId), sql`${entry.deletedAt} is null`))
+      .orderBy(desc(consentEvidence.createdAt), desc(entry.createdAt))
+      .limit(1);
+    return rows[0]?.locale ?? null;
+  }
+
+  return null;
+};
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const toUuidOrNull = (value: unknown): string | null => {
@@ -1344,7 +1376,14 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         bodyTextOverride: input.bodyOverride ?? null,
         bodyHtmlOverride: input.bodyHtmlOverride ?? null
       };
-      const locale = resolveMailLocale(templateData);
+      const preferredLocale =
+        isNonEmptyString(templateData.locale) ? templateData.locale : await resolveRecipientPreferredLocale(input.eventId, target);
+      const locale = resolveMailLocale(
+        {
+          locale: preferredLocale
+        },
+        templateContract.scope === 'campaign' ? 'en' : 'de'
+      );
       templateData = {
         ...templateData,
         locale

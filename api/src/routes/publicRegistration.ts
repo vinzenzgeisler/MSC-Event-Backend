@@ -33,6 +33,7 @@ const zipSchema = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9\- ]{1,11}$/);
 
 const normalizePhone = (value: string): string => value.replace(/\D+/g, '');
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
+const normalizeNameForComparison = (value: string | null | undefined): string => value?.trim().replace(/\s+/g, ' ').toLowerCase() ?? '';
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const DEFAULT_REGISTRATION_ALERT_RECIPIENT = 'geisler10@gmx.net';
 const phoneSchema = z
@@ -301,22 +302,49 @@ const createEntrySchema = z
         message: 'codriver is required when codriverEnabled=true'
       });
     }
+    if (value.codriver && normalizeEmail(value.codriver.email) === normalizeEmail(value.driver.email)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['codriver', 'email'],
+        message: 'codriver email must differ from driver email'
+      });
+    }
   });
 
-const createBatchSchema = z.object({
-  eventId: z.string().uuid(),
-  clientSubmissionKey: nonEmptySchema.max(128),
-  driver: driverInputSchema,
-  consent: consentInputSchema,
-  entries: z.array(createEntryItemSchema).min(1).max(10)
-});
+const validateBatchDriverCodriverEmails = (
+  value: { driver: { email: string }; entries: Array<{ codriver?: { email: string } }> },
+  ctx: z.RefinementCtx
+) => {
+  const driverEmail = normalizeEmail(value.driver.email);
+  value.entries.forEach((item, index) => {
+    if (item.codriver && normalizeEmail(item.codriver.email) === driverEmail) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['entries', index, 'codriver', 'email'],
+        message: 'codriver email must differ from driver email'
+      });
+    }
+  });
+};
 
-const createBatchWithoutIdempotencySchema = z.object({
-  eventId: z.string().uuid(),
-  driver: driverInputSchema,
-  consent: consentInputSchema,
-  entries: z.array(createEntryItemSchema).min(1).max(10)
-});
+const createBatchSchema = z
+  .object({
+    eventId: z.string().uuid(),
+    clientSubmissionKey: nonEmptySchema.max(128),
+    driver: driverInputSchema,
+    consent: consentInputSchema,
+    entries: z.array(createEntryItemSchema).min(1).max(10)
+  })
+  .superRefine(validateBatchDriverCodriverEmails);
+
+const createBatchWithoutIdempotencySchema = z
+  .object({
+    eventId: z.string().uuid(),
+    driver: driverInputSchema,
+    consent: consentInputSchema,
+    entries: z.array(createEntryItemSchema).min(1).max(10)
+  })
+  .superRefine(validateBatchDriverCodriverEmails);
 
 const createBatchInternalSchema = z.union([createBatchSchema, createBatchWithoutIdempotencySchema]);
 
@@ -397,6 +425,13 @@ const splitEmergencyContactName = (name: string | null | undefined): { firstName
     lastName: rest.length > 0 ? rest.join(' ') : null
   };
 };
+
+const isSameNamedPerson = (
+  existing: Pick<typeof person.$inferSelect, 'firstName' | 'lastName'>,
+  incoming: Pick<DriverInput | CodriverInput, 'firstName' | 'lastName'>
+): boolean =>
+  normalizeNameForComparison(existing.firstName) === normalizeNameForComparison(incoming.firstName) &&
+  normalizeNameForComparison(existing.lastName) === normalizeNameForComparison(incoming.lastName);
 
 const assertRegistrationOpen = async (eventId: string) => {
   const db = await getDb();
@@ -535,22 +570,25 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
           .limit(1);
         const existing = existingRows[0];
         if (existing) {
+          if (!isSameNamedPerson(existing, personInput)) {
+            throw new Error('EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
+          }
           const [updated] = await tx
             .update(person)
             .set({
               firstName: personInput.firstName ?? existing.firstName,
               lastName: personInput.lastName ?? existing.lastName,
-              birthdate: personInput.birthdate ?? null,
-              country: personInput.country ?? null,
-              street: personInput.street ?? null,
-              zip: personInput.zip ?? null,
-              city: personInput.city ?? null,
-              phone: personInput.phone ?? null,
-              emergencyContactName: emergencyName,
-              emergencyContactFirstName: splitEmergencyName.firstName,
-              emergencyContactLastName: splitEmergencyName.lastName,
-              emergencyContactPhone: extra.emergencyContactPhone ?? null,
-              motorsportHistory: extra.motorsportHistory ?? null,
+              birthdate: personInput.birthdate ?? existing.birthdate,
+              country: personInput.country ?? existing.country,
+              street: personInput.street ?? existing.street,
+              zip: personInput.zip ?? existing.zip,
+              city: personInput.city ?? existing.city,
+              phone: personInput.phone ?? existing.phone,
+              emergencyContactName: emergencyName ?? existing.emergencyContactName,
+              emergencyContactFirstName: splitEmergencyName.firstName ?? existing.emergencyContactFirstName,
+              emergencyContactLastName: splitEmergencyName.lastName ?? existing.emergencyContactLastName,
+              emergencyContactPhone: extra.emergencyContactPhone ?? existing.emergencyContactPhone,
+              motorsportHistory: extra.motorsportHistory ?? existing.motorsportHistory,
               updatedAt: now
             })
             .where(eq(person.id, existing.id))

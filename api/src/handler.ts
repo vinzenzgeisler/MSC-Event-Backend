@@ -354,6 +354,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY') {
         return errorJson(409, 'Driver email already used by another active entry in this event', undefined, 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
       }
+      if (error instanceof Error && error.message === 'EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON') {
+        return errorJson(409, 'This email address is already linked to a different person', undefined, 'EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
+      }
       if (error instanceof Error && error.message === 'CONSENT_LOCALE_INVALID') {
         return errorJson(400, 'Consent locale is invalid', undefined, 'CONSENT_LOCALE_INVALID');
       }
@@ -452,6 +455,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY') {
         return errorJson(409, 'Driver email already used by another active entry in this event', undefined, 'EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
+      }
+      if (error instanceof Error && error.message === 'EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON') {
+        return errorJson(409, 'This email address is already linked to a different person', undefined, 'EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
       }
       if (error instanceof Error && error.message === 'CONSENT_LOCALE_INVALID') {
         return errorJson(400, 'Consent locale is invalid', undefined, 'CONSENT_LOCALE_INVALID');

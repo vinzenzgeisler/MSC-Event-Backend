@@ -309,6 +309,7 @@ const createEntrySchema = z
         message: 'codriver email must differ from driver email'
       });
     }
+    validateDistinctParticipantNames(value.driver, value.codriver, ctx, ['codriver']);
   });
 
 const validateBatchDriverCodriverEmails = (
@@ -324,6 +325,7 @@ const validateBatchDriverCodriverEmails = (
         message: 'codriver email must differ from driver email'
       });
     }
+    validateDistinctParticipantNames(value.driver as DriverInput, item.codriver as CodriverInput | undefined, ctx, ['entries', index, 'codriver']);
   });
 };
 
@@ -424,6 +426,44 @@ const splitEmergencyContactName = (name: string | null | undefined): { firstName
     firstName: first ?? null,
     lastName: rest.length > 0 ? rest.join(' ') : null
   };
+};
+
+const buildComparableFullName = (firstName: string | null | undefined, lastName: string | null | undefined): string =>
+  normalizeNameForComparison([firstName ?? '', lastName ?? ''].join(' ').trim());
+
+const validateDistinctParticipantNames = (
+  driverInput: DriverInput,
+  codriverInput: CodriverInput | undefined,
+  ctx: z.RefinementCtx,
+  codriverPathPrefix: Array<string | number>
+) => {
+  const driverName = buildComparableFullName(driverInput.firstName, driverInput.lastName);
+  const emergencyName = buildComparableFullName(driverInput.emergencyContactFirstName ?? null, driverInput.emergencyContactLastName ?? null);
+  const codriverName = codriverInput ? buildComparableFullName(codriverInput.firstName, codriverInput.lastName) : '';
+
+  if (driverName && emergencyName && driverName === emergencyName) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['driver', 'emergencyContactFirstName'],
+      message: 'emergency contact name must differ from driver name'
+    });
+  }
+
+  if (driverName && codriverName && driverName === codriverName) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...codriverPathPrefix, 'firstName'],
+      message: 'codriver name must differ from driver name'
+    });
+  }
+
+  if (emergencyName && codriverName && emergencyName === codriverName) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...codriverPathPrefix, 'firstName'],
+      message: 'codriver name must differ from emergency contact name'
+    });
+  }
 };
 
 const isSameNamedPerson = (

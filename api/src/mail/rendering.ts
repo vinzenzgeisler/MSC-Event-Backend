@@ -843,6 +843,7 @@ const buildHtmlDocument = (input: {
     sectionsHtml,
     `<div class="mail-body">${input.bodyHtmlRendered}</div>`,
     ctaBlock,
+    input.postCtaHtmlRendered ? buildSpacer(20) : '',
     input.postCtaHtmlRendered ? `<div class="mail-body">${input.postCtaHtmlRendered}</div>` : '',
     signoffHtml,
     '</td></tr>',

@@ -964,6 +964,20 @@ const resolveRecipientPreferredLocale = async (eventId: string, target: Recipien
     return rows[0]?.locale ?? null;
   }
 
+  if (isNonEmptyString(target.email)) {
+    const rows = await db
+      .select({
+        locale: consentEvidence.locale
+      })
+      .from(entry)
+      .innerJoin(person, eq(entry.driverPersonId, person.id))
+      .innerJoin(consentEvidence, eq(consentEvidence.entryId, entry.id))
+      .where(and(eq(entry.eventId, eventId), eq(person.email, target.email), sql`${entry.deletedAt} is null`))
+      .orderBy(desc(consentEvidence.createdAt), desc(entry.createdAt))
+      .limit(1);
+    return rows[0]?.locale ?? null;
+  }
+
   return null;
 };
 
@@ -1390,6 +1404,18 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
       };
 
       templateData = await enrichEntryContextTemplateData(input.eventId, templateData, target);
+
+      if (templateContract.scope === 'campaign') {
+        const recipientContext = await resolveRegistrationContext(input.eventId, target, templateData);
+        templateData = {
+          ...templateData,
+          eventName: isNonEmptyString(templateData.eventName) ? templateData.eventName : recipientContext.eventName,
+          firstName: isNonEmptyString(templateData.firstName) ? templateData.firstName : recipientContext.firstName,
+          lastName: isNonEmptyString(templateData.lastName) ? templateData.lastName : recipientContext.lastName,
+          driverName: isNonEmptyString(templateData.driverName) ? templateData.driverName : recipientContext.driverName,
+          entryId: isNonEmptyString(templateData.entryId) ? templateData.entryId : recipientContext.entryId
+        };
+      }
 
       if (
         template.templateKey === 'registration_received' ||

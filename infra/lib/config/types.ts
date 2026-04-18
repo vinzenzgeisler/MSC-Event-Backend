@@ -4,6 +4,7 @@ export interface StageConfig {
   cognitoCallbackUrls: string[];
   cognitoLogoutUrls: string[];
   cognitoDomainPrefix: string;
+  cognitoRefreshTokenDays?: number;
   sesFromEmail: string;
   publicVerifyBaseUrl: string;
   assetsCorsAllowedOrigins: string[];

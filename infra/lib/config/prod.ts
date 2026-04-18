@@ -22,6 +22,7 @@ export const resolveProdConfig = (): StageConfig => {
     cognitoCallbackUrls: [`${prodPublicBaseUrl}/admin/login`],
     cognitoLogoutUrls: [`${prodPublicBaseUrl}/admin/login`],
     cognitoDomainPrefix: prodCognitoDomainPrefix,
+    cognitoRefreshTokenDays: 90,
     sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
     publicVerifyBaseUrl: `${prodPublicBaseUrl}/anmeldung/verify`,
     assetsCorsAllowedOrigins: [prodPublicBaseUrl],

@@ -1,4 +1,4 @@
-import { and, asc, eq, ilike, inArray, or, sql, SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, or, sql, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
@@ -7,7 +7,7 @@ import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/sto
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { deriveInvoicePaymentStatus } from '../domain/invoiceStatus';
 import { isPgUniqueViolation } from '../http/dbErrors';
-import { parseListQuery, paginateAndSortRows } from '../http/pagination';
+import { decodeCursor, encodeCursor, parseListQuery } from '../http/pagination';
 import { recalculateInvoices } from './adminFinance';
 import { queueLifecycleMail } from './adminMail';
 
@@ -191,6 +191,49 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
     }
   }
 
+  const paginationQuery = parseListQuery(
+    {
+      cursor: query.cursor,
+      limit: query.limit?.toString(),
+      sortBy: query.sortBy,
+      sortDir: query.sortDir
+    },
+    ['className', 'driverLastName', 'driverFirstName', 'createdAt', 'updatedAt', 'startNumberNorm', 'deletedAt'],
+    'className',
+    'asc'
+  );
+
+  const offset = decodeCursor(paginationQuery.cursor);
+  const isAsc = paginationQuery.sortDir === 'asc';
+  const orderTerm = <T>(column: T) => (isAsc ? asc(column as never) : desc(column as never));
+  const orderBy =
+    paginationQuery.sortBy === 'driverLastName'
+      ? [orderTerm(person.lastName), orderTerm(person.firstName), orderTerm(entry.id)]
+      : paginationQuery.sortBy === 'driverFirstName'
+        ? [orderTerm(person.firstName), orderTerm(person.lastName), orderTerm(entry.id)]
+        : paginationQuery.sortBy === 'createdAt'
+          ? [orderTerm(entry.createdAt), orderTerm(entry.id)]
+          : paginationQuery.sortBy === 'updatedAt'
+            ? [orderTerm(entry.updatedAt), orderTerm(entry.id)]
+            : paginationQuery.sortBy === 'startNumberNorm'
+              ? [orderTerm(entry.startNumberNorm), orderTerm(entry.id)]
+              : paginationQuery.sortBy === 'deletedAt'
+                ? [orderTerm(entry.deletedAt), orderTerm(entry.id)]
+                : [orderTerm(eventClass.name), orderTerm(person.lastName), orderTerm(person.firstName), orderTerm(entry.id)];
+
+  const totalRows = await db
+    .select({
+      total: sql<number>`count(distinct ${entry.id})::int`
+    })
+    .from(entry)
+    .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+    .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+    .where(and(...conditions));
+
+  const total = Number(totalRows[0]?.total ?? 0);
+
   const rows = await db
     .select({
       id: entry.id,
@@ -237,7 +280,9 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
     .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
     .where(and(...conditions))
-    .orderBy(asc(eventClass.name), asc(person.lastName), asc(person.firstName));
+    .orderBy(...orderBy)
+    .limit(paginationQuery.limit)
+    .offset(offset);
 
   const mapped = await Promise.all(rows.map(async (row) => {
     const completed = row.acceptanceStatus === 'accepted' && row.paymentStatus === 'paid';
@@ -262,18 +307,18 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
     };
   }));
 
-  const paginationQuery = parseListQuery(
-    {
-      cursor: query.cursor,
-      limit: query.limit?.toString(),
-      sortBy: query.sortBy,
-      sortDir: query.sortDir
-    },
-    ['className', 'driverLastName', 'driverFirstName', 'createdAt', 'updatedAt', 'startNumberNorm', 'deletedAt'],
-    'className',
-    'asc'
-  );
-  return paginateAndSortRows(mapped, paginationQuery);
+  const nextOffset = offset + mapped.length;
+  const nextCursor = nextOffset < total ? encodeCursor(nextOffset) : null;
+  return {
+    items: mapped,
+    meta: {
+      page: Math.floor(offset / paginationQuery.limit) + 1,
+      pageSize: paginationQuery.limit,
+      total,
+      hasMore: nextCursor !== null,
+      nextCursor
+    }
+  };
 };
 
 export const listCheckinEntries = async (query: ListEntriesQuery, redactSensitiveFields: boolean) =>

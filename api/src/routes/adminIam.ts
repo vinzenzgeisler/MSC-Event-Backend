@@ -161,15 +161,15 @@ export const listIamRoles = () => ({
   roles: [
     {
       key: 'admin',
-      description: 'Full access'
+      description: 'Full access across dashboard, entries, communication, exports, settings, and IAM'
     },
     {
       key: 'editor',
-      description: 'Entries/checkin/notes write and exports read'
+      description: 'Dashboard and entries read, entry status/check-in/notes write, exports read'
     },
     {
       key: 'viewer',
-      description: 'Read-only access'
+      description: 'Dashboard, entries, and exports read-only access'
     }
   ]
 });

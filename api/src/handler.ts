@@ -2,7 +2,7 @@ import { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-l
 import { ZodError } from 'zod';
 import { sql } from 'drizzle-orm';
 import { getDb } from './db/client';
-import { getAuthContext, hasAnyGroup, hasGroup } from './http/auth';
+import { getAuthContext, hasAnyGroup, hasGroup, hasPermission } from './http/auth';
 import { buildPublicRateLimitKey, enforcePublicRateLimit } from './http/publicRateLimit';
 import { errorJson, json } from './http/response';
 import { parseJsonBody } from './http/parse';
@@ -703,7 +703,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/dashboard/summary') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'dashboard.read')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -773,7 +773,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/events') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'settings.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -811,7 +811,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && eventPatchMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'settings.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -826,7 +826,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   if (method === 'GET' && path === '/admin/config/entry-confirmation-defaults') {
-    if (!adminAuth || !hasAnyGroup(adminAuth, ['admin'])) {
+    if (!adminAuth || !hasPermission(adminAuth, 'settings.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -838,7 +838,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   if (method === 'PATCH' && path === '/admin/config/entry-confirmation-defaults') {
-    if (!adminAuth || !hasAnyGroup(adminAuth, ['admin'])) {
+    if (!adminAuth || !hasPermission(adminAuth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -859,7 +859,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/events') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -880,7 +880,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'PATCH' && eventPatchMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -929,7 +929,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && eventClassesMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -957,7 +957,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const classMatch = path.match(/^\/admin\/classes\/([^/]+)$/);
   if (method === 'PATCH' && classMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -984,7 +984,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'DELETE' && classMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1007,7 +1007,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const eventActivateMatch = path.match(/^\/admin\/events\/([^/]+)\/activate$/);
   if (method === 'POST' && eventActivateMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1027,7 +1027,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const eventCloseMatch = path.match(/^\/admin\/events\/([^/]+)\/close$/);
   if (method === 'POST' && eventCloseMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1047,7 +1047,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const eventArchiveMatch = path.match(/^\/admin\/events\/([^/]+)\/archive$/);
   if (method === 'POST' && eventArchiveMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1066,7 +1066,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/mail/queue') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -1147,7 +1147,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/mail/templates') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'communication.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1160,7 +1160,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/mail/templates') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1185,7 +1185,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const mailTemplateMatch = path.match(/^\/admin\/mail\/templates\/([^/]+)$/);
   if (method === 'PATCH' && mailTemplateMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1213,7 +1213,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const mailTemplateVersionsMatch = path.match(/^\/admin\/mail\/templates\/([^/]+)\/versions$/);
   if (method === 'GET' && mailTemplateVersionsMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'communication.read')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -1229,7 +1229,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && mailTemplateVersionsMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -1254,7 +1254,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const mailTemplatePlaceholdersMatch = path.match(/^\/admin\/mail\/templates\/([^/]+)\/placeholders$/);
   if (method === 'GET' && mailTemplatePlaceholdersMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'communication.read')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -1274,7 +1274,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/mail/templates/preview') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -1331,7 +1331,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/mail/attachments/init') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -1358,7 +1358,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/mail/attachments/finalize') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -1394,7 +1394,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/mail/recipients/search') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -1411,7 +1411,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/mail/broadcast/resolve-recipients') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -1435,7 +1435,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/mail/send') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1510,7 +1510,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/payment/reminders/queue') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -1544,7 +1544,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/mail/lifecycle/queue') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -1599,7 +1599,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/mail/broadcast/queue') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -1775,7 +1775,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const docDownloadMatch = path.match(/^\/admin\/documents\/([^/]+)\/download$/);
   if (method === 'GET' && docDownloadMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'entries.read')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -1800,7 +1800,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryDocDownloadMatch = path.match(/^\/admin\/documents\/entry\/([^/]+)\/download$/);
   if (method === 'GET' && entryDocDownloadMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'entries.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1837,13 +1837,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/entries') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'entries.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
       const query = validateListEntriesQuery(event.queryStringParameters ?? {});
-      const redact = hasGroup(auth, 'viewer') && !hasGroup(auth, 'admin');
-      const rows = await listEntries(query, redact);
+      const rows = await listEntries(query, false);
       return json(200, { ok: true, entries: rows.items, meta: rows.meta });
     } catch (error) {
       if (error instanceof ZodError) {
@@ -1858,7 +1857,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/entries/deleted') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'entries.delete')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1878,13 +1877,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/checkin/entries') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'entries.checkin.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
       const query = validateListEntriesQuery(event.queryStringParameters ?? {});
-      const redact = hasGroup(auth, 'viewer') && !hasGroup(auth, 'admin');
-      const rows = await listCheckinEntries(query, redact);
+      const rows = await listCheckinEntries(query, false);
       return json(200, { ok: true, entries: rows.items, meta: rows.meta });
     } catch (error) {
       if (error instanceof ZodError) {
@@ -1900,12 +1898,11 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryDetailMatch = path.match(/^\/admin\/entries\/([^/]+)$/);
   if (method === 'GET' && entryDetailMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'entries.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
-      const redact = hasGroup(auth, 'viewer') && !hasGroup(auth, 'admin');
-      const result = await getEntryDetail(entryDetailMatch[1], redact);
+      const result = await getEntryDetail(entryDetailMatch[1], false);
       if (!result) {
         return errorJson(404, 'Entry not found');
       }
@@ -1918,7 +1915,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryRestoreMatch = path.match(/^\/admin\/entries\/([^/]+)\/restore$/);
   if (method === 'POST' && entryRestoreMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'entries.delete')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1940,7 +1937,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'DELETE' && entryDetailMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'entries.delete')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1995,7 +1992,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const checkinMatch = path.match(/^\/admin\/entries\/([^/]+)\/checkin\/id-verify$/);
   if (method === 'PATCH' && checkinMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+    if (!hasPermission(auth, 'entries.checkin.write')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -2027,7 +2024,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryStatusMatch = path.match(/^\/admin\/entries\/([^/]+)\/status$/);
   if (method === 'PATCH' && entryStatusMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+    if (!hasPermission(auth, 'entries.status.write')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -2068,7 +2065,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryTechStatusMatch = path.match(/^\/admin\/entries\/([^/]+)\/tech-status$/);
   if (method === 'PATCH' && entryTechStatusMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+    if (!hasPermission(auth, 'entries.checkin.write')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -2097,7 +2094,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryClassMatch = path.match(/^\/admin\/entries\/([^/]+)\/class$/);
   if (method === 'PATCH' && entryClassMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor'])) {
+    if (!hasPermission(auth, 'entries.status.write')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
 
@@ -2146,7 +2143,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryNotesMatch = path.match(/^\/admin\/entries\/([^/]+)\/notes$/);
   if (method === 'PATCH' && entryNotesMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'entries.notes.write')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -2178,7 +2175,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryPaymentStatusMatch = path.match(/^\/admin\/entries\/([^/]+)\/payment-status$/);
   if (method === 'PATCH' && entryPaymentStatusMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'entries.payment.write')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -2210,7 +2207,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryPaymentAmountsMatch = path.match(/^\/admin\/entries\/([^/]+)\/payment-amounts$/);
   if (method === 'PATCH' && entryPaymentAmountsMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'entries.payment.write')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -2251,7 +2248,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const eventPricingMatch = path.match(/^\/admin\/events\/([^/]+)\/pricing-rules$/);
   if (method === 'GET' && eventPricingMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'settings.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2270,7 +2267,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'PUT' && eventPricingMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2298,7 +2295,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const eventRecalcMatch = path.match(/^\/admin\/events\/([^/]+)\/invoices\/recalculate$/);
   if (method === 'POST' && eventRecalcMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'settings.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2331,7 +2328,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/invoices') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'entries.payment.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2352,7 +2349,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const invoicePaymentsMatch = path.match(/^\/admin\/invoices\/([^/]+)\/payments$/);
   if (method === 'POST' && invoicePaymentsMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'entries.payment.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2380,7 +2377,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && invoicePaymentsMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'entries.payment.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2401,14 +2398,13 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/exports/entries') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'exports.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
       const payload = parseJsonBody(event);
       const input = validateCreateExportInput(payload);
-      const redacted = hasGroup(auth, 'viewer') && !hasGroup(auth, 'admin');
-      const job = await createEntriesExport(input, auth.sub, redacted);
+      const job = await createEntriesExport(input, auth.sub, false);
       return json(200, { ok: true, exportJobId: job.id, status: job.status });
     } catch (error) {
       if (error instanceof ZodError) {
@@ -2423,7 +2419,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/exports') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'exports.read')) {
       return errorJson(403, 'Forbidden');
     }
     const eventId = event.queryStringParameters?.eventId;
@@ -2449,7 +2445,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const exportMatch = path.match(/^\/admin\/exports\/([^/]+)$/);
   if (method === 'GET' && exportMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'exports.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2466,7 +2462,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const exportDownloadMatch = path.match(/^\/admin\/exports\/([^/]+)\/download$/);
   if (method === 'GET' && exportDownloadMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'exports.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2485,7 +2481,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/mail/outbox') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermission(auth, 'communication.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2506,7 +2502,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const outboxRetryMatch = path.match(/^\/admin\/mail\/outbox\/([^/]+)\/retry$/);
   if (method === 'POST' && outboxRetryMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'communication.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2525,7 +2521,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/iam/roles') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'iam.read')) {
       return errorJson(403, 'Forbidden');
     }
     return json(200, { ok: true, ...listIamRoles() });
@@ -2533,7 +2529,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/iam/users') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'iam.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2559,7 +2555,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'POST' && path === '/admin/iam/users') {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'iam.write')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2605,7 +2601,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const iamRolesMatch = path.match(/^\/admin\/iam\/users\/([^/]+)\/roles$/);
   if (method === 'PATCH' && iamRolesMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'iam.write')) {
       return errorJson(403, 'Forbidden');
     }
     let userId: string;
@@ -2645,7 +2641,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const iamStatusMatch = path.match(/^\/admin\/iam\/users\/([^/]+)\/status$/);
   if (method === 'PATCH' && iamStatusMatch) {
     const auth = getAuthContext(event);
-    if (!hasGroup(auth, 'admin')) {
+    if (!hasPermission(auth, 'iam.write')) {
       return errorJson(403, 'Forbidden');
     }
     let userId: string;

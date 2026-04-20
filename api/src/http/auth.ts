@@ -1,14 +1,65 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 const allowedRoles = ['admin', 'editor', 'viewer'] as const;
-type AllowedRole = (typeof allowedRoles)[number];
+export type AllowedRole = (typeof allowedRoles)[number];
 const allowedRoleSet = new Set<string>(allowedRoles);
+const legacyRoleAliases: Record<string, AllowedRole> = {
+  checkin: 'editor'
+};
+
+export type AdminPermission =
+  | 'dashboard.read'
+  | 'entries.read'
+  | 'entries.status.write'
+  | 'entries.checkin.write'
+  | 'entries.payment.write'
+  | 'entries.notes.write'
+  | 'entries.delete'
+  | 'communication.read'
+  | 'communication.write'
+  | 'exports.read'
+  | 'exports.write'
+  | 'settings.read'
+  | 'settings.write'
+  | 'iam.read'
+  | 'iam.write';
+
+const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
+  admin: [
+    'dashboard.read',
+    'entries.read',
+    'entries.status.write',
+    'entries.checkin.write',
+    'entries.payment.write',
+    'entries.notes.write',
+    'entries.delete',
+    'communication.read',
+    'communication.write',
+    'exports.read',
+    'exports.write',
+    'settings.read',
+    'settings.write',
+    'iam.read',
+    'iam.write'
+  ],
+  editor: ['dashboard.read', 'entries.read', 'entries.status.write', 'entries.checkin.write', 'entries.notes.write', 'exports.read'],
+  viewer: ['dashboard.read', 'entries.read', 'exports.read']
+};
 
 export type AuthContext = {
   sub: string | null;
   email: string | null;
   groups: AllowedRole[];
   mfaAuthenticated: boolean;
+};
+
+const normalizeRole = (value: string): AllowedRole | null => {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  const aliased = legacyRoleAliases[normalized] ?? normalized;
+  return allowedRoleSet.has(aliased) ? (aliased as AllowedRole) : null;
 };
 
 const parseClaimAsStringArray = (value: unknown): string[] => {
@@ -69,9 +120,10 @@ export const getAuthContext = (event: APIGatewayProxyEventV2): AuthContext => {
     }
 
     if (Array.isArray(rawGroups)) {
-      return rawGroups
-        .map((group) => String(group).trim())
-        .filter((group): group is AllowedRole => allowedRoleSet.has(group));
+      const normalized = rawGroups
+        .map((group) => normalizeRole(String(group)))
+        .filter((group): group is AllowedRole => group !== null);
+      return Array.from(new Set(normalized));
     }
 
     const rawGroupString = String(rawGroups);
@@ -82,8 +134,8 @@ export const getAuthContext = (event: APIGatewayProxyEventV2): AuthContext => {
         const parsed = JSON.parse(rawGroupString) as unknown;
         if (Array.isArray(parsed)) {
           const normalized = parsed
-            .map((group) => String(group).trim())
-            .filter((group): group is AllowedRole => allowedRoleSet.has(group));
+            .map((group) => normalizeRole(String(group)))
+            .filter((group): group is AllowedRole => group !== null);
           return Array.from(new Set(normalized));
         }
       } catch {
@@ -94,7 +146,8 @@ export const getAuthContext = (event: APIGatewayProxyEventV2): AuthContext => {
     const normalized = rawGroupString
       .split(/[,\s]+/)
       .map((group) => group.trim().replace(/^\[|\]$/g, '').replace(/^"|"$/g, ''))
-      .filter((group): group is AllowedRole => allowedRoleSet.has(group));
+      .map((group) => normalizeRole(group))
+      .filter((group): group is AllowedRole => group !== null);
     return Array.from(new Set(normalized));
   })();
 
@@ -110,3 +163,9 @@ export const hasGroup = (ctx: AuthContext, group: AllowedRole): boolean => ctx.g
 
 export const hasAnyGroup = (ctx: AuthContext, groups: AllowedRole[]): boolean =>
   groups.some((group) => ctx.groups.includes(group));
+
+export const hasPermission = (ctx: AuthContext, permission: AdminPermission): boolean =>
+  ctx.groups.some((group) => rolePermissions[group].includes(permission));
+
+export const hasAnyPermission = (ctx: AuthContext, permissions: AdminPermission[]): boolean =>
+  permissions.some((permission) => hasPermission(ctx, permission));

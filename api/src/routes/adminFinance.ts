@@ -78,12 +78,14 @@ const loadPricingInputs = async (eventId: string, driverPersonId?: string): Prom
 };
 
 const buildEmptySnapshot = (earlyDeadline: Date, lateFeeCents: number, secondVehicleDiscountCents: number) => ({
-  ruleVersion: 1,
+  ruleVersion: 2,
   generatedAt: new Date().toISOString(),
   earlyDeadline: earlyDeadline.toISOString(),
   lateFeeCents,
   secondVehicleDiscountCents,
   manualOverrides: {},
+  forecastLines: [],
+  forecastTotalCents: 0,
   lines: [],
   totalCents: 0
 });
@@ -139,6 +141,8 @@ export const putPricingRules = async (eventId: string, input: PricingRulesInput,
       }
     });
   });
+
+  await recalculateInvoices(eventId, {}, actorUserId);
 };
 
 export const getPricingRules = async (eventId: string) => {
@@ -210,8 +214,8 @@ export const buildPricingSnapshot = (
         .map((current) => [current.entryId, driverManualOverrides.get(current.entryId)] as const)
         .filter((item): item is readonly [string, number] => typeof item[1] === 'number')
     );
-    const chargeableEntries = entries.filter((current) => current.acceptanceStatus === 'accepted');
-    const lines = chargeableEntries.map((current, idx) => {
+    const activeEntries = entries.filter((current) => current.acceptanceStatus !== 'rejected');
+    const forecastLines = activeEntries.map((current, idx) => {
       const baseFee = classFeeByClassId.get(current.classId) ?? 0;
       const lateFee = current.createdAt > earlyDeadline ? lateFeeCents : 0;
       const secondVehicleDiscount = idx >= 1 ? secondVehicleDiscountCents : 0;
@@ -226,10 +230,12 @@ export const buildPricingSnapshot = (
         secondVehicleDiscountCents: secondVehicleDiscount,
         manualOverrideCents: manualOverrideCents ?? null,
         lineTotalCents: total < 0 ? 0 : total,
-        submittedAt: current.createdAt.toISOString()
+        submittedAt: current.createdAt.toISOString(),
+        acceptanceStatus: current.acceptanceStatus
       };
     });
-
+    const lines = forecastLines.filter((current) => current.acceptanceStatus === 'accepted');
+    const forecastTotalCents = forecastLines.reduce((sum, line) => sum + line.lineTotalCents, 0);
     const totalCents = lines.reduce((sum, line) => sum + line.lineTotalCents, 0);
     return {
       driverPersonId,
@@ -237,6 +243,8 @@ export const buildPricingSnapshot = (
       snapshot: {
         ...buildEmptySnapshot(earlyDeadline, lateFeeCents, secondVehicleDiscountCents),
         manualOverrides: snapshotManualOverrides,
+        forecastLines,
+        forecastTotalCents,
         lines,
         totalCents
       }

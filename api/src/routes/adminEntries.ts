@@ -19,7 +19,7 @@ import {
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { deriveInvoicePaymentStatus } from '../domain/invoiceStatus';
-import { getEntryLineTotalCents, getManualEntryTotalOverrideCents } from '../domain/pricingSnapshot';
+import { getEntryLineTotalCents, getForecastEntryLineTotalCents, getManualEntryTotalOverrideCents } from '../domain/pricingSnapshot';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { decodeCursor, encodeCursor, parseListQuery } from '../http/pagination';
 import { recalculateInvoices } from './adminFinance';
@@ -499,6 +499,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
   const driverEntryRows = await db
     .select({
       id: entry.id,
+      acceptanceStatus: entry.acceptanceStatus,
       createdAt: entry.createdAt
     })
     .from(entry)
@@ -506,46 +507,65 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .orderBy(asc(entry.createdAt), asc(entry.id));
 
   const relatedEntryIds = driverEntryRows.map((row) => row.id).filter((id) => id !== entryId);
+  const activeDriverEntryRows = driverEntryRows.filter((row) => row.acceptanceStatus !== 'rejected');
+  const acceptedDriverEntryCount = driverEntryRows.filter((row) => row.acceptanceStatus === 'accepted').length;
 
-  const pricingRuleRows = await db
-    .select({
-      earlyDeadline: eventPricingRule.earlyDeadline,
-      lateFeeCents: eventPricingRule.lateFeeCents,
-      secondVehicleDiscountCents: eventPricingRule.secondVehicleDiscountCents,
-      baseFeeCents: classPricingRule.baseFeeCents
-    })
-    .from(eventPricingRule)
-    .leftJoin(
-      classPricingRule,
-      and(eq(classPricingRule.eventId, current.eventId), eq(classPricingRule.classId, current.classId))
-    )
-    .where(eq(eventPricingRule.eventId, current.eventId))
-    .limit(1);
-  const pricingRule = pricingRuleRows[0] ?? null;
+  const [eventPricingRuleRows, classPricingRuleRows] = await Promise.all([
+    db
+      .select({
+        earlyDeadline: eventPricingRule.earlyDeadline,
+        lateFeeCents: eventPricingRule.lateFeeCents,
+        secondVehicleDiscountCents: eventPricingRule.secondVehicleDiscountCents
+      })
+      .from(eventPricingRule)
+      .where(eq(eventPricingRule.eventId, current.eventId))
+      .limit(1),
+    db
+      .select({
+        baseFeeCents: classPricingRule.baseFeeCents
+      })
+      .from(classPricingRule)
+      .where(and(eq(classPricingRule.eventId, current.eventId), eq(classPricingRule.classId, current.classId)))
+      .limit(1)
+  ]);
+  const eventPricing = eventPricingRuleRows[0] ?? null;
+  const classPricing = classPricingRuleRows[0] ?? null;
 
-  const entryOrderIndex = driverEntryRows.findIndex((row) => row.id === entryId);
+  const entryOrderIndex = activeDriverEntryRows.findIndex((row) => row.id === entryId);
   const provisionalTotalCents = (() => {
-    if (!pricingRule) {
+    if (!classPricing || current.acceptanceStatus === 'rejected') {
       return null;
     }
-    const baseFeeCents = pricingRule.baseFeeCents ?? 0;
-    const lateFeeCents = current.createdAt > pricingRule.earlyDeadline ? pricingRule.lateFeeCents : 0;
-    const secondVehicleDiscountCents = entryOrderIndex > 0 ? pricingRule.secondVehicleDiscountCents : 0;
+    const baseFeeCents = classPricing.baseFeeCents ?? 0;
+    const lateFeeCents =
+      eventPricing && current.createdAt > eventPricing.earlyDeadline ? eventPricing.lateFeeCents : 0;
+    const secondVehicleDiscountCents = eventPricing && entryOrderIndex > 0 ? eventPricing.secondVehicleDiscountCents : 0;
     return Math.max(0, baseFeeCents + lateFeeCents - secondVehicleDiscountCents);
   })();
 
-  const focusedInvoiceTotalCents = getEntryLineTotalCents(current.invoicePricingSnapshot, entryId);
+  const focusedBillableTotalCents = getEntryLineTotalCents(current.invoicePricingSnapshot, entryId);
+  const focusedForecastTotalCents = getForecastEntryLineTotalCents(current.invoicePricingSnapshot, entryId);
   const manualOverrideCents = getManualEntryTotalOverrideCents(current.invoicePricingSnapshot, entryId);
   const totalCents =
-    focusedInvoiceTotalCents ??
-    manualOverrideCents ??
-    (driverEntryRows.length === 1 && current.invoiceTotalCents !== null ? current.invoiceTotalCents : provisionalTotalCents) ??
-    current.invoiceTotalCents ??
-    0;
+    current.acceptanceStatus === 'accepted'
+      ? focusedBillableTotalCents ??
+        focusedForecastTotalCents ??
+        manualOverrideCents ??
+        (acceptedDriverEntryCount === 1 && current.invoiceTotalCents !== null ? current.invoiceTotalCents : provisionalTotalCents) ??
+        current.invoiceTotalCents ??
+        0
+      : current.acceptanceStatus === 'rejected'
+        ? 0
+        : focusedForecastTotalCents ??
+          manualOverrideCents ??
+          provisionalTotalCents ??
+          0;
   const paidAmountCents =
-    current.invoicePaymentStatus === 'paid'
+    current.acceptanceStatus !== 'accepted'
+      ? 0
+      : current.invoicePaymentStatus === 'paid'
       ? totalCents
-      : driverEntryRows.length === 1
+      : acceptedDriverEntryCount === 1
         ? Math.min(current.invoicePaidAmountCents ?? 0, totalCents)
         : 0;
   const amountOpenCents = Math.max(0, totalCents - paidAmountCents);
@@ -1067,6 +1087,7 @@ export const patchEntryPaymentStatus = async (
       id: entry.id,
       eventId: entry.eventId,
       driverPersonId: entry.driverPersonId,
+      acceptanceStatus: entry.acceptanceStatus,
       entryFeeCents: entry.entryFeeCents,
       deletedAt: entry.deletedAt
     })
@@ -1081,9 +1102,19 @@ export const patchEntryPaymentStatus = async (
     throw new Error('ENTRY_DELETED');
   }
   await assertEventStatusAllowed(current.eventId, ['open', 'closed']);
+  if (current.acceptanceStatus !== 'accepted') {
+    throw new Error('PRE_ACCEPTANCE_PAYMENT_NOT_ALLOWED');
+  }
 
   const paidAt = input.paidAt ? new Date(input.paidAt) : new Date();
   const now = new Date();
+  await recalculateInvoices(
+    current.eventId,
+    {
+      driverPersonId: current.driverPersonId
+    },
+    actorUserId
+  );
   const invoiceRows = await db
     .select({
       id: invoice.id,
@@ -1197,6 +1228,7 @@ export const patchEntryPaymentAmounts = async (
       id: entry.id,
       eventId: entry.eventId,
       driverPersonId: entry.driverPersonId,
+      acceptanceStatus: entry.acceptanceStatus,
       entryFeeCents: entry.entryFeeCents,
       deletedAt: entry.deletedAt
     })
@@ -1211,6 +1243,9 @@ export const patchEntryPaymentAmounts = async (
     throw new Error('ENTRY_DELETED');
   }
   await assertEventStatusAllowed(current.eventId, ['open', 'closed']);
+  if (current.acceptanceStatus !== 'accepted' && (input.paidAmountCents ?? 0) > 0) {
+    throw new Error('PRE_ACCEPTANCE_PAYMENT_NOT_ALLOWED');
+  }
 
   const now = new Date();
   const invoiceRows = await db
@@ -1231,7 +1266,7 @@ export const patchEntryPaymentAmounts = async (
       .values({
         eventId: current.eventId,
         driverPersonId: current.driverPersonId,
-        totalCents: current.entryFeeCents ?? 0,
+        totalCents: 0,
         pricingSnapshot: {
           source: 'entry_payment_amounts_patch',
           entryId: current.id,
@@ -1253,12 +1288,6 @@ export const patchEntryPaymentAmounts = async (
     currentInvoice = createdInvoice;
   }
 
-  const nextTotalCents = input.totalCents ?? currentInvoice.totalCents ?? 0;
-  const nextPaidAmountCents = input.paidAmountCents ?? currentInvoice.paidAmountCents ?? 0;
-  if (nextPaidAmountCents > nextTotalCents) {
-    throw new Error('PAID_AMOUNT_EXCEEDS_TOTAL');
-  }
-
   const existingSnapshot =
     currentInvoice.pricingSnapshot && typeof currentInvoice.pricingSnapshot === 'object' && !Array.isArray(currentInvoice.pricingSnapshot)
       ? (currentInvoice.pricingSnapshot as Record<string, unknown>)
@@ -1271,11 +1300,56 @@ export const patchEntryPaymentAmounts = async (
     existingManualOverrides[current.id] = input.totalCents;
   }
 
+  await db
+    .update(invoice)
+    .set({
+      pricingSnapshot: {
+        ...existingSnapshot,
+        manualOverrides: existingManualOverrides
+      },
+      recordedBy: actorUserId,
+      updatedAt: now
+    })
+    .where(eq(invoice.id, currentInvoice.id));
+
+  await recalculateInvoices(
+    current.eventId,
+    {
+      driverPersonId: current.driverPersonId
+    },
+    actorUserId
+  );
+
+  const recalculatedInvoiceRows = await db
+    .select({
+      id: invoice.id,
+      totalCents: invoice.totalCents,
+      paidAmountCents: invoice.paidAmountCents,
+      pricingSnapshot: invoice.pricingSnapshot,
+      paymentStatus: invoice.paymentStatus
+    })
+    .from(invoice)
+    .where(and(eq(invoice.eventId, current.eventId), eq(invoice.driverPersonId, current.driverPersonId)))
+    .limit(1);
+  const recalculatedInvoice = recalculatedInvoiceRows[0];
+  if (!recalculatedInvoice) {
+    throw new Error('INVOICE_NOT_FOUND');
+  }
+
+  const nextTotalCents = recalculatedInvoice.totalCents ?? 0;
+  const nextPaidAmountCents = input.paidAmountCents ?? recalculatedInvoice.paidAmountCents ?? 0;
+  if (current.acceptanceStatus !== 'accepted' && nextPaidAmountCents > 0) {
+    throw new Error('PRE_ACCEPTANCE_PAYMENT_NOT_ALLOWED');
+  }
+  if (nextPaidAmountCents > nextTotalCents) {
+    throw new Error('PAID_AMOUNT_EXCEEDS_TOTAL');
+  }
+
   if (input.paidAmountCents !== undefined) {
-    await db.delete(invoicePayment).where(eq(invoicePayment.invoiceId, currentInvoice.id));
+    await db.delete(invoicePayment).where(eq(invoicePayment.invoiceId, recalculatedInvoice.id));
     if (nextPaidAmountCents > 0) {
       await db.insert(invoicePayment).values({
-        invoiceId: currentInvoice.id,
+        invoiceId: recalculatedInvoice.id,
         amountCents: nextPaidAmountCents,
         paidAt: now,
         method: 'other',
@@ -1292,18 +1366,13 @@ export const patchEntryPaymentAmounts = async (
   await db
     .update(invoice)
     .set({
-      totalCents: nextTotalCents,
       paidAmountCents: nextPaidAmountCents,
-      pricingSnapshot: {
-        ...existingSnapshot,
-        manualOverrides: existingManualOverrides
-      },
       paymentStatus,
       paidAt: paymentStatus === 'paid' ? now : null,
       recordedBy: actorUserId,
       updatedAt: now
     })
-    .where(eq(invoice.id, currentInvoice.id));
+    .where(eq(invoice.id, recalculatedInvoice.id));
 
   await writeAuditLog(db as never, {
     eventId: current.eventId,
@@ -1312,7 +1381,7 @@ export const patchEntryPaymentAmounts = async (
     entityType: 'entry',
     entityId: entryId,
     payload: {
-      invoiceId: currentInvoice.id,
+      invoiceId: recalculatedInvoice.id,
       totalCents: nextTotalCents,
       paidAmountCents: nextPaidAmountCents,
       amountOpenCents,

@@ -1,10 +1,18 @@
 type PricingSnapshotLine = {
   entryId?: unknown;
+  classId?: unknown;
+  baseFeeCents?: unknown;
+  lateFeeCents?: unknown;
+  secondVehicleDiscountCents?: unknown;
+  manualOverrideCents?: unknown;
   lineTotalCents?: unknown;
+  submittedAt?: unknown;
+  acceptanceStatus?: unknown;
 };
 
 type PricingSnapshot = {
   lines?: unknown;
+  forecastLines?: unknown;
   manualOverrides?: unknown;
 };
 
@@ -24,6 +32,19 @@ export const getEntryLineTotalCents = (pricingSnapshot: unknown, entryId: string
     return null;
   }
   const line = asLines(snapshot.lines).find((item) => item.entryId === entryId);
+  if (!line) {
+    return null;
+  }
+  const cents = Number(line.lineTotalCents);
+  return Number.isFinite(cents) ? cents : null;
+};
+
+export const getForecastEntryLineTotalCents = (pricingSnapshot: unknown, entryId: string): number | null => {
+  const snapshot = asRecord(pricingSnapshot) as PricingSnapshot | null;
+  if (!snapshot) {
+    return null;
+  }
+  const line = asLines(snapshot.forecastLines).find((item) => item.entryId === entryId);
   if (!line) {
     return null;
   }

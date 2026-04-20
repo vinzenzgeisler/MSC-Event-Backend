@@ -2197,6 +2197,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'ENTRY_DELETED') {
         return errorJson(409, 'Entry is deleted', undefined, 'ENTRY_DELETED');
       }
+      if (error instanceof Error && error.message === 'PRE_ACCEPTANCE_PAYMENT_NOT_ALLOWED') {
+        return errorJson(409, 'Payment can only be confirmed after acceptance', undefined, 'PRE_ACCEPTANCE_PAYMENT_NOT_ALLOWED');
+      }
       if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
         return errorJson(409, 'Event is read-only');
       }
@@ -2233,6 +2236,21 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           undefined,
           'VALIDATION_ERROR',
           [{ field: 'paidAmountCents', code: 'invalid_range', message: 'paidAmountCents must not exceed totalCents' }]
+        );
+      }
+      if (error instanceof Error && error.message === 'PRE_ACCEPTANCE_PAYMENT_NOT_ALLOWED') {
+        return errorJson(
+          400,
+          'Validation failed',
+          undefined,
+          'VALIDATION_ERROR',
+          [
+            {
+              field: 'paidAmountCents',
+              code: 'not_allowed',
+              message: 'paidAmountCents may only be set for accepted entries'
+            }
+          ]
         );
       }
       if (error instanceof Error && error.message === 'ENTRY_DELETED') {

@@ -52,8 +52,9 @@ export const getDashboardSummary = async (eventId: string) => {
       .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`)),
     db
       .select({ value: sql<number>`count(*)::int` })
-      .from(invoice)
-      .where(and(eq(invoice.eventId, eventId), eq(invoice.paymentStatus, 'due'))),
+      .from(entry)
+      .innerJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
+      .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`, eq(entry.acceptanceStatus, 'accepted'), eq(invoice.paymentStatus, 'due'))),
     db
       .select({ value: sql<number>`count(*)::int` })
       .from(entry)
@@ -101,6 +102,7 @@ export const getDashboardSummary = async (eventId: string) => {
       .limit(RECENT_ENTRIES_LIMIT),
     db
       .select({
+        driverPersonId: entry.driverPersonId,
         driverFirstName: person.firstName,
         driverLastName: person.lastName,
         className: eventClass.name,
@@ -113,17 +115,28 @@ export const getDashboardSummary = async (eventId: string) => {
   ]);
 
   const now = new Date();
-  const ageRows = driverAgeRows
-    .map((row) => ({
-      age: toAgeYears(row.birthdate, now),
+  const ageRowsByDriver = new Map<string, { age: number; driverLabel: string; className: string }>();
+  driverAgeRows.forEach((row) => {
+    if (ageRowsByDriver.has(row.driverPersonId)) {
+      return;
+    }
+    const age = toAgeYears(row.birthdate, now);
+    if (age === null) {
+      return;
+    }
+    ageRowsByDriver.set(row.driverPersonId, {
+      age,
       driverLabel: `${row.driverFirstName} ${row.driverLastName}`.trim(),
       className: row.className
-    }))
-    .filter((row): row is { age: number; driverLabel: string; className: string } => row.age !== null);
+    });
+  });
+  const ageRows = Array.from(ageRowsByDriver.values());
 
   const sortedAgeRows = [...ageRows].sort((a, b) => a.age - b.age);
   const youngestDriverAge = sortedAgeRows.length > 0 ? sortedAgeRows[0].age : null;
+  const youngestRow = sortedAgeRows.length > 0 ? sortedAgeRows[0] : null;
   const oldestRow = sortedAgeRows.length > 0 ? sortedAgeRows[sortedAgeRows.length - 1] : null;
+  const youngestDriverLabel = youngestRow ? `${youngestRow.driverLabel} (${youngestRow.className})` : '';
   const oldestDriverAge = oldestRow ? oldestRow.age : null;
   const oldestDriverLabel = oldestRow ? `${oldestRow.driverLabel} (${oldestRow.className})` : '';
 
@@ -150,6 +163,7 @@ export const getDashboardSummary = async (eventId: string) => {
         oldestDriverAge,
         oldestDriverLabel,
         youngestDriverAge,
+        youngestDriverLabel,
         medianDriverAge
       }
     },

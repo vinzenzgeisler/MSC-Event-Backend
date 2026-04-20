@@ -5,6 +5,7 @@ import { getDb } from '../db/client';
 import { classPricingRule, entry, event, eventClass, eventPricingRule, invoice, invoicePayment } from '../db/schema';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { deriveInvoicePaymentStatus } from '../domain/invoiceStatus';
+import { listManualEntryTotalOverrides } from '../domain/pricingSnapshot';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const classRuleSchema = z.object({
@@ -82,6 +83,7 @@ const buildEmptySnapshot = (earlyDeadline: Date, lateFeeCents: number, secondVeh
   earlyDeadline: earlyDeadline.toISOString(),
   lateFeeCents,
   secondVehicleDiscountCents,
+  manualOverrides: {},
   lines: [],
   totalCents: 0
 });
@@ -191,7 +193,8 @@ export const buildPricingSnapshot = (
   classFeeByClassId: Map<string, number>,
   earlyDeadline: Date,
   lateFeeCents: number,
-  secondVehicleDiscountCents: number
+  secondVehicleDiscountCents: number,
+  manualOverridesByDriver: Map<string, Map<string, number>> = new Map()
 ) => {
   const byDriver = new Map<string, EntryForPricing[]>();
   for (const row of rows) {
@@ -201,18 +204,27 @@ export const buildPricingSnapshot = (
   }
 
   return Array.from(byDriver.entries()).map(([driverPersonId, entries]) => {
+    const driverManualOverrides = manualOverridesByDriver.get(driverPersonId) ?? new Map<string, number>();
+    const snapshotManualOverrides = Object.fromEntries(
+      entries
+        .map((current) => [current.entryId, driverManualOverrides.get(current.entryId)] as const)
+        .filter((item): item is readonly [string, number] => typeof item[1] === 'number')
+    );
     const chargeableEntries = entries.filter((current) => current.acceptanceStatus === 'accepted');
     const lines = chargeableEntries.map((current, idx) => {
       const baseFee = classFeeByClassId.get(current.classId) ?? 0;
       const lateFee = current.createdAt > earlyDeadline ? lateFeeCents : 0;
       const secondVehicleDiscount = idx >= 1 ? secondVehicleDiscountCents : 0;
-      const total = baseFee + lateFee - secondVehicleDiscount;
+      const computedTotal = baseFee + lateFee - secondVehicleDiscount;
+      const manualOverrideCents = driverManualOverrides.get(current.entryId);
+      const total = manualOverrideCents ?? computedTotal;
       return {
         entryId: current.entryId,
         classId: current.classId,
         baseFeeCents: baseFee,
         lateFeeCents: lateFee,
         secondVehicleDiscountCents: secondVehicleDiscount,
+        manualOverrideCents: manualOverrideCents ?? null,
         lineTotalCents: total < 0 ? 0 : total,
         submittedAt: current.createdAt.toISOString()
       };
@@ -224,6 +236,7 @@ export const buildPricingSnapshot = (
       totalCents,
       snapshot: {
         ...buildEmptySnapshot(earlyDeadline, lateFeeCents, secondVehicleDiscountCents),
+        manualOverrides: snapshotManualOverrides,
         lines,
         totalCents
       }
@@ -262,13 +275,25 @@ export const recalculateInvoices = async (eventId: string, input: RecalcInput, a
     driverPersonId = invoiceRows[0].driverPersonId;
   }
 
+  const existingInvoices = await db
+    .select({
+      driverPersonId: invoice.driverPersonId,
+      pricingSnapshot: invoice.pricingSnapshot
+    })
+    .from(invoice)
+    .where(driverPersonId ? and(eq(invoice.eventId, eventId), eq(invoice.driverPersonId, driverPersonId)) : eq(invoice.eventId, eventId));
+  const manualOverridesByDriver = new Map(
+    existingInvoices.map((row) => [row.driverPersonId, listManualEntryTotalOverrides(row.pricingSnapshot)])
+  );
+
   const pricingRows = await loadPricingInputs(eventId, driverPersonId);
   const computed = buildPricingSnapshot(
     pricingRows,
     classFeeByClassId,
     rules.earlyDeadline,
     rules.lateFeeCents,
-    rules.secondVehicleDiscountCents
+    rules.secondVehicleDiscountCents,
+    manualOverridesByDriver
   );
   const normalizedComputed =
     driverPersonId && computed.length === 0
@@ -276,7 +301,14 @@ export const recalculateInvoices = async (eventId: string, input: RecalcInput, a
           {
             driverPersonId,
             totalCents: 0,
-            snapshot: buildEmptySnapshot(rules.earlyDeadline, rules.lateFeeCents, rules.secondVehicleDiscountCents)
+            snapshot: {
+              ...buildEmptySnapshot(rules.earlyDeadline, rules.lateFeeCents, rules.secondVehicleDiscountCents),
+              manualOverrides: Object.fromEntries(
+                Array.from(manualOverridesByDriver.get(driverPersonId)?.entries() ?? []).filter(
+                  (item): item is [string, number] => typeof item[1] === 'number'
+                )
+              )
+            }
           }
         ]
       : computed;

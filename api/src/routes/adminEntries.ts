@@ -2,10 +2,24 @@ import { and, asc, desc, eq, ilike, inArray, or, sql, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { auditLog, consentEvidence, document, entry, eventClass, invoice, invoicePayment, person, registrationGroup, vehicle } from '../db/schema';
+import {
+  auditLog,
+  classPricingRule,
+  consentEvidence,
+  document,
+  entry,
+  eventClass,
+  eventPricingRule,
+  invoice,
+  invoicePayment,
+  person,
+  registrationGroup,
+  vehicle
+} from '../db/schema';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { deriveInvoicePaymentStatus } from '../domain/invoiceStatus';
+import { getEntryLineTotalCents, getManualEntryTotalOverrideCents } from '../domain/pricingSnapshot';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { decodeCursor, encodeCursor, parseListQuery } from '../http/pagination';
 import { recalculateInvoices } from './adminFinance';
@@ -388,6 +402,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       vehicleHistory: vehicle.vehicleHistory,
       vehicleImageS3Key: vehicle.imageS3Key,
       invoiceTotalCents: invoice.totalCents,
+      invoicePricingSnapshot: invoice.pricingSnapshot,
       invoicePaidAmountCents: invoice.paidAmountCents,
       invoicePaymentStatus: invoice.paymentStatus
     })
@@ -481,17 +496,58 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .from(document)
     .where(eq(document.entryId, entryId));
 
-  const relatedRows = await db
+  const driverEntryRows = await db
     .select({
-      id: entry.id
+      id: entry.id,
+      createdAt: entry.createdAt
     })
     .from(entry)
-    .where(and(eq(entry.eventId, current.eventId), eq(entry.driverPersonId, current.driverPersonId)));
+    .where(and(eq(entry.eventId, current.eventId), eq(entry.driverPersonId, current.driverPersonId), sql`${entry.deletedAt} is null`))
+    .orderBy(asc(entry.createdAt), asc(entry.id));
 
-  const relatedEntryIds = relatedRows.map((row) => row.id).filter((id) => id !== entryId);
+  const relatedEntryIds = driverEntryRows.map((row) => row.id).filter((id) => id !== entryId);
 
-  const totalCents = current.invoiceTotalCents ?? 0;
-  const paidAmountCents = current.invoicePaidAmountCents ?? 0;
+  const pricingRuleRows = await db
+    .select({
+      earlyDeadline: eventPricingRule.earlyDeadline,
+      lateFeeCents: eventPricingRule.lateFeeCents,
+      secondVehicleDiscountCents: eventPricingRule.secondVehicleDiscountCents,
+      baseFeeCents: classPricingRule.baseFeeCents
+    })
+    .from(eventPricingRule)
+    .leftJoin(
+      classPricingRule,
+      and(eq(classPricingRule.eventId, current.eventId), eq(classPricingRule.classId, current.classId))
+    )
+    .where(eq(eventPricingRule.eventId, current.eventId))
+    .limit(1);
+  const pricingRule = pricingRuleRows[0] ?? null;
+
+  const entryOrderIndex = driverEntryRows.findIndex((row) => row.id === entryId);
+  const provisionalTotalCents = (() => {
+    if (!pricingRule) {
+      return null;
+    }
+    const baseFeeCents = pricingRule.baseFeeCents ?? 0;
+    const lateFeeCents = current.createdAt > pricingRule.earlyDeadline ? pricingRule.lateFeeCents : 0;
+    const secondVehicleDiscountCents = entryOrderIndex > 0 ? pricingRule.secondVehicleDiscountCents : 0;
+    return Math.max(0, baseFeeCents + lateFeeCents - secondVehicleDiscountCents);
+  })();
+
+  const focusedInvoiceTotalCents = getEntryLineTotalCents(current.invoicePricingSnapshot, entryId);
+  const manualOverrideCents = getManualEntryTotalOverrideCents(current.invoicePricingSnapshot, entryId);
+  const totalCents =
+    focusedInvoiceTotalCents ??
+    manualOverrideCents ??
+    (driverEntryRows.length === 1 && current.invoiceTotalCents !== null ? current.invoiceTotalCents : provisionalTotalCents) ??
+    current.invoiceTotalCents ??
+    0;
+  const paidAmountCents =
+    current.invoicePaymentStatus === 'paid'
+      ? totalCents
+      : driverEntryRows.length === 1
+        ? Math.min(current.invoicePaidAmountCents ?? 0, totalCents)
+        : 0;
   const amountOpenCents = Math.max(0, totalCents - paidAmountCents);
 
   const historyRows = await db
@@ -1161,7 +1217,8 @@ export const patchEntryPaymentAmounts = async (
     .select({
       id: invoice.id,
       totalCents: invoice.totalCents,
-      paidAmountCents: invoice.paidAmountCents
+      paidAmountCents: invoice.paidAmountCents,
+      pricingSnapshot: invoice.pricingSnapshot
     })
     .from(invoice)
     .where(and(eq(invoice.eventId, current.eventId), eq(invoice.driverPersonId, current.driverPersonId)))
@@ -1177,7 +1234,8 @@ export const patchEntryPaymentAmounts = async (
         totalCents: current.entryFeeCents ?? 0,
         pricingSnapshot: {
           source: 'entry_payment_amounts_patch',
-          entryId: current.id
+          entryId: current.id,
+          manualOverrides: input.totalCents === undefined ? {} : { [current.id]: input.totalCents }
         },
         paymentStatus: 'due',
         paidAmountCents: 0,
@@ -1186,7 +1244,8 @@ export const patchEntryPaymentAmounts = async (
       .returning({
         id: invoice.id,
         totalCents: invoice.totalCents,
-        paidAmountCents: invoice.paidAmountCents
+        paidAmountCents: invoice.paidAmountCents,
+        pricingSnapshot: invoice.pricingSnapshot
       });
     if (!createdInvoice) {
       throw new Error('INVOICE_CREATE_FAILED');
@@ -1198,6 +1257,18 @@ export const patchEntryPaymentAmounts = async (
   const nextPaidAmountCents = input.paidAmountCents ?? currentInvoice.paidAmountCents ?? 0;
   if (nextPaidAmountCents > nextTotalCents) {
     throw new Error('PAID_AMOUNT_EXCEEDS_TOTAL');
+  }
+
+  const existingSnapshot =
+    currentInvoice.pricingSnapshot && typeof currentInvoice.pricingSnapshot === 'object' && !Array.isArray(currentInvoice.pricingSnapshot)
+      ? (currentInvoice.pricingSnapshot as Record<string, unknown>)
+      : {};
+  const existingManualOverrides =
+    existingSnapshot.manualOverrides && typeof existingSnapshot.manualOverrides === 'object' && !Array.isArray(existingSnapshot.manualOverrides)
+      ? { ...(existingSnapshot.manualOverrides as Record<string, unknown>) }
+      : {};
+  if (input.totalCents !== undefined) {
+    existingManualOverrides[current.id] = input.totalCents;
   }
 
   if (input.paidAmountCents !== undefined) {
@@ -1223,6 +1294,10 @@ export const patchEntryPaymentAmounts = async (
     .set({
       totalCents: nextTotalCents,
       paidAmountCents: nextPaidAmountCents,
+      pricingSnapshot: {
+        ...existingSnapshot,
+        manualOverrides: existingManualOverrides
+      },
       paymentStatus,
       paidAt: paymentStatus === 'paid' ? now : null,
       recordedBy: actorUserId,

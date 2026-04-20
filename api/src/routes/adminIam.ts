@@ -165,7 +165,7 @@ export const listIamRoles = () => ({
     },
     {
       key: 'editor',
-      description: 'Dashboard and entries read, entry status/check-in/notes write, exports read'
+      description: 'Dashboard and entries read, entry status/check-in/payment/notes write, exports read'
     },
     {
       key: 'viewer',

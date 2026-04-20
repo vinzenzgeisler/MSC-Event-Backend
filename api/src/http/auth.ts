@@ -42,7 +42,15 @@ const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
     'iam.read',
     'iam.write'
   ],
-  editor: ['dashboard.read', 'entries.read', 'entries.status.write', 'entries.checkin.write', 'entries.notes.write', 'exports.read'],
+  editor: [
+    'dashboard.read',
+    'entries.read',
+    'entries.status.write',
+    'entries.checkin.write',
+    'entries.payment.write',
+    'entries.notes.write',
+    'exports.read'
+  ],
   viewer: ['dashboard.read', 'entries.read', 'exports.read']
 };
 

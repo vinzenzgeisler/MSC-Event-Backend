@@ -5,6 +5,7 @@ type PricingSnapshotLine = {
 
 type PricingSnapshot = {
   lines?: unknown;
+  manualOverrides?: unknown;
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
@@ -28,6 +29,34 @@ export const getEntryLineTotalCents = (pricingSnapshot: unknown, entryId: string
   }
   const cents = Number(line.lineTotalCents);
   return Number.isFinite(cents) ? cents : null;
+};
+
+export const getManualEntryTotalOverrideCents = (pricingSnapshot: unknown, entryId: string): number | null => {
+  const snapshot = asRecord(pricingSnapshot) as PricingSnapshot | null;
+  if (!snapshot) {
+    return null;
+  }
+  const overrides = asRecord(snapshot.manualOverrides);
+  if (!overrides) {
+    return null;
+  }
+  const cents = Number(overrides[entryId]);
+  return Number.isFinite(cents) ? cents : null;
+};
+
+export const listManualEntryTotalOverrides = (pricingSnapshot: unknown): Map<string, number> => {
+  const snapshot = asRecord(pricingSnapshot) as PricingSnapshot | null;
+  if (!snapshot) {
+    return new Map();
+  }
+  const overrides = asRecord(snapshot.manualOverrides);
+  if (!overrides) {
+    return new Map();
+  }
+  const entries = Object.entries(overrides)
+    .map(([entryId, value]) => [entryId, Number(value)] as const)
+    .filter(([, cents]) => Number.isFinite(cents));
+  return new Map(entries);
 };
 
 export const sumEntryLineTotalCents = (pricingSnapshot: unknown, entryIds: string[]): number => {

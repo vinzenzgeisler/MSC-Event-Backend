@@ -158,7 +158,6 @@ jobs:
       (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'schedule')
     needs:
-      - validate_common
       - validate_dev
     runs-on: ubuntu-latest
     environment: dev
@@ -242,31 +241,7 @@ jobs:
 
       - name: Run Dev database migrations
         if: env.DEV_PROFILE != 'idle'
-        run: |
-          set -euo pipefail
-          secret_arn="$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_PREFIX}-data-stack" \
-            --region "${AWS_REGION}" \
-            --query "Stacks[0].Outputs[?OutputKey=='DbSecretArn'].OutputValue" \
-            --output text)"
-          if [ -z "${secret_arn}" ] || [ "${secret_arn}" = "None" ]; then
-            echo "DbSecretArn output not found on ${STACK_PREFIX}-data-stack."
-            exit 1
-          fi
-          secret_json="$(aws secretsmanager get-secret-value \
-            --secret-id "${secret_arn}" \
-            --region "${AWS_REGION}" \
-            --query SecretString \
-            --output text)"
-          db_user="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.username||'')))")"
-          db_pass="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.password||'')))")"
-          db_host="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.host||''))")"
-          db_port="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.port||''))")"
-          db_name="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.dbname||''))")"
-          curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-global-bundle.pem
-          export DATABASE_URL="postgres://${db_user}:${db_pass}@${db_host}:${db_port}/${db_name}"
-          export DB_SSL_CA_PATH="/tmp/rds-global-bundle.pem"
-          npm --workspace api run db:migrate
+        run: node scripts/run-stack-db-migrations.js
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
 
@@ -287,7 +262,6 @@ jobs:
   deploy_prod:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
-      - validate_common
       - validate_prod
     runs-on: ubuntu-latest
     environment: prod
@@ -346,31 +320,7 @@ jobs:
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
 
       - name: Run Prod database migrations
-        run: |
-          set -euo pipefail
-          secret_arn="$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_PREFIX}-data-stack" \
-            --region "${AWS_REGION}" \
-            --query "Stacks[0].Outputs[?OutputKey=='DbSecretArn'].OutputValue" \
-            --output text)"
-          if [ -z "${secret_arn}" ] || [ "${secret_arn}" = "None" ]; then
-            echo "DbSecretArn output not found on ${STACK_PREFIX}-data-stack."
-            exit 1
-          fi
-          secret_json="$(aws secretsmanager get-secret-value \
-            --secret-id "${secret_arn}" \
-            --region "${AWS_REGION}" \
-            --query SecretString \
-            --output text)"
-          db_user="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.username||'')))")"
-          db_pass="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(encodeURIComponent(String(s.password||'')))")"
-          db_host="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.host||''))")"
-          db_port="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.port||''))")"
-          db_name="$(printf '%s' "${secret_json}" | node -e "const s=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(String(s.dbname||''))")"
-          curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-global-bundle.pem
-          export DATABASE_URL="postgres://${db_user}:${db_pass}@${db_host}:${db_port}/${db_name}"
-          export DB_SSL_CA_PATH="/tmp/rds-global-bundle.pem"
-          npm --workspace api run db:migrate
+        run: node scripts/run-stack-db-migrations.js
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
 

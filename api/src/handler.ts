@@ -181,6 +181,12 @@ const publicRateLimitedScopes = {
   resendVerification: { scope: 'public_registration_resend_verification', limit: 6, windowSeconds: 3600 }
 } as const;
 
+const VEHICLE_IMAGE_MAX_FILE_SIZE_MB = 15;
+const VEHICLE_IMAGE_MAX_DIMENSION_PIXELS = 6000;
+
+const hasZodTooLargeIssue = (error: ZodError, field: string): boolean =>
+  error.issues.some((issue) => issue.path.length === 1 && issue.path[0] === field && issue.code === 'too_big');
+
 const enforcePublicRequestRateLimit = async (
   event: APIGatewayProxyEventV2,
   config: { scope: string; limit: number; windowSeconds: number },
@@ -543,6 +549,14 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, ...created });
     } catch (error) {
       if (error instanceof ZodError) {
+        if (hasZodTooLargeIssue(error, 'fileSizeBytes')) {
+          return errorJson(
+            422,
+            `Uploaded image exceeds the maximum allowed size of ${VEHICLE_IMAGE_MAX_FILE_SIZE_MB} MB`,
+            undefined,
+            'UPLOAD_FILE_TOO_LARGE'
+          );
+        }
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
       if (isInvalidJson(error)) {
@@ -593,7 +607,20 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(409, 'Uploaded object not found', undefined, 'UPLOAD_OBJECT_MISSING');
       }
       if (error instanceof Error && error.message === 'UPLOAD_FILE_TOO_LARGE') {
-        return errorJson(422, 'Uploaded image exceeds the maximum allowed size', undefined, 'UPLOAD_FILE_TOO_LARGE');
+        return errorJson(
+          422,
+          `Uploaded image exceeds the maximum allowed size of ${VEHICLE_IMAGE_MAX_FILE_SIZE_MB} MB`,
+          undefined,
+          'UPLOAD_FILE_TOO_LARGE'
+        );
+      }
+      if (error instanceof Error && error.message === 'UPLOAD_DIMENSIONS_TOO_LARGE') {
+        return errorJson(
+          422,
+          `Uploaded image is too large in dimensions (max ${VEHICLE_IMAGE_MAX_DIMENSION_PIXELS} × ${VEHICLE_IMAGE_MAX_DIMENSION_PIXELS} px)`,
+          undefined,
+          'UPLOAD_DIMENSIONS_TOO_LARGE'
+        );
       }
       if (error instanceof Error && error.message === 'UPLOAD_CONTENT_INVALID') {
         return errorJson(422, 'Uploaded file is not a valid supported image', undefined, 'UPLOAD_CONTENT_INVALID');

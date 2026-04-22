@@ -375,7 +375,7 @@ const uploadInitSchema = z.object({
   eventId: z.string().uuid(),
   contentType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
   fileName: z.string().min(1).max(255).optional(),
-  fileSizeBytes: z.number().int().min(1).max(8 * 1024 * 1024)
+  fileSizeBytes: z.number().int().min(1).max(15 * 1024 * 1024)
 });
 
 const uploadFinalizeSchema = z.object({
@@ -398,7 +398,7 @@ type CreateBatchWithoutIdempotencyInput = z.infer<typeof createBatchWithoutIdemp
 type CreateBatchInternalInput = z.infer<typeof createBatchInternalSchema>;
 type BatchResponse = z.infer<typeof batchResponseSchema>;
 
-const VEHICLE_IMAGE_MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024;
+const VEHICLE_IMAGE_MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
 const VEHICLE_IMAGE_MAX_DIMENSION_PIXELS = 6000;
 
 const hashUploadToken = (token: string): string => createHash('sha256').update(token).digest('hex');
@@ -1494,18 +1494,24 @@ export const finalizeVehicleImageUpload = async (input: UploadFinalizeInput) => 
   }
 
   const validatedImage = validateImageBuffer(objectBuffer, VEHICLE_IMAGE_MAX_FILE_SIZE_BYTES, VEHICLE_IMAGE_MAX_DIMENSION_PIXELS);
-  if (!validatedImage) {
+  if (!validatedImage.ok) {
+    if (validatedImage.reason === 'file_too_large') {
+      throw new Error('UPLOAD_FILE_TOO_LARGE');
+    }
+    if (validatedImage.reason === 'dimensions_too_large') {
+      throw new Error('UPLOAD_DIMENSIONS_TOO_LARGE');
+    }
     throw new Error('UPLOAD_CONTENT_INVALID');
   }
-  if (validatedImage.contentType !== upload.contentType) {
+  if (validatedImage.image.contentType !== upload.contentType) {
     throw new Error('UPLOAD_CONTENT_TYPE_MISMATCH');
   }
 
   const [updated] = await db
     .update(vehicleImageUpload)
     .set({
-      contentType: validatedImage.contentType,
-      fileSizeBytes: validatedImage.byteLength,
+      contentType: validatedImage.image.contentType,
+      fileSizeBytes: validatedImage.image.byteLength,
       status: 'finalized',
       finalizedAt: now,
       updatedAt: now

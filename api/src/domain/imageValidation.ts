@@ -10,6 +10,18 @@ export type ValidatedImageInfo = {
   byteLength: number;
 };
 
+export type ImageValidationFailureReason = 'file_too_large' | 'dimensions_too_large' | 'invalid_image' | 'unsupported_type';
+
+export type ImageValidationResult =
+  | {
+      ok: true;
+      image: ValidatedImageInfo;
+    }
+  | {
+      ok: false;
+      reason: ImageValidationFailureReason;
+    };
+
 const isPng = (buffer: Buffer): boolean =>
   buffer.length >= 24 &&
   buffer[0] === 0x89 &&
@@ -136,58 +148,70 @@ export const validateImageBuffer = (
   buffer: Buffer,
   maxFileSizeBytes: number,
   maxDimensionPixels: number
-): ValidatedImageInfo | null => {
-  if (buffer.length === 0 || buffer.length > maxFileSizeBytes) {
-    return null;
+): ImageValidationResult => {
+  if (buffer.length === 0) {
+    return { ok: false, reason: 'invalid_image' };
+  }
+  if (buffer.length > maxFileSizeBytes) {
+    return { ok: false, reason: 'file_too_large' };
   }
 
   if (isPng(buffer)) {
     const dimensions = readPngDimensions(buffer);
     if (!dimensions || dimensions.width < 1 || dimensions.height < 1) {
-      return null;
+      return { ok: false, reason: 'invalid_image' };
     }
     if (dimensions.width > maxDimensionPixels || dimensions.height > maxDimensionPixels) {
-      return null;
+      return { ok: false, reason: 'dimensions_too_large' };
     }
     return {
-      contentType: 'image/png',
-      width: dimensions.width,
-      height: dimensions.height,
-      byteLength: buffer.length
+      ok: true,
+      image: {
+        contentType: 'image/png',
+        width: dimensions.width,
+        height: dimensions.height,
+        byteLength: buffer.length
+      }
     };
   }
 
   if (isJpeg(buffer)) {
     const dimensions = readJpegDimensions(buffer);
     if (!dimensions || dimensions.width < 1 || dimensions.height < 1) {
-      return null;
+      return { ok: false, reason: 'invalid_image' };
     }
     if (dimensions.width > maxDimensionPixels || dimensions.height > maxDimensionPixels) {
-      return null;
+      return { ok: false, reason: 'dimensions_too_large' };
     }
     return {
-      contentType: 'image/jpeg',
-      width: dimensions.width,
-      height: dimensions.height,
-      byteLength: buffer.length
+      ok: true,
+      image: {
+        contentType: 'image/jpeg',
+        width: dimensions.width,
+        height: dimensions.height,
+        byteLength: buffer.length
+      }
     };
   }
 
   if (isWebp(buffer)) {
     const dimensions = readWebpDimensions(buffer);
     if (!dimensions || dimensions.width < 1 || dimensions.height < 1) {
-      return null;
+      return { ok: false, reason: 'invalid_image' };
     }
     if (dimensions.width > maxDimensionPixels || dimensions.height > maxDimensionPixels) {
-      return null;
+      return { ok: false, reason: 'dimensions_too_large' };
     }
     return {
-      contentType: 'image/webp',
-      width: dimensions.width,
-      height: dimensions.height,
-      byteLength: buffer.length
+      ok: true,
+      image: {
+        contentType: 'image/webp',
+        width: dimensions.width,
+        height: dimensions.height,
+        byteLength: buffer.length
+      }
     };
   }
 
-  return null;
+  return { ok: false, reason: 'unsupported_type' };
 };

@@ -19,30 +19,48 @@ const webp1x1 = Buffer.from(
   'hex'
 );
 
-assert.equal(validateImageBuffer(Buffer.from('not-an-image'), 8 * 1024 * 1024, 6000), null);
+assert.deepEqual(validateImageBuffer(Buffer.from('not-an-image'), 8 * 1024 * 1024, 6000), {
+  ok: false,
+  reason: 'unsupported_type'
+});
 
 assert.deepEqual(validateImageBuffer(png1x1, 8 * 1024 * 1024, 6000), {
-  contentType: 'image/png',
-  width: 1,
-  height: 1,
-  byteLength: png1x1.length
+  ok: true,
+  image: {
+    contentType: 'image/png',
+    width: 1,
+    height: 1,
+    byteLength: png1x1.length
+  }
 });
 
 assert.deepEqual(validateImageBuffer(jpeg1x1, 8 * 1024 * 1024, 6000), {
-  contentType: 'image/jpeg',
-  width: 1,
-  height: 1,
-  byteLength: jpeg1x1.length
+  ok: true,
+  image: {
+    contentType: 'image/jpeg',
+    width: 1,
+    height: 1,
+    byteLength: jpeg1x1.length
+  }
 });
 
 assert.deepEqual(validateImageBuffer(webp1x1, 8 * 1024 * 1024, 6000), {
-  contentType: 'image/webp',
-  width: 1,
-  height: 1,
-  byteLength: webp1x1.length
+  ok: true,
+  image: {
+    contentType: 'image/webp',
+    width: 1,
+    height: 1,
+    byteLength: webp1x1.length
+  }
 });
 
-assert.equal(validateImageBuffer(png1x1, png1x1.length - 1, 6000), null);
-assert.equal(validateImageBuffer(png1x1, 8 * 1024 * 1024, 0), null);
+assert.deepEqual(validateImageBuffer(png1x1, png1x1.length - 1, 6000), {
+  ok: false,
+  reason: 'file_too_large'
+});
+assert.deepEqual(validateImageBuffer(png1x1, 8 * 1024 * 1024, 0), {
+  ok: false,
+  reason: 'dimensions_too_large'
+});
 
 console.log('image-validation.test.js: ok');

@@ -199,6 +199,11 @@ def handler(event, context):
       exportName: `${props.config.prefix}-db-endpoint`
     });
 
+    new CfnOutput(this, 'DbPort', {
+      value: this.dbInstance.instanceEndpoint.port.toString(),
+      exportName: `${props.config.prefix}-db-port`
+    });
+
     new CfnOutput(this, 'DbInstanceIdentifier', {
       value: this.dbInstance.instanceIdentifier,
       exportName: `${props.config.prefix}-db-instance-identifier`

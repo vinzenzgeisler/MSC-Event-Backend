@@ -79,13 +79,24 @@ const readSecret = (secretArn, region) => {
   return secret;
 };
 
+const normalizeValue = (value) => {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  return '';
+};
+
 const getSecretField = (secret, key, fallback) => {
-  const value = typeof secret[key] === 'string' ? secret[key].trim() : '';
+  const value = normalizeValue(secret[key]);
   if (value) {
     return value;
   }
-  if (typeof fallback === 'string' && fallback.trim()) {
-    return fallback.trim();
+  const fallbackValue = normalizeValue(fallback);
+  if (fallbackValue) {
+    return fallbackValue;
   }
   throw new Error(`Database secret field ${key} is missing.`);
 };
@@ -171,6 +182,8 @@ const main = async () => {
   const outputs = readStackOutputs(dataStackName, region);
   const secretArn = getOutput(outputs, 'DbSecretArn');
   const dbName = getOutput(outputs, 'DbName');
+  const dbEndpoint = getOutput(outputs, 'DbEndpoint');
+  const dbPortFromStack = getOutput(outputs, 'DbPort');
   const dbInstanceIdentifier = getOutput(outputs, 'DbInstanceIdentifier');
 
   ensureDbAvailable(dbInstanceIdentifier, region);
@@ -178,8 +191,8 @@ const main = async () => {
   const secret = readSecret(secretArn, region);
   const dbUser = encodeURIComponent(getSecretField(secret, 'username'));
   const dbPass = encodeURIComponent(getSecretField(secret, 'password'));
-  const dbHost = getSecretField(secret, 'host');
-  const dbPort = getSecretField(secret, 'port');
+  const dbHost = getSecretField(secret, 'host', dbEndpoint);
+  const dbPort = getSecretField(secret, 'port', dbPortFromStack);
   const resolvedDbName = getSecretField(secret, 'dbname', dbName);
 
   const caPath = path.join(os.tmpdir(), 'rds-global-bundle.pem');

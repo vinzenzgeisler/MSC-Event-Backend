@@ -444,6 +444,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/dashboard/driver-locations',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/db/ping',
       methods: [apigwv2.HttpMethod.GET],
       integration,

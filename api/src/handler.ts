@@ -123,7 +123,12 @@ import {
   validateQueueMailInput,
   validateReminderInput
 } from './routes/adminMail';
-import { getDashboardSummary, validateDashboardSummaryQuery } from './routes/adminDashboard';
+import {
+  getDashboardDriverLocations,
+  getDashboardSummary,
+  validateDashboardDriverLocationsQuery,
+  validateDashboardSummaryQuery
+} from './routes/adminDashboard';
 import {
   createTechCheckBatchDocument,
   createTechCheckDocument,
@@ -746,6 +751,27 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(404, 'Event not found');
       }
       return errorJson(500, 'Get dashboard summary failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/dashboard/driver-locations') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'dashboard.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const query = validateDashboardDriverLocationsQuery(event.queryStringParameters ?? {});
+      const result = await getDashboardDriverLocations(query.eventId);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      return errorJson(500, 'Get dashboard driver locations failed');
     }
   }
 

@@ -892,6 +892,15 @@
                         "paymentsDueTotal": {
                           "type": "integer"
                         },
+                        "paymentsPaidTotal": {
+                          "type": "integer"
+                        },
+                        "paymentRelevantTotal": {
+                          "type": "integer"
+                        },
+                        "entriesLast7DaysTotal": {
+                          "type": "integer"
+                        },
                         "checkinPendingTotal": {
                           "type": "integer"
                         },
@@ -937,6 +946,9 @@
                       "required": [
                         "entriesTotal",
                         "paymentsDueTotal",
+                        "paymentsPaidTotal",
+                        "paymentRelevantTotal",
+                        "entriesLast7DaysTotal",
                         "checkinPendingTotal",
                         "mailFailedTotal",
                         "mailQueuedTotal",
@@ -995,13 +1007,33 @@
                           "createdAt"
                         ]
                       }
+                    },
+                    "dailyActivity": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "count": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "count"
+                        ]
+                      }
                     }
                   },
                   "required": [
                     "ok",
                     "summary",
                     "classDistribution",
-                    "recentEntries"
+                    "recentEntries",
+                    "dailyActivity"
                   ]
                 }
               }
@@ -1049,6 +1081,196 @@
           },
           "409": {
             "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/admin/dashboard/driver-locations": {
+      "get": {
+        "operationId": "get_admin_dashboard_driver_locations",
+        "tags": [
+          "admin"
+        ],
+        "description": "Returns resource-light driver origin map data for active, non-deleted entries. Locations are grouped by normalized country/zip/city and only include coordinates already present in the server-side geo cache.",
+        "responses": {
+          "200": {
+            "description": "Dashboard driver origin locations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "locations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "locationKey": {
+                            "type": "string"
+                          },
+                          "country": {
+                            "type": "string"
+                          },
+                          "zip": {
+                            "type": "string"
+                          },
+                          "city": {
+                            "type": "string"
+                          },
+                          "lat": {
+                            "type": "number"
+                          },
+                          "lng": {
+                            "type": "number"
+                          },
+                          "driverCount": {
+                            "type": "integer"
+                          },
+                          "entryCount": {
+                            "type": "integer"
+                          },
+                          "driversPreview": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "entryId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                "driverName": {
+                                  "type": "string"
+                                },
+                                "className": {
+                                  "type": "string"
+                                },
+                                "startNumber": {
+                                  "type": "string"
+                                },
+                                "vehicleLabel": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "entryId",
+                                "driverName",
+                                "className",
+                                "startNumber",
+                                "vehicleLabel"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "locationKey",
+                          "country",
+                          "zip",
+                          "city",
+                          "lat",
+                          "lng",
+                          "driverCount",
+                          "entryCount",
+                          "driversPreview"
+                        ]
+                      }
+                    },
+                    "totalLocations": {
+                      "type": "integer"
+                    },
+                    "totalDrivers": {
+                      "type": "integer"
+                    },
+                    "missingLocationsTotal": {
+                      "type": "integer"
+                    },
+                    "missingEntriesTotal": {
+                      "type": "integer"
+                    },
+                    "maxPoints": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "locations",
+                    "totalLocations",
+                    "totalDrivers",
+                    "missingLocationsTotal",
+                    "missingEntriesTotal",
+                    "maxPoints"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {

@@ -128,6 +128,25 @@ export const person = pgTable(
   })
 );
 
+export const geoLocationCache = pgTable(
+  'geo_location_cache',
+  {
+    locationKey: text('location_key').primaryKey(),
+    country: text('country'),
+    zip: text('zip'),
+    city: text('city'),
+    lat: text('lat').notNull(),
+    lng: text('lng').notNull(),
+    source: text('source').notNull().default('manual'),
+    status: text('status').notNull().default('resolved'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    statusCheck: check('geo_location_cache_status_check', sql`${table.status} in ('resolved', 'disabled')`),
+    countryCityIndex: index('geo_location_cache_country_city_idx').on(table.country, table.city)
+  })
+);
+
 export const vehicle = pgTable(
   'vehicle',
   {

@@ -8,8 +8,6 @@ const dashboardSummaryQuerySchema = z.object({
 });
 
 const RECENT_ENTRIES_LIMIT = 10;
-const DRIVER_LOCATION_MAX_POINTS = 250;
-const DRIVER_LOCATION_PREVIEW_LIMIT = 5;
 
 const toAgeYears = (birthdate: Date | string | null, referenceDate: Date): number | null => {
   if (!birthdate) {
@@ -266,6 +264,8 @@ export const getDashboardDriverLocations = async (eventId: string) => {
       city: person.city,
       className: eventClass.name,
       startNumber: entry.startNumberNorm,
+      acceptanceStatus: entry.acceptanceStatus,
+      registrationStatus: entry.registrationStatus,
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleYear: vehicle.year,
@@ -294,13 +294,20 @@ export const getDashboardDriverLocations = async (eventId: string) => {
           className: string;
           startNumber: string;
           vehicleLabel: string;
+          acceptanceStatus: string;
+          registrationStatus: string;
         }
       >;
     }
   >();
+  const allDriverIds = new Set<string>();
+  const missingDriverIds = new Set<string>();
 
   for (const row of rows) {
+    allDriverIds.add(row.driverPersonId);
+
     if (!hasUsableLocation(row)) {
+      missingDriverIds.add(row.driverPersonId);
       continue;
     }
 
@@ -323,7 +330,9 @@ export const getDashboardDriverLocations = async (eventId: string) => {
         driverName: `${row.driverFirstName} ${row.driverLastName}`.trim() || 'Fahrer',
         className: row.className,
         startNumber: row.startNumber ?? '-',
-        vehicleLabel: vehicleLabelFromParts(row)
+        vehicleLabel: vehicleLabelFromParts(row),
+        acceptanceStatus: row.acceptanceStatus,
+        registrationStatus: row.registrationStatus
       });
     }
     groups.set(locationKey, existing);
@@ -345,7 +354,6 @@ export const getDashboardDriverLocations = async (eventId: string) => {
   const cacheByKey = new Map(cacheRows.map((row) => [row.locationKey, row]));
 
   let missingLocationsTotal = 0;
-  let missingEntriesTotal = 0;
   const locations = Array.from(groups.values())
     .map((group) => {
       const cached = cacheByKey.get(group.locationKey);
@@ -355,7 +363,7 @@ export const getDashboardDriverLocations = async (eventId: string) => {
 
       if (lat === null || lng === null) {
         missingLocationsTotal += 1;
-        missingEntriesTotal += driverCount;
+        group.drivers.forEach((_, driverPersonId) => missingDriverIds.add(driverPersonId));
         return null;
       }
 
@@ -368,28 +376,27 @@ export const getDashboardDriverLocations = async (eventId: string) => {
         lng,
         driverCount,
         entryCount: group.entryCount,
-        driversPreview: Array.from(group.drivers.values())
-          .slice(0, DRIVER_LOCATION_PREVIEW_LIMIT)
-          .map((driver) => ({
-            entryId: driver.entryId,
-            driverName: driver.driverName,
-            className: driver.className,
-            startNumber: driver.startNumber,
-            vehicleLabel: driver.vehicleLabel
-          }))
+        drivers: Array.from(group.drivers.values()).map((driver) => ({
+          entryId: driver.entryId,
+          driverName: driver.driverName,
+          className: driver.className,
+          startNumber: driver.startNumber,
+          vehicleLabel: driver.vehicleLabel,
+          acceptanceStatus: driver.acceptanceStatus,
+          registrationStatus: driver.registrationStatus
+        }))
       };
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
-    .sort((left, right) => right.driverCount - left.driverCount)
-    .slice(0, DRIVER_LOCATION_MAX_POINTS);
+    .sort((left, right) => right.driverCount - left.driverCount);
 
   return {
     locations,
     totalLocations: groups.size,
-    totalDrivers: Array.from(groups.values()).reduce((sum, group) => sum + group.drivers.size, 0),
+    totalDrivers: allDriverIds.size,
     missingLocationsTotal,
-    missingEntriesTotal,
-    maxPoints: DRIVER_LOCATION_MAX_POINTS
+    missingEntriesTotal: missingDriverIds.size,
+    maxPoints: locations.length
   };
 };
 

@@ -1165,7 +1165,7 @@
                           "entryCount": {
                             "type": "integer"
                           },
-                          "driversPreview": {
+                          "drivers": {
                             "type": "array",
                             "items": {
                               "type": "object",
@@ -1185,6 +1185,22 @@
                                 },
                                 "vehicleLabel": {
                                   "type": "string"
+                                },
+                                "acceptanceStatus": {
+                                  "type": "string",
+                                  "enum": [
+                                    "pending",
+                                    "shortlist",
+                                    "accepted",
+                                    "rejected"
+                                  ]
+                                },
+                                "registrationStatus": {
+                                  "type": "string",
+                                  "enum": [
+                                    "submitted_unverified",
+                                    "submitted_verified"
+                                  ]
                                 }
                               },
                               "required": [
@@ -1192,7 +1208,9 @@
                                 "driverName",
                                 "className",
                                 "startNumber",
-                                "vehicleLabel"
+                                "vehicleLabel",
+                                "acceptanceStatus",
+                                "registrationStatus"
                               ]
                             }
                           }
@@ -1206,7 +1224,7 @@
                           "lng",
                           "driverCount",
                           "entryCount",
-                          "driversPreview"
+                          "drivers"
                         ]
                       }
                     },

@@ -28,7 +28,7 @@ import { PLACEHOLDER_CATALOG, REQUIRED_PLACEHOLDERS_BY_TEMPLATE } from '../mail/
 import { renderMailContract } from '../mail/rendering';
 import { CAMPAIGN_TEMPLATE_KEYS, getTemplateContract, MailRenderOptions } from '../mail/templateContracts';
 import { getAssetObjectMetadata, getPresignedAssetsUploadUrl } from '../docs/storage';
-import { getMailChromeCopy, getProcessTemplateCopy, resolveMailLocale } from '../mail/i18n';
+import { getMailChromeCopy, getProcessTemplateCopy, resolveMailLocale, type SupportedMailLocale } from '../mail/i18n';
 import { getOrCreateEntryConfirmationAttachment } from '../docs/entryConfirmation';
 import { buildEntryConfirmationConfigFallback, overlayEntryConfirmationConfig } from '../domain/entryConfirmationConfig';
 import { buildPaymentReference } from '../domain/paymentReference';
@@ -49,6 +49,7 @@ const DISABLED_LIFECYCLE_EVENTS = new Set<LifecycleInput['eventType']>(['presele
 const MAX_CAMPAIGN_ATTACHMENTS = 3;
 const MAX_ATTACHMENT_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 const MAX_ATTACHMENT_TOTAL_SIZE_BYTES = 15 * 1024 * 1024;
+const mailLocaleSchema = z.enum(['de', 'en', 'cs', 'pl']);
 
 const assertCampaignTemplateAllowed = (templateKey: string) => {
   if (!CAMPAIGN_TEMPLATE_KEYS.has(templateKey)) {
@@ -75,6 +76,7 @@ const queueMailSchema = z
     bodyOverride: z.string().min(1).optional(),
     bodyHtmlOverride: z.string().min(1).optional(),
     templateData: z.record(z.unknown()).optional(),
+    defaultLocale: mailLocaleSchema.optional(),
     attachmentUploadIds: z.array(z.string().uuid()).max(MAX_CAMPAIGN_ATTACHMENTS).optional(),
     renderOptions: renderOptionsSchema,
     sendAfter: z.string().datetime().optional(),
@@ -214,6 +216,7 @@ const communicationSendSchema = z
     bodyOverride: z.string().min(1).optional(),
     bodyHtmlOverride: z.string().min(1).optional(),
     templateData: z.record(z.unknown()).optional(),
+    defaultLocale: mailLocaleSchema.optional(),
     attachmentUploadIds: z.array(z.string().uuid()).max(MAX_CAMPAIGN_ATTACHMENTS).optional(),
     renderOptions: renderOptionsSchema,
     sendAfter: z.string().datetime().optional(),
@@ -935,6 +938,18 @@ const findOutboxByIdempotencyKey = async (idempotencyKey: string) => {
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
+export const resolveQueueMailLocale = (input: {
+  explicitLocale?: unknown;
+  preferredLocale?: unknown;
+  defaultLocale?: SupportedMailLocale;
+}): SupportedMailLocale =>
+  resolveMailLocale(
+    {
+      locale: isNonEmptyString(input.explicitLocale) ? input.explicitLocale : input.preferredLocale
+    },
+    input.defaultLocale ?? 'de'
+  );
+
 const resolveRecipientPreferredLocale = async (eventId: string, target: RecipientTarget): Promise<string | null> => {
   const db = await getDb();
 
@@ -1392,12 +1407,11 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
       };
       const preferredLocale =
         isNonEmptyString(templateData.locale) ? templateData.locale : await resolveRecipientPreferredLocale(input.eventId, target);
-      const locale = resolveMailLocale(
-        {
-          locale: preferredLocale
-        },
-        templateContract.scope === 'campaign' ? 'en' : 'de'
-      );
+      const locale = resolveQueueMailLocale({
+        explicitLocale: templateData.locale,
+        preferredLocale,
+        defaultLocale: input.defaultLocale
+      });
       templateData = {
         ...templateData,
         locale
@@ -3181,6 +3195,7 @@ export const queueCommunicationSend = async (input: CommunicationSendInput, acto
         bodyOverride: input.bodyOverride,
         bodyHtmlOverride: input.bodyHtmlOverride,
         templateData: input.templateData,
+        defaultLocale: input.defaultLocale,
         attachmentUploadIds: input.attachmentUploadIds,
         renderOptions: input.renderOptions,
         sendAfter: input.sendAfter,

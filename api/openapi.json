@@ -1368,6 +1368,17 @@
                     "type": "object",
                     "additionalProperties": true
                   },
+                  "defaultLocale": {
+                    "type": "string",
+                    "enum": [
+                      "de",
+                      "en",
+                      "cs",
+                      "pl"
+                    ],
+                    "default": "de",
+                    "description": "Fallback language used when neither templateData.locale nor recipient consent language resolves a supported mail locale."
+                  },
                   "renderOptions": {
                     "$ref": "#/components/schemas/MailRenderOptionsInput"
                   },
@@ -7733,6 +7744,17 @@
                   "templateData": {
                     "type": "object",
                     "additionalProperties": true
+                  },
+                  "defaultLocale": {
+                    "type": "string",
+                    "enum": [
+                      "de",
+                      "en",
+                      "cs",
+                      "pl"
+                    ],
+                    "default": "de",
+                    "description": "Fallback language used when neither templateData.locale nor recipient consent language resolves a supported mail locale."
                   },
                   "sendAfter": {
                     "type": "string",

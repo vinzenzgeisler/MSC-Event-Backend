@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const {
   LifecycleMailError,
   hasRequiredRegistrationReceivedVariables,
+  resolveQueueMailLocale,
   toLifecycleApiError
 } = require('../dist/routes/adminMail.js');
 
@@ -19,6 +20,11 @@ const missingVerificationUrl = hasRequiredRegistrationReceivedVariables({
   verificationUrl: null
 });
 assert.equal(missingVerificationUrl, false);
+
+assert.equal(resolveQueueMailLocale({}), 'de');
+assert.equal(resolveQueueMailLocale({ defaultLocale: 'cs' }), 'cs');
+assert.equal(resolveQueueMailLocale({ preferredLocale: 'pl', defaultLocale: 'cs' }), 'pl');
+assert.equal(resolveQueueMailLocale({ explicitLocale: 'en', preferredLocale: 'pl', defaultLocale: 'cs' }), 'en');
 
 const cases = [
   ['NO_RECIPIENT', 409, 'No recipient email available'],

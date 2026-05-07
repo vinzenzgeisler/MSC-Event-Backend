@@ -40,10 +40,11 @@ type RecipientFilter = {
   registrationStatus?: 'submitted_unverified' | 'submitted_verified';
   paymentStatus?: 'due' | 'paid';
   classId?: string;
+  allEntries?: boolean;
 };
 
 const hasRecipientFilter = (filters: RecipientFilter | undefined): boolean =>
-  Boolean(filters?.acceptanceStatus || filters?.registrationStatus || filters?.paymentStatus || filters?.classId);
+  Boolean(filters?.allEntries || filters?.acceptanceStatus || filters?.registrationStatus || filters?.paymentStatus || filters?.classId);
 
 const DISABLED_LIFECYCLE_EVENTS = new Set<LifecycleInput['eventType']>(['preselection']);
 const MAX_CAMPAIGN_ATTACHMENTS = 3;
@@ -86,6 +87,7 @@ const queueMailSchema = z
     entryIds: z.array(z.string().uuid()).optional(),
     filters: z
       .object({
+        allEntries: z.boolean().optional(),
         acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
         registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
         paymentStatus: z.enum(['due', 'paid']).optional(),
@@ -225,6 +227,7 @@ const communicationSendSchema = z
     entryIds: z.array(z.string().uuid()).optional(),
     filters: z
       .object({
+        allEntries: z.boolean().optional(),
         acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
         registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
         paymentStatus: z.enum(['due', 'paid']).optional(),
@@ -248,6 +251,7 @@ const listTemplateVersionsSchema = z.object({
 
 const resolveRecipientsSchema = z.object({
   eventId: z.string().uuid().optional(),
+  allEntries: z.boolean().optional(),
   classId: z.string().uuid().optional(),
   acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
   registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
@@ -1244,6 +1248,7 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
     const filters = input.filters as NonNullable<QueueMailInput['filters']>;
     const conditions: SQL<unknown>[] = [
       eq(entry.eventId, input.eventId),
+      sql`${entry.deletedAt} is null`,
       eq(person.processingRestricted, false),
       eq(person.objectionFlag, false)
     ];
@@ -3022,7 +3027,9 @@ export const resolveBroadcastRecipients = async (input: ResolveRecipientsInput) 
   const invalidEmails: string[] = [];
   const collectedEmails: string[] = [];
 
-  const hasBroadcastFilter = Boolean(input.classId || input.acceptanceStatus || input.registrationStatus || input.paymentStatus);
+  const hasBroadcastFilter = Boolean(
+    input.allEntries || input.classId || input.acceptanceStatus || input.registrationStatus || input.paymentStatus
+  );
   if (hasBroadcastFilter) {
     const conditions: SQL<unknown>[] = [
       eq(entry.eventId, eventId),

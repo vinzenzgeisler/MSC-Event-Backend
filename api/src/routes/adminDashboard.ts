@@ -7,7 +7,16 @@ const dashboardSummaryQuerySchema = z.object({
   eventId: z.string().uuid()
 });
 
+const dashboardDriverLocationsQuerySchema = dashboardSummaryQuerySchema.extend({
+  refresh: z.enum(['1', 'true']).optional(),
+  refreshLimit: z.coerce.number().int().min(1).max(10).optional()
+});
+
 const RECENT_ENTRIES_LIMIT = 10;
+const DRIVER_LOCATION_GEOCODE_DEFAULT_LIMIT = 10;
+const GEOCODE_REQUEST_DELAY_MS = 1100;
+
+type DriverLocationQuery = z.infer<typeof dashboardDriverLocationsQuerySchema>;
 
 const toAgeYears = (birthdate: Date | string | null, referenceDate: Date): number | null => {
   if (!birthdate) {
@@ -60,6 +69,8 @@ const vehicleLabelFromParts = (row: { vehicleMake: string | null; vehicleModel: 
   }
   return 'Fahrzeug';
 };
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const getDashboardSummary = async (eventId: string) => {
   const db = await getDb();
@@ -245,8 +256,11 @@ export const getDashboardSummary = async (eventId: string) => {
   };
 };
 
-export const getDashboardDriverLocations = async (eventId: string) => {
+export const getDashboardDriverLocations = async (query: DriverLocationQuery) => {
   const db = await getDb();
+  const { eventId } = query;
+  const shouldRefresh = Boolean(query.refresh);
+  const refreshLimit = query.refreshLimit ?? DRIVER_LOCATION_GEOCODE_DEFAULT_LIMIT;
 
   const eventRows = await db.select({ id: event.id }).from(event).where(eq(event.id, eventId)).limit(1);
   if (eventRows.length === 0) {
@@ -353,6 +367,57 @@ export const getDashboardDriverLocations = async (eventId: string) => {
       : [];
   const cacheByKey = new Map(cacheRows.map((row) => [row.locationKey, row]));
 
+  if (shouldRefresh) {
+    const candidates = Array.from(groups.values())
+      .filter((group) => {
+        const cached = cacheByKey.get(group.locationKey);
+        const lat = cached?.status === 'resolved' ? toFiniteNumber(cached.lat) : null;
+        const lng = cached?.status === 'resolved' ? toFiniteNumber(cached.lng) : null;
+        return lat === null || lng === null;
+      })
+      .slice(0, refreshLimit);
+
+    for (const [index, group] of candidates.entries()) {
+      if (index > 0) {
+        await sleep(GEOCODE_REQUEST_DELAY_MS);
+      }
+      const resolved = await geocodeLocation(group);
+      if (!resolved) {
+        continue;
+      }
+
+      const cacheValue = {
+        locationKey: group.locationKey,
+        country: group.country,
+        zip: group.zip,
+        city: group.city,
+        lat: String(resolved.lat),
+        lng: String(resolved.lng),
+        source: 'nominatim',
+        status: 'resolved',
+        updatedAt: new Date()
+      };
+
+      await db
+        .insert(geoLocationCache)
+        .values(cacheValue)
+        .onConflictDoUpdate({
+          target: geoLocationCache.locationKey,
+          set: {
+            country: cacheValue.country,
+            zip: cacheValue.zip,
+            city: cacheValue.city,
+            lat: cacheValue.lat,
+            lng: cacheValue.lng,
+            source: cacheValue.source,
+            status: cacheValue.status,
+            updatedAt: cacheValue.updatedAt
+          }
+        });
+      cacheByKey.set(group.locationKey, cacheValue);
+    }
+  }
+
   let missingLocationsTotal = 0;
   const locations = Array.from(groups.values())
     .map((group) => {
@@ -400,9 +465,56 @@ export const getDashboardDriverLocations = async (eventId: string) => {
   };
 };
 
+const buildGeocodeQuery = (location: { country: string; zip: string; city: string }): string => {
+  const country = location.country || 'Deutschland';
+  return [location.zip, location.city, country].filter(Boolean).join(', ');
+};
+
+const geocodeLocation = async (location: { country: string; zip: string; city: string }): Promise<{ lat: number; lng: number } | null> => {
+  const query = buildGeocodeQuery(location);
+  if (!query) {
+    return null;
+  }
+
+  const url = new URL('https://nominatim.openstreetmap.org/search');
+  url.searchParams.set('format', 'jsonv2');
+  url.searchParams.set('limit', '1');
+  url.searchParams.set('q', query);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'msc-event-dashboard/1.0 (event.msc-oberlausitz.de)'
+      }
+    });
+  } catch {
+    return null;
+  }
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = await response.json();
+  const first = Array.isArray(payload) ? payload[0] : null;
+  if (!first || typeof first !== 'object') {
+    return null;
+  }
+
+  const lat = toFiniteNumber((first as { lat?: unknown }).lat);
+  const lng = toFiniteNumber((first as { lon?: unknown }).lon);
+  return lat !== null && lng !== null ? { lat, lng } : null;
+};
+
 export const validateDashboardSummaryQuery = (query: Record<string, string | undefined>) =>
   dashboardSummaryQuerySchema.parse({
     eventId: query.eventId
   });
 
-export const validateDashboardDriverLocationsQuery = validateDashboardSummaryQuery;
+export const validateDashboardDriverLocationsQuery = (query: Record<string, string | undefined>) =>
+  dashboardDriverLocationsQuerySchema.parse({
+    eventId: query.eventId,
+    refresh: query.refresh,
+    refreshLimit: query.refreshLimit
+  });

@@ -1125,6 +1125,41 @@
           "admin"
         ],
         "description": "Returns resource-light driver origin map data for active, non-deleted entries. Locations are grouped by normalized country/zip/city and only include coordinates already present in the server-side geo cache.",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "description": "When set to 1 or true, geocodes a small batch of missing locations and stores them in the server-side cache before returning map data.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1",
+                "true"
+              ]
+            }
+          },
+          {
+            "name": "refreshLimit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of missing locations to geocode in this request.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Dashboard driver origin locations",

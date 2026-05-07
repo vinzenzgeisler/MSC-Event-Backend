@@ -762,7 +762,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
     try {
       const query = validateDashboardDriverLocationsQuery(event.queryStringParameters ?? {});
-      const result = await getDashboardDriverLocations(query.eventId);
+      const result = await getDashboardDriverLocations(query);
       return json(200, { ok: true, ...result });
     } catch (error) {
       if (error instanceof ZodError) {

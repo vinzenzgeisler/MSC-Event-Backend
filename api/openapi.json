@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "https://umcyaw7vw7.execute-api.eu-central-1.amazonaws.com"
+      "url": "https://<api-base-url>"
     }
   ],
   "tags": [

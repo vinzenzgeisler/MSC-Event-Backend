@@ -629,7 +629,7 @@ export const document = pgTable(
   (table) => ({
     typeCheck: check(
       'document_type_check',
-      sql`${table.type} in ('waiver', 'tech_check', 'waiver_batch', 'tech_check_batch', 'entry_confirmation')`
+      sql`${table.type} in ('waiver', 'tech_check', 'waiver_batch', 'tech_check_batch', 'entry_confirmation', 'waiver_signed')`
     ),
     statusCheck: check('document_status_check', sql`${table.status} in ('generated', 'failed')`),
     templateVariantCheck: check(
@@ -637,6 +637,65 @@ export const document = pgTable(
       sql`${table.type} != 'tech_check' or ${table.templateVariant} in ('auto', 'moto')`
     ),
     eventTypeIndex: index('document_event_type_idx').on(table.eventId, table.type)
+  })
+);
+
+export const signingDeviceSession = pgTable(
+  'signing_device_session',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    pairingCode: text('pairing_code').notNull(),
+    deviceName: text('device_name'),
+    tokenHash: text('token_hash'),
+    status: text('status').notNull().default('pairing'),
+    pairedBy: text('paired_by'),
+    pairedAt: timestamp('paired_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    pairingCodeIndex: index('signing_device_session_pairing_code_idx').on(table.pairingCode),
+    statusCheck: check('signing_device_session_status_check', sql`${table.status} in ('pairing', 'connected', 'revoked', 'expired')`),
+    tokenHashUnique: uniqueIndex('signing_device_session_token_hash_unique')
+      .on(table.tokenHash)
+      .where(sql`${table.tokenHash} is not null`)
+  })
+);
+
+export const signingSession = pgTable(
+  'signing_session',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    deviceSessionId: uuid('device_session_id')
+      .notNull()
+      .references(() => signingDeviceSession.id, { onDelete: 'cascade' }),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    driverPersonId: uuid('driver_person_id')
+      .notNull()
+      .references(() => person.id),
+    sourceEntryId: uuid('source_entry_id').references(() => entry.id, { onDelete: 'set null' }),
+    status: text('status').notNull().default('pending'),
+    sessionPayload: jsonb('session_payload').notNull(),
+    precheckPayload: jsonb('precheck_payload').notNull(),
+    signerPayload: jsonb('signer_payload').notNull(),
+    operatorUserId: text('operator_user_id'),
+    operatorDisplay: text('operator_display'),
+    displayedAt: timestamp('displayed_at', { withTimezone: true }),
+    signedAt: timestamp('signed_at', { withTimezone: true }),
+    documentId: uuid('document_id').references(() => document.id, { onDelete: 'set null' }),
+    evidenceAuditS3Key: text('evidence_audit_s3_key'),
+    errorLast: text('error_last'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    deviceStatusIndex: index('signing_session_device_status_idx').on(table.deviceSessionId, table.status, table.createdAt),
+    driverIndex: index('signing_session_driver_idx').on(table.eventId, table.driverPersonId, table.createdAt),
+    statusCheck: check('signing_session_status_check', sql`${table.status} in ('pending', 'displayed', 'completed', 'cancelled', 'failed')`)
   })
 );
 

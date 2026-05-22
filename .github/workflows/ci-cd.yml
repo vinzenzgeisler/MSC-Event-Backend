@@ -9,6 +9,9 @@ on:
     branches:
       - dev
       - main
+      - "feature/**"
+      - "fix/**"
+      - "chore/**"
   schedule:
     - cron: '0 21 * * *'
   workflow_dispatch:
@@ -21,10 +24,19 @@ on:
         options:
           - idle
           - test
+      deploy_shared_dev:
+        description: "Deploy the selected branch to the shared dev backend infrastructure"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   id-token: write
   contents: read
+
+concurrency:
+  group: backend-${{ github.ref == 'refs/heads/main' && 'prod' || 'shared-dev' }}
+  cancel-in-progress: false
 
 jobs:
   validate_common:
@@ -51,7 +63,7 @@ jobs:
         run: npm --workspace infra run build
 
   validate_dev:
-    if: github.base_ref == 'dev' || github.ref == 'refs/heads/dev' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: github.base_ref == 'dev' || startsWith(github.ref, 'refs/heads/dev') || startsWith(github.ref, 'refs/heads/feature/') || startsWith(github.ref, 'refs/heads/fix/') || startsWith(github.ref, 'refs/heads/chore/') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     needs: validate_common
     runs-on: ubuntu-latest
     environment: dev
@@ -157,14 +169,17 @@ jobs:
   deploy_dev:
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
-      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/')) ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/fix/')) ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/chore/')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_shared_dev == true) ||
       (github.event_name == 'schedule')
     needs:
       - validate_dev
     runs-on: ubuntu-latest
     environment: dev
     env:
-      DEV_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dev_profile || github.event_name == 'push' && 'test' || 'idle' }}
+      DEV_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dev_profile || github.event_name == 'schedule' && 'idle' || 'test' }}
       STACK_PREFIX: dreiecksrennen-dev
     steps:
       - name: Checkout

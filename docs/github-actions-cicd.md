@@ -58,6 +58,7 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
 ## Verhalten
 - PRs gegen `dev` oder `main` laufen nur Validierung.
 - Push auf `dev` deployt `stage=dev` mit `devProfile=test`.
+- Push auf `feature/**`, `fix/**` oder `chore/**` deployt ebenfalls `stage=dev` mit `devProfile=test` auf dieselbe gemeinsame Dev-Infrastruktur. Der zuletzt gepushte Branch ueberschreibt damit die Dev-API.
 - Ein täglicher Scheduler deployt `stage=dev` automatisch mit `devProfile=idle`, um Kosten zu sparen.
 - Manueller `workflow_dispatch` kann `stage=dev` mit `devProfile=test` oder `idle` deployen.
 - Push auf `main` deployt `stage=prod`.

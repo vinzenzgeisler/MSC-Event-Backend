@@ -59,7 +59,7 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
 - PRs gegen `dev` oder `main` laufen nur Validierung.
 - Push auf `dev` deployt `stage=dev` mit `devProfile=test`.
 - Push auf `feature/**`, `fix/**` oder `chore/**` deployt ebenfalls `stage=dev` mit `devProfile=test` auf dieselbe gemeinsame Dev-Infrastruktur. Der zuletzt gepushte Branch ueberschreibt damit die Dev-API.
-- Ein täglicher Scheduler deployt `stage=dev` automatisch mit `devProfile=idle`, um Kosten zu sparen.
+- Ein täglicher Scheduler stoppt nur die Dev-RDS-Instanz, um Kosten zu sparen. API Gateway und Lambda bleiben stehen, damit die Dev-API-URL stabil bleibt.
 - Manueller `workflow_dispatch` kann `stage=dev` mit `devProfile=test` oder `idle` deployen.
 - Push auf `main` deployt `stage=prod`.
 
@@ -69,8 +69,8 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
   - SQL-Migrationen automatisch gegen die Dev-Datenbank
   - danach API-Stack deploy
 - `dev` mit `idle`:
-  - keine Migrationen
-  - kein API-Deploy
+  - stoppt nur die Dev-RDS-Instanz
+  - kein CDK-Deploy, keine Migrationen, kein API-Stack-Destroy
 - `prod`:
   - Auth/Data/Storage deploy
   - SQL-Migrationen automatisch gegen die Prod-Datenbank
@@ -95,8 +95,9 @@ Die Pipeline geht davon aus, dass DB-Änderungen als vorwärtskompatible Migrati
   - Deshalb müssen die Frontend-Domains vor dem Deploy feststehen.
 - Dev-Kosten:
   - `dev` wird bei normalen Pushes testbar mit `devProfile=test` deployed.
-  - Ein täglicher Scheduler fährt `dev` automatisch zurück auf `idle`.
-  - Zusätzlich kann `dev` jederzeit manuell mit `dev_profile=idle` oder `test` deployt werden.
+  - Feature-/Fix-/Chore-Branches deployen ebenfalls auf die gemeinsame Dev-Infrastruktur und ueberschreiben dort den vorherigen API-Code.
+  - Ein täglicher Scheduler stoppt nur RDS. Die Dev-API-URL bleibt dadurch stabil.
+  - Beim naechsten Test-Deploy wird RDS wieder gestartet, migriert und mit Dev-Testnennungen ergaenzt.
 
 ## Empfehlung
 - `prod` immer mit Required Reviewer absichern.

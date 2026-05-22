@@ -7,12 +7,14 @@ Feature-Branches nutzen bewusst keine eigenen AWS-Stacks. Es gibt eine gemeinsam
 Automatisch:
 
 - Push auf `dev`: validiert und deployt `stage=dev`, `devProfile=test`.
-- Scheduler: faehrt Dev taeglich auf `devProfile=idle` zurueck.
+- Scheduler: stoppt taeglich nur die Dev-RDS-Instanz. API Gateway und Lambda bleiben stehen, damit die Dev-API-URL stabil bleibt.
 - Push auf `feature/**`, `fix/**`, `chore/**`: validiert und deployt `stage=dev`, `devProfile=test` auf dieselbe gemeinsame Dev-Infrastruktur.
 
 Damit ueberschreibt der zuletzt gepushte Backend-Branch die gemeinsame Dev-API. Es werden keine branch-spezifischen Stacks angelegt.
 
 Wichtig: Die Dev-API ist dadurch bewusst eine geteilte Testumgebung. Parallele Feature-Branch-Pushes werden im Workflow serialisiert; der spaeter gestartete Deploy laeuft nach dem vorherigen Deploy.
+
+Beim naechsten `test`-Deploy startet die Pipeline die Dev-RDS-Instanz wieder, wartet auf `available`, fuehrt Migrationen aus und seeded den aktuellen Dev-Event inklusive 10 Signing-Testnennungen. Daten bleiben beim Stop/Start erhalten; der Seed ist idempotent und ergaenzt nur fehlende Testnennungen.
 
 ## Frontend lokal
 

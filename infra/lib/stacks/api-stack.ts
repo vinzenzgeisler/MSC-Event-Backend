@@ -331,7 +331,8 @@ export class ApiStack extends Stack {
                 'x-requested-with',
                 'x-amz-date',
                 'x-amz-security-token',
-                'x-api-key'
+                'x-api-key',
+                'x-signing-device-token'
               ],
               maxAge: cdk.Duration.seconds(600)
             }
@@ -414,6 +415,24 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/public/entries/{id}/verification-resend',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/signing/device/claim',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/signing/device/current-session',
+      methods: [apigwv2.HttpMethod.GET],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/signing/sessions/{id}/complete',
       methods: [apigwv2.HttpMethod.POST],
       integration
     });
@@ -635,6 +654,34 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/admin/entries/{id}/checkin/id-verify',
       methods: [apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/devices/pairing-code',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/devices',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/sessions',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/sessions/{id}',
+      methods: [apigwv2.HttpMethod.GET],
       integration,
       authorizer: jwtAuthorizer
     });

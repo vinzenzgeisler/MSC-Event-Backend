@@ -464,6 +464,29 @@ export const listSigningDevices = async () => {
   return rows;
 };
 
+export const revokeSigningDevice = async (deviceSessionId: string, actorUserId: string | null) => {
+  const db = await getDb();
+  const [updated] = await db
+    .update(signingDeviceSession)
+    .set({ status: 'revoked', tokenHash: null, updatedAt: new Date() })
+    .where(eq(signingDeviceSession.id, deviceSessionId))
+    .returning();
+  if (!updated) {
+    return null;
+  }
+  await writeAuditLog(db as never, {
+    eventId: null,
+    actorUserId,
+    action: 'signing_device_revoked',
+    entityType: 'signing_device_session',
+    entityId: updated.id,
+    payload: {
+      deviceName: updated.deviceName
+    }
+  });
+  return updated;
+};
+
 export const getSigningRequirements = async (entryId: string) => {
   const payload = await buildSigningCasePayload(entryId);
   if (!payload) {
@@ -680,11 +703,13 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
   await uploadFile(documentS3Key, Buffer.from(evidenceHtml, 'utf8'), 'text/html; charset=utf-8');
   await uploadFile(auditS3Key, Buffer.from(auditJson, 'utf8'), 'application/json; charset=utf-8');
 
-  const [docRow] = await db
+  const signedAt = new Date(input.signedAt);
+  const documentRows = await db
     .insert(document)
-    .values({
+    .values(
+      payload.entries.map((entryItem) => ({
       eventId: payload.event.id,
-      entryId: current.sourceEntryId,
+      entryId: entryItem.id,
       driverPersonId: payload.driver.id,
       type: 'waiver_signed',
       templateVariant: payload.contract.locale,
@@ -693,10 +718,34 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
       s3Key: documentS3Key,
       status: 'generated',
       createdBy: current.operatorUserId
-    })
+      }))
+    )
     .returning();
+  const docRow = documentRows.find((row) => row.entryId === current.sourceEntryId) ?? documentRows[0] ?? null;
 
-  const signedAt = new Date(input.signedAt);
+  await db
+    .insert(consentEvidence)
+    .values(
+      payload.entries.map((entryItem) => ({
+        entryId: entryItem.id,
+        consentVersion: payload.contract.version,
+        consentTextHash: payload.contract.textHash,
+        locale: payload.contract.locale,
+        consentSource: 'admin_ui',
+        termsAccepted: true,
+        privacyAccepted: true,
+        waiverAccepted: true,
+        mediaAccepted: false,
+        clubInfoAccepted: false,
+        guardianFullName: signer.type === 'guardian' ? signer.guardianName ?? null : null,
+        guardianEmail: null,
+        guardianPhone: null,
+        guardianConsentAccepted: signer.type === 'guardian',
+        capturedAt: signedAt,
+        createdAt: new Date()
+      }))
+    );
+
   const [updated] = await db
     .update(signingSession)
     .set({

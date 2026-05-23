@@ -315,7 +315,7 @@ export const getDocumentDownload = async (id: string, actorUserId: string | null
 };
 
 export const getOrCreateEntryDocumentDownload = async (
-  input: DocumentRequest & { type: 'waiver' | 'tech_check' | 'entry_confirmation' },
+  input: DocumentRequest & { type: 'waiver' | 'signed_waiver' | 'tech_check' | 'entry_confirmation' },
   actorUserId: string | null
 ) => {
   const db = await getDb();
@@ -327,11 +327,14 @@ export const getOrCreateEntryDocumentDownload = async (
   const existingRows = await db
     .select()
     .from(document)
-    .where(and(eq(document.eventId, input.eventId), eq(document.entryId, input.entryId), eq(document.type, input.type)))
+    .where(and(eq(document.eventId, input.eventId), eq(document.entryId, input.entryId), eq(document.type, input.type === 'signed_waiver' ? 'waiver_signed' : input.type)))
     .orderBy(desc(document.createdAt))
     .limit(1);
 
   let docId = existingRows[0]?.id;
+  if (!docId && input.type === 'signed_waiver') {
+    return null;
+  }
   if (!docId) {
     const generated =
       input.type === 'waiver'

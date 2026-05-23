@@ -169,6 +169,7 @@ import {
   getSigningSession,
   getSigningRequirements,
   listSigningDevices,
+  revokeSigningDevice,
   validateCompleteSigningSessionInput,
   validateCreateSigningSessionInput,
   validatePairingClaimInput
@@ -1023,6 +1024,24 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, devices });
     } catch (error) {
       return errorJson(500, 'List signing devices failed');
+    }
+  }
+
+  const adminSigningDeviceMatch = path.match(/^\/admin\/signing\/devices\/([^/]+)$/);
+  if (method === 'DELETE' && adminSigningDeviceMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const device = await revokeSigningDevice(adminSigningDeviceMatch[1], auth.sub);
+      if (!device) {
+        return errorJson(404, 'Signing device not found');
+      }
+      return json(200, { ok: true, device });
+    } catch (error) {
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Revoke signing device failed', details);
     }
   }
 
@@ -2061,8 +2080,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     try {
       const eventId = event.queryStringParameters?.eventId;
       const type = event.queryStringParameters?.type;
-      if (!eventId || (type !== 'waiver' && type !== 'tech_check' && type !== 'entry_confirmation')) {
-        return errorJson(400, 'eventId and type(waiver|tech_check|entry_confirmation) are required');
+      if (!eventId || (type !== 'waiver' && type !== 'signed_waiver' && type !== 'tech_check' && type !== 'entry_confirmation')) {
+        return errorJson(400, 'eventId and type(waiver|signed_waiver|tech_check|entry_confirmation) are required');
       }
       const result = await getOrCreateEntryDocumentDownload(
         {

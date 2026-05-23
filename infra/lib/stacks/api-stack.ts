@@ -673,6 +673,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/signing/entries/{id}/requirements',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/signing/sessions',
       methods: [apigwv2.HttpMethod.POST],
       integration,

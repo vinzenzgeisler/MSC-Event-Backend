@@ -9,16 +9,16 @@ const defaultCaUrl = 'https://truststore.pki.rds.amazonaws.com/global/global-bun
 const parseDate = (date) => date.toISOString().slice(0, 10);
 
 const devDrivers = [
-  { firstName: 'Anna', lastName: 'Testfahrer', birthdate: '1992-04-12', vehicleType: 'moto', make: 'MZ', model: 'ETZ 250', year: 1988 },
-  { firstName: 'Bernd', lastName: 'Probenennung', birthdate: '1984-09-03', vehicleType: 'auto', make: 'Trabant', model: '601', year: 1987, codriver: true },
-  { firstName: 'Carla', lastName: 'Jugendstart', birthdate: '2011-06-21', vehicleType: 'moto', make: 'Simson', model: 'S51', year: 1985 },
-  { firstName: 'Dieter', lastName: 'Seniorlauf', birthdate: '1948-01-17', vehicleType: 'auto', make: 'Wartburg', model: '353', year: 1978, codriver: true },
-  { firstName: 'Eva', lastName: 'Rallyetest', birthdate: '1997-11-30', vehicleType: 'auto', make: 'Skoda', model: 'Favorit', year: 1991 },
-  { firstName: 'Frank', lastName: 'Gelaende', birthdate: '1976-03-05', vehicleType: 'moto', make: 'Jawa', model: '350', year: 1974 },
-  { firstName: 'Gina', lastName: 'Startklar', birthdate: '2001-08-19', vehicleType: 'auto', make: 'Lada', model: '2105', year: 1984, codriver: true },
-  { firstName: 'Henry', lastName: 'Boxenstop', birthdate: '1968-12-24', vehicleType: 'moto', make: 'Honda', model: 'XL 250', year: 1982 },
-  { firstName: 'Iris', lastName: 'Kurvenblick', birthdate: '1990-02-14', vehicleType: 'auto', make: 'VW', model: 'Golf II', year: 1989 },
-  { firstName: 'Jonas', lastName: 'Nachwuchs', birthdate: '2010-10-09', vehicleType: 'moto', make: 'KTM', model: 'SX 85', year: 2019 }
+  { firstName: 'Anna', lastName: 'Testfahrer', birthdate: '1992-04-12', vehicleType: 'moto', make: 'MZ', model: 'ETZ 250', year: 1988, registrationStatus: 'submitted_verified', acceptanceStatus: 'pending', mailVerified: true },
+  { firstName: 'Bernd', lastName: 'Doppelnennung', birthdate: '1984-09-03', vehicleType: 'auto', make: 'Trabant', model: '601', year: 1987, codriver: true, registrationStatus: 'submitted_verified', acceptanceStatus: 'accepted', mailVerified: true, extraEntries: [{ vehicleType: 'moto', make: 'MZ', model: 'TS 150', year: 1979 }] },
+  { firstName: 'Carla', lastName: 'Jugendstart', birthdate: '2011-06-21', vehicleType: 'moto', make: 'Simson', model: 'S51', year: 1985, registrationStatus: 'submitted_verified', acceptanceStatus: 'accepted', mailVerified: true, guardian: true },
+  { firstName: 'Dieter', lastName: 'Seniorlauf', birthdate: '1948-01-17', vehicleType: 'auto', make: 'Wartburg', model: '353', year: 1978, codriver: true, registrationStatus: 'submitted_verified', acceptanceStatus: 'accepted', mailVerified: true },
+  { firstName: 'Eva', lastName: 'Rallyetest', birthdate: '1997-11-30', vehicleType: 'auto', make: 'Skoda', model: 'Favorit', year: 1991, registrationStatus: 'submitted_unverified', acceptanceStatus: 'pending', mailVerified: false },
+  { firstName: 'Frank', lastName: 'Gelaende', birthdate: '1976-03-05', vehicleType: 'moto', make: 'Jawa', model: '350', year: 1974, registrationStatus: 'submitted_verified', acceptanceStatus: 'shortlist', mailVerified: true },
+  { firstName: 'Gina', lastName: 'Startklar', birthdate: '2001-08-19', vehicleType: 'auto', make: 'Lada', model: '2105', year: 1984, codriver: true, registrationStatus: 'submitted_verified', acceptanceStatus: 'accepted', mailVerified: true },
+  { firstName: 'Henry', lastName: 'Boxenstop', birthdate: '1968-12-24', vehicleType: 'moto', make: 'Honda', model: 'XL 250', year: 1982, registrationStatus: 'submitted_verified', acceptanceStatus: 'rejected', mailVerified: true },
+  { firstName: 'Iris', lastName: 'Mehrfachstart', birthdate: '1990-02-14', vehicleType: 'auto', make: 'VW', model: 'Golf II', year: 1989, registrationStatus: 'submitted_verified', acceptanceStatus: 'pending', mailVerified: true, extraEntries: [{ vehicleType: 'auto', make: 'BMW', model: '318is', year: 1990, codriver: true }] },
+  { firstName: 'Jonas', lastName: 'Nachwuchs', birthdate: '2010-10-09', vehicleType: 'moto', make: 'KTM', model: 'SX 85', year: 2019, registrationStatus: 'submitted_verified', acceptanceStatus: 'pending', mailVerified: true, guardian: true }
 ];
 
 const parseSecretJson = (raw) => {
@@ -194,15 +194,6 @@ const seedDevEntries = async (client, eventId) => {
 
   for (const [index, driver] of devDrivers.entries()) {
     const number = String(index + 1).padStart(2, '0');
-    const orgaCode = `DEV-SIGN-${number}`;
-    const existingEntry = await client.query(
-      `select "id" from "entry" where "event_id" = $1 and "orga_code" = $2 and "deleted_at" is null limit 1`,
-      [eventId, orgaCode]
-    );
-    if (existingEntry.rows[0]?.id) {
-      continue;
-    }
-
     const email = `dev-signing-driver-${number}@example.test`;
     const driverId = await findOrCreatePerson(client, {
       email,
@@ -211,13 +202,13 @@ const seedDevEntries = async (client, eventId) => {
       birthdate: driver.birthdate
     });
     const registrationGroupId = await findOrCreateRegistrationGroup(client, eventId, driverId, email);
-    const classId = classByVehicleType.get(driver.vehicleType);
-    if (!classId) {
-      throw new Error(`Missing class for vehicle type ${driver.vehicleType}.`);
-    }
 
+    const seedEntries = [
+      { suffix: 'A', vehicleType: driver.vehicleType, make: driver.make, model: driver.model, year: driver.year, codriver: driver.codriver },
+      ...(driver.extraEntries ?? []).map((entry, extraIndex) => ({ suffix: String.fromCharCode(66 + extraIndex), ...entry }))
+    ];
     let codriverId = null;
-    if (driver.codriver) {
+    if (seedEntries.some((entry) => entry.codriver)) {
       codriverId = await findOrCreatePerson(client, {
         email: `dev-signing-codriver-${number}@example.test`,
         firstName: `Co${number}`,
@@ -226,56 +217,143 @@ const seedDevEntries = async (client, eventId) => {
       });
     }
 
-    const vehicle = await client.query(
-      `insert into "vehicle" (
-         "owner_person_id",
-         "vehicle_type",
-         "make",
-         "model",
-         "year",
-         "description",
-         "owner_name",
-         "start_number_raw",
-         "created_at",
-         "updated_at"
-       ) values ($1, $2, $3, $4, $5, 'Dev-Testfahrzeug fuer Signing-Prototyp', $6, $7, now(), now())
-       returning "id"`,
-      [
-        driverId,
-        driver.vehicleType,
-        driver.make,
-        driver.model,
-        driver.year,
-        `${driver.firstName} ${driver.lastName}`,
-        `T${number}`
-      ]
-    );
+    for (const [entryIndex, seedEntry] of seedEntries.entries()) {
+      const isPrimary = entryIndex === 0;
+      const orgaCode = isPrimary ? `DEV-SIGN-${number}` : `DEV-SIGN-${number}-${seedEntry.suffix}`;
+      const startNumber = isPrimary ? `T${number}` : `T${number}${seedEntry.suffix}`;
+      const entryClassId = classByVehicleType.get(seedEntry.vehicleType);
+      if (!entryClassId) {
+        throw new Error(`Missing class for vehicle type ${seedEntry.vehicleType}.`);
+      }
+      const vehicle = await client.query(
+        `insert into "vehicle" (
+           "owner_person_id",
+           "vehicle_type",
+           "make",
+           "model",
+           "year",
+           "description",
+           "owner_name",
+           "start_number_raw",
+           "created_at",
+           "updated_at"
+         ) values ($1, $2, $3, $4, $5, 'Dev-Testfahrzeug fuer Signing-Prototyp', $6, $7, now(), now())
+         returning "id"`,
+        [
+          driverId,
+          seedEntry.vehicleType,
+          seedEntry.make,
+          seedEntry.model,
+          seedEntry.year,
+          `${driver.firstName} ${driver.lastName}`,
+          startNumber
+        ]
+      );
 
-    await client.query(
-      `insert into "entry" (
-         "event_id",
-         "class_id",
-         "driver_person_id",
-         "registration_group_id",
-         "codriver_person_id",
-         "vehicle_id",
-         "start_number_norm",
-         "driver_email_norm",
-         "registration_status",
-         "acceptance_status",
-         "tech_status",
-         "consent_terms_accepted",
-         "consent_privacy_accepted",
-         "consent_media_accepted",
-         "consent_version",
-         "consent_captured_at",
-         "entry_fee_cents",
-         "orga_code",
-         "created_at",
-         "updated_at"
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, 'submitted_verified', 'accepted', 'pending', true, true, false, 'dev-seed-2026-05', now(), 0, $9, now(), now())`,
-      [eventId, classId, driverId, registrationGroupId, codriverId, vehicle.rows[0].id, `T${number}`, email, orgaCode]
-    );
+      const existingEntry = await client.query(
+        `select "id" from "entry" where "event_id" = $1 and "orga_code" = $2 and "deleted_at" is null limit 1`,
+        [eventId, orgaCode]
+      );
+
+      const confirmationMailSentAt = driver.mailVerified || driver.registrationStatus === 'submitted_unverified' ? 'now()' : 'null';
+      const confirmationMailVerifiedAt = driver.mailVerified ? 'now()' : 'null';
+      const targetCodriverId = seedEntry.codriver ? codriverId : null;
+
+      if (existingEntry.rows[0]?.id) {
+        await client.query(
+          `update "entry"
+           set "class_id" = $2,
+               "driver_person_id" = $3,
+               "registration_group_id" = $4,
+               "codriver_person_id" = $5,
+               "vehicle_id" = $6,
+               "start_number_norm" = $7,
+               "driver_email_norm" = $8,
+               "registration_status" = $9,
+               "acceptance_status" = $10,
+               "tech_status" = 'pending',
+               "confirmation_mail_sent_at" = ${confirmationMailSentAt},
+               "confirmation_mail_verified_at" = ${confirmationMailVerifiedAt},
+               "consent_terms_accepted" = true,
+               "consent_privacy_accepted" = true,
+               "consent_media_accepted" = false,
+               "consent_version" = 'dev-seed-2026-05',
+               "consent_captured_at" = now(),
+               "updated_at" = now()
+           where "id" = $1`,
+          [
+            existingEntry.rows[0].id,
+            entryClassId,
+            driverId,
+            registrationGroupId,
+            targetCodriverId,
+            vehicle.rows[0].id,
+            startNumber,
+            email,
+            driver.registrationStatus,
+            driver.acceptanceStatus
+          ]
+        );
+      } else {
+        await client.query(
+          `insert into "entry" (
+             "event_id",
+             "class_id",
+             "driver_person_id",
+             "registration_group_id",
+             "codriver_person_id",
+             "vehicle_id",
+             "start_number_norm",
+             "driver_email_norm",
+             "registration_status",
+             "acceptance_status",
+             "tech_status",
+             "confirmation_mail_sent_at",
+             "confirmation_mail_verified_at",
+             "consent_terms_accepted",
+             "consent_privacy_accepted",
+             "consent_media_accepted",
+             "consent_version",
+             "consent_captured_at",
+             "entry_fee_cents",
+             "orga_code",
+             "created_at",
+             "updated_at"
+           ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', ${confirmationMailSentAt}, ${confirmationMailVerifiedAt}, true, true, false, 'dev-seed-2026-05', now(), 0, $11, now(), now())`,
+          [eventId, entryClassId, driverId, registrationGroupId, targetCodriverId, vehicle.rows[0].id, startNumber, email, driver.registrationStatus, driver.acceptanceStatus, orgaCode]
+        );
+      }
+
+      const entryId = existingEntry.rows[0]?.id ?? (await client.query(`select "id" from "entry" where "event_id" = $1 and "orga_code" = $2 limit 1`, [eventId, orgaCode])).rows[0].id;
+      await client.query(`delete from "consent_evidence" where "entry_id" = $1 and "consent_source" = 'admin_ui'`, [entryId]);
+      await client.query(
+        `insert into "consent_evidence" (
+           "entry_id",
+           "consent_version",
+           "consent_text_hash",
+           "locale",
+           "consent_source",
+           "terms_accepted",
+           "privacy_accepted",
+           "waiver_accepted",
+           "media_accepted",
+           "club_info_accepted",
+           "guardian_full_name",
+           "guardian_email",
+           "guardian_phone",
+           "guardian_consent_accepted",
+           "captured_at",
+           "created_at"
+         ) values ($1, 'dev-seed-2026-05', 'dev-seed-consent-hash', 'de-DE', 'admin_ui', true, true, true, false, false, $2, $3, $4, $5, now(), now())`,
+        [
+          entryId,
+          driver.guardian ? `Elternteil ${driver.lastName}` : null,
+          driver.guardian ? `guardian-${number}@example.test` : null,
+          driver.guardian ? '+491700000099' : null,
+          Boolean(driver.guardian)
+        ]
+      );
+    }
   }
 };
 

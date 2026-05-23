@@ -148,6 +148,7 @@ import {
   extractSigningDeviceToken,
   getCurrentDeviceSigningSession,
   getSigningSession,
+  getSigningRequirements,
   listSigningDevices,
   validateCompleteSigningSessionInput,
   validateCreateSigningSessionInput,
@@ -994,6 +995,24 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, devices });
     } catch (error) {
       return errorJson(500, 'List signing devices failed');
+    }
+  }
+
+  const adminSigningRequirementsMatch = path.match(/^\/admin\/signing\/entries\/([^/]+)\/requirements$/);
+  if (method === 'GET' && adminSigningRequirementsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const requirements = await getSigningRequirements(adminSigningRequirementsMatch[1]);
+      if (!requirements) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, requirements });
+    } catch (error) {
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Load signing requirements failed', details);
     }
   }
 

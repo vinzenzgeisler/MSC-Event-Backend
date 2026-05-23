@@ -464,6 +464,28 @@ export const listSigningDevices = async () => {
   return rows;
 };
 
+export const getSigningRequirements = async (entryId: string) => {
+  const payload = await buildSigningCasePayload(entryId);
+  if (!payload) {
+    return null;
+  }
+  return {
+    entryId,
+    caseId: payload.id,
+    driverName: `${payload.driver.firstName} ${payload.driver.lastName}`.trim(),
+    isMinor: payload.isMinor,
+    requiresMedicalCertificate: payload.requiresMedicalCertificate,
+    signerType: payload.isMinor ? 'guardian' : 'driver',
+    entryCount: payload.entries.length,
+    vehicleCount: payload.entries.reduce((count, item) => count + item.vehicles.length, 0),
+    contract: {
+      locale: payload.contract.locale,
+      version: payload.contract.version,
+      textHash: payload.contract.textHash
+    }
+  };
+};
+
 export const claimSigningDevice = async (input: z.infer<typeof pairingClaimSchema>) => {
   const db = await getDb();
   const now = new Date();

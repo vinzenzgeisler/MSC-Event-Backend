@@ -201,7 +201,7 @@ export const renderWaiverPdf = async (payload: WaiverPayload): Promise<Buffer> =
   }
 
   lines.push('Fahrzeug', ...formatVehicle(payload.vehicle), '');
-  lines.push('Haftverzichtserklaerung');
+  lines.push('Haftverzichtserklärung');
   lines.push(
     'Hiermit bestätige ich, dass ich die Teilnahmebedingungen gelesen habe und auf eigene Gefahr teilnehme.'
   );
@@ -209,6 +209,144 @@ export const renderWaiverPdf = async (payload: WaiverPayload): Promise<Buffer> =
 
   return renderPdf('Haftverzicht', lines);
 };
+
+type SignedWaiverEvidencePdfPayload = {
+  sessionId: string;
+  payload: {
+    event: { name: string; startsAt: string; endsAt: string; location: string };
+    driver: { firstName: string; lastName: string; birthdate: string | null };
+    isMinor: boolean;
+    requiresMedicalCertificate: boolean;
+    contract: { locale: string; version: string; textHash: string; title: string; fullText: string };
+    entries: Array<{
+      className: string;
+      orgaCode: string | null;
+      startNumber: string | null;
+      codriver: { firstName: string; lastName: string } | null;
+      vehicles: Array<{ role: 'primary' | 'backup'; make: string; model: string; year: number | null; startNumber: string | null; ownerName: string | null }>;
+    }>;
+  };
+  signer: { type: 'driver' | 'guardian'; guardianName: string | null; guardianRelationship: string | null };
+  precheckTimestamps: {
+    identityCheckedAt?: string | null;
+    signerPresentAt?: string | null;
+    medicalCertificateCheckedAt?: string | null;
+    guardianPresentAt?: string | null;
+    guardianAuthorityCheckedAt?: string | null;
+  };
+  operatorDisplay: string | null;
+  displayedAt: string;
+  waiverAcceptedAt: string;
+  signedAt: string;
+  signatureDataUrl: string;
+};
+
+const dataUrlToBuffer = (dataUrl: string): Buffer | null => {
+  const match = dataUrl.match(/^data:image\/png;base64,(.+)$/);
+  return match ? Buffer.from(match[1], 'base64') : null;
+};
+
+export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidencePdfPayload): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 24,
+      info: {
+        Title: 'Haftverzicht vor Ort',
+        Author: 'MSC Oberlausitzer Dreiländereck e.V.',
+        Subject: payload.payload.event.name
+      }
+    });
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const pageBottom = doc.page.height - doc.page.margins.bottom;
+    const leftX = doc.page.margins.left;
+    const topY = doc.page.margins.top;
+    const columnGap = 12;
+    const columnWidth = (contentWidth - columnGap) / 2;
+    const formatSigner =
+      payload.signer.type === 'guardian'
+        ? `${payload.signer.guardianName ?? '-'} (${payload.signer.guardianRelationship ?? '-'})`
+        : 'Fahrer selbst';
+    const vehicleLines = payload.payload.entries.flatMap((entry, index) => [
+      `${index + 1}. ${entry.className}, Startnr. ${entry.startNumber ?? '-'}, Orga ${entry.orgaCode ?? '-'}`,
+      `   Beifahrer: ${entry.codriver ? `${entry.codriver.firstName} ${entry.codriver.lastName}` : '-'}`,
+      ...entry.vehicles.map((vehicle) => {
+        const role = vehicle.role === 'backup' ? 'Ersatz' : 'Fahrzeug';
+        return `   ${role}: ${vehicle.make} ${vehicle.model}, ${vehicle.year ?? '-'}, #${vehicle.startNumber ?? '-'}, Eigentümer: ${vehicle.ownerName ?? '-'}`;
+      })
+    ]);
+    const metaLines = [
+      `Event: ${payload.payload.event.name} (${payload.payload.event.startsAt} bis ${payload.payload.event.endsAt})`,
+      `Fahrer: ${payload.payload.driver.firstName} ${payload.payload.driver.lastName}, geb. ${payload.payload.driver.birthdate ?? '-'}`,
+      `Unterzeichner: ${formatSigner}`,
+      `Sprache/Version/Text-Hash: ${payload.payload.contract.locale} / ${payload.payload.contract.version} / ${payload.payload.contract.textHash}`,
+      `Vorprüfungen: Identität ${payload.precheckTimestamps.identityCheckedAt ?? '-'} | Anwesenheit ${payload.precheckTimestamps.signerPresentAt ?? '-'}`,
+      `Attest: ${payload.payload.requiresMedicalCertificate ? payload.precheckTimestamps.medicalCertificateCheckedAt ?? '-' : 'nicht erforderlich'} | Guardian: ${payload.payload.isMinor ? `${payload.precheckTimestamps.guardianPresentAt ?? '-'} / ${payload.precheckTimestamps.guardianAuthorityCheckedAt ?? '-'}` : 'nicht erforderlich'}`,
+      `Angezeigt: ${payload.displayedAt} | Gelesen: ${payload.waiverAcceptedAt} | Unterschrieben: ${payload.signedAt}`,
+      `Operator: ${payload.operatorDisplay ?? '-'} | Session: ${payload.sessionId}`,
+      ...vehicleLines
+    ];
+
+    doc.font('Helvetica-Bold').fontSize(13).fillColor('#111827').text('Persönliche Haftverzichtserklärung - Vor-Ort-Unterschrift', leftX, topY, {
+      width: contentWidth
+    });
+    doc.moveDown(0.25);
+    doc.save().lineWidth(0.7).strokeColor('#CBD5E1').moveTo(leftX, doc.y).lineTo(leftX + contentWidth, doc.y).stroke().restore();
+    const metaTop = doc.y + 4;
+    doc.font('Helvetica').fontSize(6.8).fillColor('#111827').text(metaLines.join('\n'), leftX, metaTop, {
+      width: contentWidth,
+      lineGap: 0.6
+    });
+    const signatureTop = pageBottom - 72;
+    const textTop = Math.min(doc.y + 6, signatureTop - 150);
+    doc.font('Helvetica-Bold').fontSize(8.2).text(payload.payload.contract.title, leftX, textTop, { width: contentWidth });
+    const waiverTop = doc.y + 3;
+    const waiverHeight = Math.max(90, signatureTop - waiverTop - 8);
+    let waiverFontSize = 6.4;
+    for (let size = 6.4; size >= 4.4; size -= 0.2) {
+      doc.font('Helvetica').fontSize(size);
+      const height = doc.heightOfString(payload.payload.contract.fullText, {
+        width: contentWidth,
+        columns: 2,
+        columnGap,
+        lineGap: 0
+      });
+      if (height <= waiverHeight) {
+        waiverFontSize = size;
+        break;
+      }
+      waiverFontSize = size;
+    }
+    doc.font('Helvetica').fontSize(waiverFontSize).text(payload.payload.contract.fullText, leftX, waiverTop, {
+      width: contentWidth,
+      height: waiverHeight,
+      columns: 2,
+      columnGap,
+      lineGap: 0,
+      ellipsis: false
+    });
+
+    doc.save().lineWidth(0.7).strokeColor('#CBD5E1').moveTo(leftX, signatureTop - 5).lineTo(leftX + contentWidth, signatureTop - 5).stroke().restore();
+    doc.font('Helvetica-Bold').fontSize(8).fillColor('#111827').text('Unterschrift', leftX, signatureTop, { width: columnWidth });
+    doc.font('Helvetica').fontSize(6.7).text(`Dokument-Hash und Audit-JSON werden privat in S3 gespeichert. Text-Hash: ${payload.payload.contract.textHash}`, leftX + columnWidth + columnGap, signatureTop, {
+      width: columnWidth
+    });
+    const signature = dataUrlToBuffer(payload.signatureDataUrl);
+    if (signature) {
+      doc.image(signature, leftX, signatureTop + 12, { fit: [230, 50] });
+    } else {
+      doc.font('Helvetica').fontSize(8).text('Unterschrift konnte im PDF nicht eingebettet werden.', leftX, signatureTop + 18, {
+        width: columnWidth
+      });
+    }
+
+    doc.end();
+  });
 
 export const renderTechCheckPdf = async (payload: TechCheckPayload): Promise<Buffer> => {
   const baseData = {

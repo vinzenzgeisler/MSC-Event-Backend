@@ -14,7 +14,8 @@ import {
   signingSession,
   vehicle
 } from '../db/schema';
-import { uploadFile } from '../docs/storage';
+import { renderSignedWaiverEvidencePdf } from '../docs/pdf';
+import { uploadFile, uploadPdf } from '../docs/storage';
 import { computeConsentTextHash, getLegalTexts, type LegalUiLocale } from './publicLegalTextsSource';
 
 const pairingClaimSchema = z.object({
@@ -22,37 +23,52 @@ const pairingClaimSchema = z.object({
   deviceName: z.string().trim().max(80).optional()
 });
 
-const precheckSchema = z.object({
-  identityChecked: z.boolean(),
-  signerPresent: z.boolean(),
-  medicalCertificateChecked: z.boolean().optional().default(false),
-  guardianPresent: z.boolean().optional().default(false),
-  guardianAuthorityChecked: z.boolean().optional().default(false)
-});
-
-const signerSchema = z.object({
-  type: z.enum(['driver', 'guardian']),
-  guardianName: z.string().trim().max(160).nullable().optional(),
-  guardianRelationship: z.string().trim().max(80).nullable().optional()
-});
-
 const createSigningSessionSchema = z.object({
   deviceSessionId: z.string().uuid(),
   entryId: z.string().uuid(),
-  precheck: precheckSchema,
-  signer: signerSchema
+  precheck: z
+    .object({
+      identityChecked: z.boolean(),
+      signerPresent: z.boolean(),
+      medicalCertificateChecked: z.boolean().optional().default(false),
+      guardianPresent: z.boolean().optional().default(false),
+      guardianAuthorityChecked: z.boolean().optional().default(false)
+    })
+    .optional(),
+  precheckTimestamps: z
+    .object({
+      identityCheckedAt: z.string().datetime().nullable().optional(),
+      signerPresentAt: z.string().datetime().nullable().optional(),
+      medicalCertificateCheckedAt: z.string().datetime().nullable().optional(),
+      guardianPresentAt: z.string().datetime().nullable().optional(),
+      guardianAuthorityCheckedAt: z.string().datetime().nullable().optional()
+    })
+    .optional(),
+  signer: z
+    .object({
+      type: z.enum(['driver', 'guardian']),
+      guardianName: z.string().trim().max(160).nullable().optional(),
+      guardianRelationship: z.string().trim().max(80).nullable().optional()
+    })
+    .optional()
 });
 
 const completeSigningSessionSchema = z.object({
   displayedAt: z.string().datetime(),
+  waiverAcceptedAt: z.string().datetime(),
   signedAt: z.string().datetime(),
   signatureDataUrl: z.string().startsWith('data:image/png;base64,').max(2_000_000)
 });
 
-type PrecheckInput = z.infer<typeof precheckSchema>;
-type SignerInput = z.infer<typeof signerSchema>;
 type CreateSigningSessionInput = z.infer<typeof createSigningSessionSchema>;
 type CompleteSigningSessionInput = z.infer<typeof completeSigningSessionSchema>;
+
+type PrecheckTimestamps = NonNullable<CreateSigningSessionInput['precheckTimestamps']>;
+type SignerInput = {
+  type: 'driver' | 'guardian';
+  guardianName: string | null;
+  guardianRelationship: string | null;
+};
 
 type SigningCasePayload = {
   id: string;
@@ -165,26 +181,52 @@ const ageAt = (birthdate: string | null, date: Date): number | null => {
 const assertPrecheckComplete = (input: {
   isMinor: boolean;
   requiresMedicalCertificate: boolean;
-  precheck: PrecheckInput;
+  precheckTimestamps: PrecheckTimestamps;
   signer: SignerInput;
 }) => {
-  if (!input.precheck.identityChecked || !input.precheck.signerPresent) {
+  if (!input.precheckTimestamps.identityCheckedAt || !input.precheckTimestamps.signerPresentAt) {
     throw new Error('SIGNING_PRECHECK_INCOMPLETE');
   }
-  if (input.requiresMedicalCertificate && !input.precheck.medicalCertificateChecked) {
+  if (input.requiresMedicalCertificate && !input.precheckTimestamps.medicalCertificateCheckedAt) {
     throw new Error('SIGNING_PRECHECK_INCOMPLETE');
   }
   if (input.isMinor) {
     if (input.signer.type !== 'guardian') {
       throw new Error('SIGNING_GUARDIAN_REQUIRED');
     }
-    if (!input.precheck.guardianPresent || !input.precheck.guardianAuthorityChecked) {
+    if (!input.precheckTimestamps.guardianPresentAt || !input.precheckTimestamps.guardianAuthorityCheckedAt) {
       throw new Error('SIGNING_PRECHECK_INCOMPLETE');
     }
     if (!input.signer.guardianName?.trim() || !input.signer.guardianRelationship?.trim()) {
       throw new Error('SIGNING_GUARDIAN_REQUIRED');
     }
   }
+};
+
+const precheckTimestampsFromInput = (input: CreateSigningSessionInput): PrecheckTimestamps => {
+  const now = new Date().toISOString();
+  return {
+    identityCheckedAt: input.precheckTimestamps?.identityCheckedAt ?? (input.precheck?.identityChecked ? now : null),
+    signerPresentAt: input.precheckTimestamps?.signerPresentAt ?? (input.precheck?.signerPresent ? now : null),
+    medicalCertificateCheckedAt: input.precheckTimestamps?.medicalCertificateCheckedAt ?? (input.precheck?.medicalCertificateChecked ? now : null),
+    guardianPresentAt: input.precheckTimestamps?.guardianPresentAt ?? (input.precheck?.guardianPresent ? now : null),
+    guardianAuthorityCheckedAt: input.precheckTimestamps?.guardianAuthorityCheckedAt ?? (input.precheck?.guardianAuthorityChecked ? now : null)
+  };
+};
+
+const signerFromInput = (input: CreateSigningSessionInput, payload: SigningCasePayload): SignerInput => {
+  if (payload.isMinor) {
+    return {
+      type: 'guardian',
+      guardianName: input.signer?.guardianName?.trim() || null,
+      guardianRelationship: input.signer?.guardianRelationship?.trim() || null
+    };
+  }
+  return {
+    type: 'driver',
+    guardianName: null,
+    guardianRelationship: null
+  };
 };
 
 const getDeviceTokenFromHeaders = (headers: Record<string, string | undefined>): string | null => {
@@ -324,7 +366,7 @@ const buildSigningCasePayload = async (sourceEntryId: string): Promise<SigningCa
       name: source.eventName,
       startsAt: source.eventStartsAt?.toString() ?? '',
       endsAt: source.eventEndsAt?.toString() ?? '',
-      location: 'MSC Oberlausitzer Dreilaendereck'
+      location: 'MSC Oberlausitzer Dreiländereck'
     },
     driver: {
       id: source.driverPersonId,
@@ -395,43 +437,19 @@ const buildSigningCasePayload = async (sourceEntryId: string): Promise<SigningCa
   };
 };
 
-const renderEvidenceHtml = (input: {
-  sessionId: string;
-  payload: SigningCasePayload;
-  precheck: PrecheckInput;
-  signer: SignerInput;
-  operatorDisplay: string | null;
-  displayedAt: string;
-  signedAt: string;
-  signatureDataUrl: string;
-}) => {
-  const escape = (value: unknown) =>
-    String(value ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  const entryRows = input.payload.entries
-    .map((item) => {
-      const vehicles = item.vehicles
-        .map((vehicle) => `<li>${escape(vehicle.role === 'backup' ? 'Ersatzfahrzeug' : 'Fahrzeug')}: ${escape(vehicle.make)} ${escape(vehicle.model)} ${escape(vehicle.startNumber ? `#${vehicle.startNumber}` : '')}</li>`)
-        .join('');
-      return `<tr><td>${escape(item.className)}</td><td>${escape(item.startNumber ?? '-')}</td><td>${escape(item.orgaCode ?? '-')}</td><td>${escape(item.codriver ? `${item.codriver.firstName} ${item.codriver.lastName}` : '-')}</td><td><ul>${vehicles}</ul></td></tr>`;
-    })
-    .join('');
-  const signerText =
-    input.signer.type === 'guardian'
-      ? `Erziehungsberechtigter: ${input.signer.guardianName ?? '-'} (${input.signer.guardianRelationship ?? '-'})`
-      : 'Fahrer selbst';
-
-  return `<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Haftverzicht ${escape(input.sessionId)}</title><style>body{font-family:Arial,sans-serif;margin:36px;color:#111827;line-height:1.45}h1{font-size:26px}h2{font-size:18px;margin-top:26px;border-bottom:1px solid #d1d5db;padding-bottom:6px}.meta{display:grid;grid-template-columns:180px 1fr;gap:6px 12px}table{width:100%;border-collapse:collapse}td,th{border:1px solid #d1d5db;padding:8px;text-align:left;vertical-align:top}th{background:#f3f4f6}.waiver{white-space:pre-wrap;border:1px solid #d1d5db;padding:14px}.signature{width:360px;height:160px;border:1px solid #111827;object-fit:contain}</style></head><body><h1>Nachweis Haftverzicht vor Ort</h1><div class="meta"><strong>Veranstaltung</strong><span>${escape(input.payload.event.name)}</span><strong>Fahrer</strong><span>${escape(`${input.payload.driver.firstName} ${input.payload.driver.lastName}`)}</span><strong>Unterzeichner</strong><span>${escape(signerText)}</span><strong>Operator</strong><span>${escape(input.operatorDisplay ?? '-')}</span><strong>Angezeigt</strong><span>${escape(input.displayedAt)}</span><strong>Unterschrieben</strong><span>${escape(input.signedAt)}</span><strong>Sprache/Version/Hash</strong><span>${escape(input.payload.contract.locale)} · ${escape(input.payload.contract.version)} · ${escape(input.payload.contract.textHash)}</span></div><h2>Nennungen und Fahrzeuge</h2><table><thead><tr><th>Klasse</th><th>Startnummer</th><th>Orga-Code</th><th>Beifahrer</th><th>Fahrzeuge</th></tr></thead><tbody>${entryRows}</tbody></table><h2>Vorprüfung</h2><ul><li>Identität geprüft: ${input.precheck.identityChecked ? 'ja' : 'nein'}</li><li>Unterzeichner anwesend: ${input.precheck.signerPresent ? 'ja' : 'nein'}</li><li>Attest geprüft: ${input.payload.requiresMedicalCertificate ? (input.precheck.medicalCertificateChecked ? 'ja' : 'nein') : 'nicht erforderlich'}</li><li>Guardian anwesend: ${input.payload.isMinor ? (input.precheck.guardianPresent ? 'ja' : 'nein') : 'nicht erforderlich'}</li><li>Guardian-Berechtigung geprüft: ${input.payload.isMinor ? (input.precheck.guardianAuthorityChecked ? 'ja' : 'nein') : 'nicht erforderlich'}</li></ul><h2>${escape(input.payload.contract.title)}</h2><div class="waiver">${escape(input.payload.contract.fullText)}</div><h2>Unterschrift</h2><img class="signature" src="${escape(input.signatureDataUrl)}" alt="Unterschrift"></body></html>`;
-};
-
 export const createSigningPairingCode = async (actorUserId: string | null) => {
   const db = await getDb();
   const pairingCode = String(Math.floor(100000 + Math.random() * 900000));
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 10 * 60 * 1000);
+  await db
+    .update(signingDeviceSession)
+    .set({ status: 'expired', updatedAt: now })
+    .where(and(eq(signingDeviceSession.status, 'pairing'), sql`${signingDeviceSession.expiresAt} < ${now}`));
+  await db
+    .update(signingDeviceSession)
+    .set({ status: 'expired', updatedAt: now })
+    .where(and(eq(signingDeviceSession.status, 'pairing'), sql`${signingDeviceSession.pairedBy} = ${actorUserId}`));
   const [created] = await db
     .insert(signingDeviceSession)
     .values({
@@ -448,6 +466,11 @@ export const createSigningPairingCode = async (actorUserId: string | null) => {
 
 export const listSigningDevices = async () => {
   const db = await getDb();
+  const now = new Date();
+  await db
+    .update(signingDeviceSession)
+    .set({ status: 'expired', updatedAt: now })
+    .where(and(eq(signingDeviceSession.status, 'pairing'), sql`${signingDeviceSession.expiresAt} < ${now}`));
   const rows = await db
     .select({
       id: signingDeviceSession.id,
@@ -458,7 +481,7 @@ export const listSigningDevices = async () => {
       expiresAt: signingDeviceSession.expiresAt
     })
     .from(signingDeviceSession)
-    .where(sql`${signingDeviceSession.status} in ('pairing', 'connected')`)
+    .where(and(sql`${signingDeviceSession.status} in ('pairing', 'connected')`, sql`${signingDeviceSession.status} != 'pairing' or ${signingDeviceSession.expiresAt} >= ${now}`))
     .orderBy(desc(signingDeviceSession.createdAt))
     .limit(20);
   return rows;
@@ -505,7 +528,8 @@ export const getSigningRequirements = async (entryId: string) => {
       locale: payload.contract.locale,
       version: payload.contract.version,
       textHash: payload.contract.textHash
-    }
+    },
+    entries: payload.entries
   };
 };
 
@@ -526,11 +550,12 @@ export const claimSigningDevice = async (input: z.infer<typeof pairingClaimSchem
   const [updated] = await db
     .update(signingDeviceSession)
     .set({
-      deviceName: input.deviceName?.trim() || 'Signing Terminal',
+      deviceName: input.deviceName?.trim() || 'Signaturterminal',
       tokenHash: hashToken(deviceToken),
       status: 'connected',
       pairedAt: now,
       lastSeenAt: now,
+      expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
       updatedAt: now
     })
     .where(eq(signingDeviceSession.id, existing.id))
@@ -557,11 +582,13 @@ export const createSigningSession = async (input: CreateSigningSessionInput, act
   if (!payload) {
     return null;
   }
+  const precheckTimestamps = precheckTimestampsFromInput(input);
+  const signer = signerFromInput(input, payload);
   assertPrecheckComplete({
     isMinor: payload.isMinor,
     requiresMedicalCertificate: payload.requiresMedicalCertificate,
-    precheck: input.precheck,
-    signer: input.signer
+    precheckTimestamps,
+    signer
   });
 
   const now = new Date();
@@ -574,8 +601,8 @@ export const createSigningSession = async (input: CreateSigningSessionInput, act
       sourceEntryId: input.entryId,
       status: 'pending',
       sessionPayload: payload,
-      precheckPayload: input.precheck,
-      signerPayload: input.signer,
+      precheckPayload: precheckTimestamps,
+      signerPayload: signer,
       operatorUserId: actorUserId,
       operatorDisplay: actorDisplay,
       createdAt: now,
@@ -602,6 +629,29 @@ export const getSigningSession = async (sessionId: string) => {
   const db = await getDb();
   const rows = await db.select().from(signingSession).where(eq(signingSession.id, sessionId)).limit(1);
   return rows[0] ?? null;
+};
+
+export const cancelSigningSession = async (sessionId: string, actorUserId: string | null) => {
+  const db = await getDb();
+  const [updated] = await db
+    .update(signingSession)
+    .set({ status: 'cancelled', updatedAt: new Date() })
+    .where(and(eq(signingSession.id, sessionId), sql`${signingSession.status} in ('pending', 'displayed')`))
+    .returning();
+  if (!updated) {
+    return null;
+  }
+  await writeAuditLog(db as never, {
+    eventId: updated.eventId,
+    actorUserId,
+    action: 'signing_session_cancelled',
+    entityType: 'signing_session',
+    entityId: updated.id,
+    payload: {
+      deviceSessionId: updated.deviceSessionId
+    }
+  });
+  return updated;
 };
 
 export const getCurrentDeviceSigningSession = async (deviceToken: string) => {
@@ -650,23 +700,18 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
   }
 
   const payload = current.sessionPayload as SigningCasePayload;
-  const precheck = current.precheckPayload as PrecheckInput;
+  const precheckTimestamps = current.precheckPayload as PrecheckTimestamps;
   const signer = current.signerPayload as SignerInput;
-  const evidenceHtml = renderEvidenceHtml({
-    sessionId: current.id,
-    payload,
-    precheck,
-    signer,
-    operatorDisplay: current.operatorDisplay,
-    displayedAt: input.displayedAt,
-    signedAt: input.signedAt,
-    signatureDataUrl: input.signatureDataUrl
+  assertPrecheckComplete({
+    isMinor: payload.isMinor,
+    requiresMedicalCertificate: payload.requiresMedicalCertificate,
+    precheckTimestamps,
+    signer
   });
-  const documentSha256 = hashText(evidenceHtml);
   const signatureSha256 = hashText(input.signatureDataUrl);
   const evidenceId = `${current.id}-${randomUUID()}`;
   const baseKey = `signing/${payload.event.id}/${payload.driver.id}/${evidenceId}`;
-  const documentS3Key = `${baseKey}/evidence.html`;
+  const documentS3Key = `${baseKey}/waiver.pdf`;
   const auditS3Key = `${baseKey}/audit.json`;
   const auditPayload = {
     auditSchemaVersion: 'signing-terminal-v1',
@@ -682,9 +727,9 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
       version: payload.contract.version,
       textHash: payload.contract.textHash,
       displayedAt: input.displayedAt,
-      acceptedAt: input.signedAt
+      acceptedAt: input.waiverAcceptedAt
     },
-    precheck,
+    precheckTimestamps,
     operator: {
       id: current.operatorUserId,
       displayName: current.operatorDisplay
@@ -694,13 +739,26 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
       imageSha256: signatureSha256
     },
     document: {
-      sha256: documentSha256,
+      sha256: '',
       s3Key: documentS3Key
     }
   };
+  const pdfBuffer = await renderSignedWaiverEvidencePdf({
+    sessionId: current.id,
+    payload,
+    signer,
+    precheckTimestamps,
+    operatorDisplay: current.operatorDisplay,
+    displayedAt: input.displayedAt,
+    waiverAcceptedAt: input.waiverAcceptedAt,
+    signedAt: input.signedAt,
+    signatureDataUrl: input.signatureDataUrl
+  });
+  const documentSha256 = hashText(pdfBuffer);
+  auditPayload.document.sha256 = documentSha256;
   const auditJson = JSON.stringify(auditPayload, null, 2);
 
-  await uploadFile(documentS3Key, Buffer.from(evidenceHtml, 'utf8'), 'text/html; charset=utf-8');
+  await uploadPdf(documentS3Key, pdfBuffer);
   await uploadFile(auditS3Key, Buffer.from(auditJson, 'utf8'), 'application/json; charset=utf-8');
 
   const signedAt = new Date(input.signedAt);

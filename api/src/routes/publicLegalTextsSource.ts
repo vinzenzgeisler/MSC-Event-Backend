@@ -538,7 +538,7 @@ const legalTextsDe: LegalTexts = {
       "Bei der Anmeldung vor Ort sind Teilnahmebedingungen/Haftungsverzicht handschriftlich zu unterzeichnen.",
       "Personalausweis und Führerschein sind bei der Anmeldung vorzulegen.",
       "Teilnehmer ab 70 Jahren müssen ein ärztliches Attest vorlegen.",
-      "Vereinsmitglieder des MSC Oberlausitzer Dreilaendereck e.V. zahlen kein Nenngeld.",
+      "Vereinsmitglieder des MSC Oberlausitzer Dreiländereck e.V. zahlen kein Nenngeld.",
       "Ein Nachweis einer Unfallversicherung wird empfohlen. Fahrer und Beifahrer können bei der Anmeldung eine DMV-Tagesversicherung für 9,00 EUR (gesamtes Wochenende) abschließen.",
       "Bei Nutzung eines nicht eigenen Fahrzeugs muss bei der Anmeldung eine unterschriebene Verzichtserklärung des Fahrzeugeigentümers vorgelegt werden (Formular im Downloadbereich)."
     ],
@@ -597,7 +597,7 @@ const legalTextsEn: LegalTexts = {
       "At on-site registration, the participation terms/waiver must be signed by hand.",
       "Identity card and driving licence must be presented at registration.",
       "Starters aged 70 and above must provide a current medical fitness certificate at registration.",
-      "Members of MSC Oberlausitzer Dreilaendereck e.V. do not pay an entry fee.",
+      "Members of MSC Oberlausitzer Dreiländereck e.V. do not pay an entry fee.",
       "Proof of accident insurance is recommended. Driver and codriver can purchase a DMV day insurance for EUR 9.00 (full weekend) during registration.",
       "If the vehicle is not owned by the driver, a signed owner waiver must be submitted at registration (download available in the event download section)."
     ],
@@ -655,7 +655,7 @@ const legalTextsCz: LegalTexts = {
       "Pri registraci na miste je nutne vlastnorucne podepsat podminky ucasti/prohlaseni o vzdani se odpovednosti.",
       "Pri registraci je nutne predlozit obcansky prukaz a ridicsky prukaz.",
       "Jezdci od 70 let musi pri registraci predlozit aktualni lekarske potvrzeni o zdravotni zpusobilosti.",
-      "Clenove MSC Oberlausitzer Dreilaendereck e.V. neplati startovne.",
+      "Clenove MSC Oberlausitzer Dreiländereck e.V. neplati startovne.",
       "Doporucujeme dolozit urazove pojisteni. Jezdec i spolujezdec si mohou pri registraci sjednat denni DMV pojisteni za 9,00 EUR (cely vikend).",
       "Pokud vozidlo neni ve vlastnictvi jezdce, je nutne pri registraci predlozit podepsane prohlaseni vlastnika (formular je v sekci ke stazeni)."
     ],
@@ -713,7 +713,7 @@ const legalTextsPl: LegalTexts = {
       "Podczas rejestracji na miejscu warunki udzialu/zrzeczenie odpowiedzialnosci musza zostac podpisane odręcznie.",
       "Przy rejestracji nalezy okazac dowod osobisty i prawo jazdy.",
       "Zawodnicy w wieku 70+ musza przy rejestracji okazac aktualne zaswiadczenie lekarskie o zdolnosci do udzialu.",
-      "Czlonkowie MSC Oberlausitzer Dreilaendereck e.V. sa zwolnieni z oplaty wpisowej.",
+      "Czlonkowie MSC Oberlausitzer Dreiländereck e.V. sa zwolnieni z oplaty wpisowej.",
       "Zalecany jest dowod ubezpieczenia od nieszczesliwych wypadkow. Kierowca i pilot moga przy rejestracji wykupic dzienne ubezpieczenie DMV za 9,00 EUR (caly weekend).",
       "Jesli pojazd nie jest wlasnoscia kierowcy, przy rejestracji nalezy zlozyc podpisane oswiadczenie wlasciciela o zrzeczeniu roszczen (formularz dostepny w sekcji pobran)."
     ],

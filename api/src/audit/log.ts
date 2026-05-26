@@ -39,7 +39,8 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   privacy_retention_run: ['windowStart', 'windowEnd', 'dryRun', 'deletedRows', 'errors']
   ,
   signing_session_started: ['entryIds', 'deviceSessionId'],
-  signing_session_completed: ['documentId', 'documentSha256', 'auditS3Key', 'entryIds']
+  signing_session_completed: ['documentId', 'documentSha256', 'auditS3Key', 'entryIds'],
+  signing_session_cancelled: ['deviceSessionId']
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

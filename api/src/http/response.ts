@@ -19,7 +19,7 @@ export const json = (
       'access-control-allow-origin': origin,
       vary: 'Origin',
       'access-control-allow-headers':
-        'Authorization,authorization,Content-Type,content-type,Accept,accept,X-Requested-With,x-requested-with,X-Amz-Date,x-amz-date,X-Amz-Security-Token,x-amz-security-token,X-Api-Key,x-api-key,X-Signing-Device-Token,x-signing-device-token',
+        'Authorization,authorization,Content-Type,content-type,Accept,accept,X-Requested-With,x-requested-with,X-Amz-Date,x-amz-date,X-Amz-Security-Token,x-amz-security-token,X-Api-Key,x-api-key,X-Signing-Device-Token,x-signing-device-token,X-MSC-Admin-Email,x-msc-admin-email',
       'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
       'access-control-max-age': '600',
       'access-control-expose-headers': 'content-type,retry-after',

@@ -332,7 +332,8 @@ export class ApiStack extends Stack {
                 'x-amz-date',
                 'x-amz-security-token',
                 'x-api-key',
-                'x-signing-device-token'
+                'x-signing-device-token',
+                'x-msc-admin-email'
               ],
               maxAge: cdk.Duration.seconds(600)
             }
@@ -696,6 +697,13 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/admin/signing/sessions/{id}',
       methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/sessions/{id}/cancel',
+      methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
     });

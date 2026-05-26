@@ -142,6 +142,7 @@ import {
 import { setCheckinIdVerified, validateIdVerifyInput } from './routes/adminCheckin';
 import {
   claimSigningDevice,
+  cancelSigningSession,
   completeDeviceSigningSession,
   createSigningPairingCode,
   createSigningSession,
@@ -189,6 +190,12 @@ const getClientIp = (event: APIGatewayProxyEventV2): string => {
     }
   }
   return event.requestContext.http.sourceIp?.trim() || 'unknown';
+};
+
+const getAdminDisplayEmail = (event: APIGatewayProxyEventV2, fallback: string | null): string | null => {
+  const raw = event.headers['x-msc-admin-email'] ?? event.headers['X-MSC-Admin-Email'];
+  const email = typeof raw === 'string' ? raw.trim() : '';
+  return email.includes('@') && email.length <= 254 ? email : fallback;
 };
 
 const publicRateLimitedScopes = {
@@ -360,6 +367,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'SIGNING_SESSION_NOT_ACTIVE') {
         return errorJson(409, 'Signing session is not active', undefined, 'SIGNING_SESSION_NOT_ACTIVE');
+      }
+      if (error instanceof Error && (error.message === 'SIGNING_PRECHECK_INCOMPLETE' || error.message === 'SIGNING_GUARDIAN_REQUIRED')) {
+        return errorJson(400, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
       return errorJson(500, 'Complete signing session failed', details);
@@ -1043,7 +1053,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     try {
       const payload = parseJsonBody(event);
       const input = validateCreateSigningSessionInput(payload);
-      const created = await createSigningSession(input, auth.sub, auth.email ?? auth.sub);
+      const created = await createSigningSession(input, auth.sub, getAdminDisplayEmail(event, auth.email ?? auth.sub));
       if (!created) {
         return errorJson(404, 'Entry not found');
       }
@@ -1080,6 +1090,23 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, session });
     } catch (error) {
       return errorJson(500, 'Get signing session failed');
+    }
+  }
+
+  const adminSigningCancelMatch = path.match(/^\/admin\/signing\/sessions\/([^/]+)\/cancel$/);
+  if (method === 'POST' && adminSigningCancelMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const session = await cancelSigningSession(adminSigningCancelMatch[1], auth.sub);
+      if (!session) {
+        return errorJson(404, 'Active signing session not found');
+      }
+      return json(200, { ok: true, session });
+    } catch (error) {
+      return errorJson(500, 'Cancel signing session failed');
     }
   }
 

@@ -1,6 +1,6 @@
-// Use standalone build so Lambda bundling does not depend on external AFM font files.
+// Use the Node build because signed waiver PDFs embed the captured PNG signature.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const PDFDocument = require('pdfkit/js/pdfkit.standalone');
+const PDFDocument = require('pdfkit');
 import { format } from 'node:util';
 import type { QrCodeMatrix } from './girocode';
 import { renderAutoChecklistV1 } from './templates/tech-check/auto/v1';

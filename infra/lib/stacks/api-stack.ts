@@ -96,6 +96,7 @@ export class ApiStack extends Stack {
       functionName: `${props.config.prefix}-api-handler`,
       memorySize: 256,
       timeout: cdk.Duration.seconds(10),
+      depsLockFilePath: path.join(__dirname, '../../../package-lock.json'),
       environment: {
         STAGE: props.config.stage,
         DB_SECRET_ARN: dbSecretArn,
@@ -122,7 +123,8 @@ export class ApiStack extends Stack {
       bundling: {
         target: 'node20',
         sourceMap: true,
-        minify: false
+        minify: false,
+        nodeModules: ['pdfkit']
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
       ...lambdaVpcConfig

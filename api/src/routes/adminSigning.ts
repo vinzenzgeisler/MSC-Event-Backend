@@ -26,6 +26,7 @@ const pairingClaimSchema = z.object({
 const createSigningSessionSchema = z.object({
   deviceSessionId: z.string().uuid(),
   entryId: z.string().uuid(),
+  signerPersonId: z.string().uuid().optional(),
   precheck: z
     .object({
       identityChecked: z.boolean(),
@@ -46,7 +47,7 @@ const createSigningSessionSchema = z.object({
     .optional(),
   signer: z
     .object({
-      type: z.enum(['driver', 'guardian']),
+      type: z.enum(['driver', 'codriver', 'guardian']),
       guardianName: z.string().trim().max(160).nullable().optional(),
       guardianRelationship: z.string().trim().max(80).nullable().optional()
     })
@@ -65,9 +66,21 @@ type CompleteSigningSessionInput = z.infer<typeof completeSigningSessionSchema>;
 
 type PrecheckTimestamps = NonNullable<CreateSigningSessionInput['precheckTimestamps']>;
 type SignerInput = {
-  type: 'driver' | 'guardian';
+  type: 'driver' | 'codriver' | 'guardian';
   guardianName: string | null;
   guardianRelationship: string | null;
+};
+
+const SIGNING_SESSION_TTL_MS = 5 * 60 * 1000;
+
+type SigningPersonSnapshot = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  birthdate: string | null;
+  email: string | null;
+  phone: string | null;
+  country: string | null;
 };
 
 type SigningCasePayload = {
@@ -87,6 +100,10 @@ type SigningCasePayload = {
     email: string | null;
     phone: string | null;
     country: string | null;
+  };
+  signer: SigningPersonSnapshot & {
+    role: 'driver' | 'codriver';
+    label: string;
   };
   isMinor: boolean;
   requiresMedicalCertificate: boolean;
@@ -223,7 +240,7 @@ const signerFromInput = (input: CreateSigningSessionInput, payload: SigningCaseP
     };
   }
   return {
-    type: 'driver',
+    type: payload.signer.role,
     guardianName: null,
     guardianRelationship: null
   };
@@ -258,7 +275,14 @@ const resolveDeviceByToken = async (deviceToken: string) => {
   return device;
 };
 
-const buildSigningCasePayload = async (sourceEntryId: string): Promise<SigningCasePayload | null> => {
+const expireOpenSigningSessions = async (db: Awaited<ReturnType<typeof getDb>>, now = new Date()) => {
+  await db
+    .update(signingSession)
+    .set({ status: 'cancelled', updatedAt: now, errorLast: 'SIGNING_SESSION_EXPIRED' })
+    .where(and(sql`${signingSession.status} in ('pending', 'displayed')`, sql`${signingSession.expiresAt} <= ${now}`));
+};
+
+const buildSigningCasePayload = async (sourceEntryId: string, signerPersonId?: string): Promise<SigningCasePayload | null> => {
   const db = await getDb();
   const sourceRows = await db
     .select({
@@ -341,6 +365,41 @@ const buildSigningCasePayload = async (sourceEntryId: string): Promise<SigningCa
     : [];
   const backupById = new Map(backupRows.map((row) => [row.id, row]));
 
+  const driverSnapshot: SigningPersonSnapshot = {
+    id: source.driverPersonId,
+    firstName: source.driverFirstName,
+    lastName: source.driverLastName,
+    birthdate: source.driverBirthdate?.toString() ?? null,
+    email: source.driverEmail,
+    phone: source.driverPhone,
+    country: source.driverCountry
+  };
+  const requestedSignerId = signerPersonId ?? source.driverPersonId;
+  const codriverSnapshot = codriverById.get(requestedSignerId);
+  const signer =
+    requestedSignerId === source.driverPersonId
+      ? { ...driverSnapshot, role: 'driver' as const, label: 'Fahrer' }
+      : codriverSnapshot
+        ? {
+            id: codriverSnapshot.id,
+            firstName: codriverSnapshot.firstName,
+            lastName: codriverSnapshot.lastName,
+            birthdate: codriverSnapshot.birthdate?.toString() ?? null,
+            email: codriverSnapshot.email,
+            phone: codriverSnapshot.phone,
+            country: codriverSnapshot.country,
+            role: 'codriver' as const,
+            label: 'Beifahrer'
+          }
+        : null;
+  if (!signer) {
+    throw new Error('SIGNING_SIGNER_NOT_FOUND');
+  }
+  const signerEntryRows = signer.role === 'codriver' ? entryRows.filter((row) => row.codriverPersonId === signer.id) : entryRows;
+  if (signerEntryRows.length === 0) {
+    throw new Error('SIGNING_SIGNER_NOT_FOUND');
+  }
+
   const consentRows = await db
     .select({
       consentVersion: consentEvidence.consentVersion,
@@ -357,10 +416,10 @@ const buildSigningCasePayload = async (sourceEntryId: string): Promise<SigningCa
   const waiver = flattenWaiver(uiLocale);
   const textHash = consent?.consentTextHash ?? (await computeConsentTextHash(uiLocale));
   const eventStart = new Date(`${source.eventStartsAt}T12:00:00.000Z`);
-  const driverAge = ageAt(source.driverBirthdate?.toString() ?? null, eventStart);
+  const signerAge = ageAt(signer.birthdate, eventStart);
 
   return {
-    id: `signing-case:${source.eventId}:${source.driverPersonId}`,
+    id: `signing-case:${source.eventId}:${source.driverPersonId}:${signer.id}`,
     event: {
       id: source.eventId,
       name: source.eventName,
@@ -369,16 +428,11 @@ const buildSigningCasePayload = async (sourceEntryId: string): Promise<SigningCa
       location: 'MSC Oberlausitzer Dreiländereck'
     },
     driver: {
-      id: source.driverPersonId,
-      firstName: source.driverFirstName,
-      lastName: source.driverLastName,
-      birthdate: source.driverBirthdate?.toString() ?? null,
-      email: source.driverEmail,
-      phone: source.driverPhone,
-      country: source.driverCountry
+      ...driverSnapshot
     },
-    isMinor: driverAge !== null && driverAge < 18,
-    requiresMedicalCertificate: driverAge !== null && driverAge >= 70,
+    signer,
+    isMinor: signerAge !== null && signerAge < 18,
+    requiresMedicalCertificate: signerAge !== null && signerAge >= 70,
     contract: {
       documentId: 'haftverzicht',
       locale,
@@ -388,7 +442,7 @@ const buildSigningCasePayload = async (sourceEntryId: string): Promise<SigningCa
       fullText: waiver.fullText,
       source: 'backend_contract_context'
     },
-    entries: entryRows.map((row) => {
+    entries: signerEntryRows.map((row) => {
       const codriver = row.codriverPersonId ? codriverById.get(row.codriverPersonId) ?? null : null;
       const vehicles: SigningCasePayload['entries'][number]['vehicles'] = [
         {
@@ -515,6 +569,40 @@ export const getSigningRequirements = async (entryId: string) => {
   if (!payload) {
     return null;
   }
+  const eventStart = new Date(`${payload.event.startsAt}T12:00:00.000Z`);
+  const signerCandidates = [
+    { ...payload.driver, role: 'driver' as const, label: 'Fahrer' },
+    ...payload.entries
+      .map((item) => item.codriver)
+      .filter((item): item is NonNullable<(typeof payload.entries)[number]['codriver']> => Boolean(item))
+      .map((item) => ({ ...item, role: 'codriver' as const, label: 'Beifahrer' }))
+  ].filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index);
+  const db = await getDb();
+  const entryIds = payload.entries.map((item) => item.id);
+  const signerIds = signerCandidates.map((item) => item.id);
+  const signedRows =
+    entryIds.length > 0 && signerIds.length > 0
+      ? await db
+          .select({
+            entryId: document.entryId,
+            driverPersonId: document.driverPersonId,
+            documentId: document.id,
+            createdAt: document.createdAt
+          })
+          .from(document)
+          .where(and(eq(document.type, 'waiver_signed'), inArray(document.entryId, entryIds), inArray(document.driverPersonId, signerIds)))
+          .orderBy(desc(document.createdAt))
+      : [];
+  const signedByPersonId = new Map<string, { documentId: string; signedAt: string }>();
+  for (const row of signedRows) {
+    if (!row.driverPersonId || signedByPersonId.has(row.driverPersonId)) {
+      continue;
+    }
+    signedByPersonId.set(row.driverPersonId, {
+      documentId: row.documentId,
+      signedAt: row.createdAt.toISOString()
+    });
+  }
   return {
     entryId,
     caseId: payload.id,
@@ -529,6 +617,21 @@ export const getSigningRequirements = async (entryId: string) => {
       version: payload.contract.version,
       textHash: payload.contract.textHash
     },
+    signers: signerCandidates.map((item) => {
+      const signerAge = ageAt(item.birthdate, eventStart);
+      const signed = signedByPersonId.get(item.id) ?? null;
+      return {
+        personId: item.id,
+        role: item.role,
+        label: item.label,
+        name: `${item.firstName} ${item.lastName}`.trim(),
+        isMinor: signerAge !== null && signerAge < 18,
+        requiresMedicalCertificate: signerAge !== null && signerAge >= 70,
+        signed: Boolean(signed),
+        signedAt: signed?.signedAt ?? null,
+        documentId: signed?.documentId ?? null
+      };
+    }),
     entries: payload.entries
   };
 };
@@ -578,7 +681,7 @@ export const createSigningSession = async (input: CreateSigningSessionInput, act
     throw new Error('SIGNING_DEVICE_NOT_CONNECTED');
   }
 
-  const payload = await buildSigningCasePayload(input.entryId);
+  const payload = await buildSigningCasePayload(input.entryId, input.signerPersonId);
   if (!payload) {
     return null;
   }
@@ -592,6 +695,8 @@ export const createSigningSession = async (input: CreateSigningSessionInput, act
   });
 
   const now = new Date();
+  await expireOpenSigningSessions(db, now);
+  const expiresAt = new Date(now.getTime() + SIGNING_SESSION_TTL_MS);
   const [created] = await db
     .insert(signingSession)
     .values({
@@ -605,6 +710,7 @@ export const createSigningSession = async (input: CreateSigningSessionInput, act
       signerPayload: signer,
       operatorUserId: actorUserId,
       operatorDisplay: actorDisplay,
+      expiresAt,
       createdAt: now,
       updatedAt: now
     })
@@ -618,6 +724,8 @@ export const createSigningSession = async (input: CreateSigningSessionInput, act
     entityId: created.id,
     payload: {
       entryIds: payload.entries.map((entryItem) => entryItem.id),
+      signerPersonId: payload.signer.id,
+      signerRole: payload.signer.role,
       deviceSessionId: input.deviceSessionId
     }
   });
@@ -627,6 +735,7 @@ export const createSigningSession = async (input: CreateSigningSessionInput, act
 
 export const getSigningSession = async (sessionId: string) => {
   const db = await getDb();
+  await expireOpenSigningSessions(db);
   const rows = await db.select().from(signingSession).where(eq(signingSession.id, sessionId)).limit(1);
   return rows[0] ?? null;
 };
@@ -660,17 +769,19 @@ export const getCurrentDeviceSigningSession = async (deviceToken: string) => {
     throw new Error('SIGNING_DEVICE_UNAUTHORIZED');
   }
   const db = await getDb();
+  const now = new Date();
+  await expireOpenSigningSessions(db, now);
   const rows = await db
     .select()
     .from(signingSession)
-    .where(and(eq(signingSession.deviceSessionId, device.id), sql`${signingSession.status} in ('pending', 'displayed')`))
+    .where(and(eq(signingSession.deviceSessionId, device.id), sql`${signingSession.status} in ('pending', 'displayed')`, sql`${signingSession.expiresAt} > ${now}`))
     .orderBy(desc(signingSession.createdAt))
     .limit(1);
   const current = rows[0] ?? null;
   if (current && current.status === 'pending') {
     await db
       .update(signingSession)
-      .set({ status: 'displayed', displayedAt: new Date(), updatedAt: new Date() })
+      .set({ status: 'displayed', displayedAt: now, updatedAt: now })
       .where(eq(signingSession.id, current.id));
     return { ...current, status: 'displayed' };
   }
@@ -683,6 +794,8 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     throw new Error('SIGNING_DEVICE_UNAUTHORIZED');
   }
   const db = await getDb();
+  const now = new Date();
+  await expireOpenSigningSessions(db, now);
   const rows = await db
     .select()
     .from(signingSession)
@@ -698,6 +811,13 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
   if (current.status !== 'pending' && current.status !== 'displayed') {
     throw new Error('SIGNING_SESSION_NOT_ACTIVE');
   }
+  if (current.expiresAt <= now) {
+    await db
+      .update(signingSession)
+      .set({ status: 'cancelled', updatedAt: now, errorLast: 'SIGNING_SESSION_EXPIRED' })
+      .where(eq(signingSession.id, current.id));
+    throw new Error('SIGNING_SESSION_EXPIRED');
+  }
 
   const payload = current.sessionPayload as SigningCasePayload;
   const precheckTimestamps = current.precheckPayload as PrecheckTimestamps;
@@ -710,7 +830,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
   });
   const signatureSha256 = hashText(input.signatureDataUrl);
   const evidenceId = `${current.id}-${randomUUID()}`;
-  const baseKey = `signing/${payload.event.id}/${payload.driver.id}/${evidenceId}`;
+  const baseKey = `signing/${payload.event.id}/${payload.signer.id}/${evidenceId}`;
   const documentS3Key = `${baseKey}/waiver.pdf`;
   const auditS3Key = `${baseKey}/audit.json`;
   const auditPayload = {
@@ -719,6 +839,8 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     sessionId: current.id,
     eventId: payload.event.id,
     driverPersonId: payload.driver.id,
+    signerPersonId: payload.signer.id,
+    signerRole: payload.signer.role,
     entryIds: payload.entries.map((entryItem) => entryItem.id),
     vehicleIds: payload.entries.flatMap((entryItem) => entryItem.vehicles.map((vehicleItem) => vehicleItem.id)),
     signer,
@@ -768,7 +890,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
       payload.entries.map((entryItem) => ({
       eventId: payload.event.id,
       entryId: entryItem.id,
-      driverPersonId: payload.driver.id,
+      driverPersonId: payload.signer.id,
       type: 'waiver_signed',
       templateVariant: payload.contract.locale,
       templateVersion: payload.contract.version,
@@ -781,28 +903,30 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     .returning();
   const docRow = documentRows.find((row) => row.entryId === current.sourceEntryId) ?? documentRows[0] ?? null;
 
-  await db
-    .insert(consentEvidence)
-    .values(
-      payload.entries.map((entryItem) => ({
-        entryId: entryItem.id,
-        consentVersion: payload.contract.version,
-        consentTextHash: payload.contract.textHash,
-        locale: payload.contract.locale,
-        consentSource: 'admin_ui',
-        termsAccepted: true,
-        privacyAccepted: true,
-        waiverAccepted: true,
-        mediaAccepted: false,
-        clubInfoAccepted: false,
-        guardianFullName: signer.type === 'guardian' ? signer.guardianName ?? null : null,
-        guardianEmail: null,
-        guardianPhone: null,
-        guardianConsentAccepted: signer.type === 'guardian',
-        capturedAt: signedAt,
-        createdAt: new Date()
-      }))
-    );
+  if (payload.signer.role === 'driver') {
+    await db
+      .insert(consentEvidence)
+      .values(
+        payload.entries.map((entryItem) => ({
+          entryId: entryItem.id,
+          consentVersion: payload.contract.version,
+          consentTextHash: payload.contract.textHash,
+          locale: payload.contract.locale,
+          consentSource: 'admin_ui',
+          termsAccepted: true,
+          privacyAccepted: true,
+          waiverAccepted: true,
+          mediaAccepted: false,
+          clubInfoAccepted: false,
+          guardianFullName: signer.type === 'guardian' ? signer.guardianName ?? null : null,
+          guardianEmail: null,
+          guardianPhone: null,
+          guardianConsentAccepted: signer.type === 'guardian',
+          capturedAt: signedAt,
+          createdAt: new Date()
+        }))
+      );
+  }
 
   const [updated] = await db
     .update(signingSession)
@@ -827,6 +951,8 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
       documentId: docRow?.id ?? null,
       documentSha256,
       auditS3Key,
+      signerPersonId: payload.signer.id,
+      signerRole: payload.signer.role,
       entryIds: payload.entries.map((entryItem) => entryItem.id)
     }
   });

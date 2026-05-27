@@ -689,12 +689,14 @@ export const signingSession = pgTable(
     documentId: uuid('document_id').references(() => document.id, { onDelete: 'set null' }),
     evidenceAuditS3Key: text('evidence_audit_s3_key'),
     errorLast: text('error_last'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
   (table) => ({
     deviceStatusIndex: index('signing_session_device_status_idx').on(table.deviceSessionId, table.status, table.createdAt),
     driverIndex: index('signing_session_driver_idx').on(table.eventId, table.driverPersonId, table.createdAt),
+    statusExpiresIndex: index('signing_session_status_expires_idx').on(table.status, table.expiresAt),
     statusCheck: check('signing_session_status_check', sql`${table.status} in ('pending', 'displayed', 'completed', 'cancelled', 'failed')`)
   })
 );

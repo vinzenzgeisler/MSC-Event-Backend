@@ -368,6 +368,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'SIGNING_SESSION_NOT_ACTIVE') {
         return errorJson(409, 'Signing session is not active', undefined, 'SIGNING_SESSION_NOT_ACTIVE');
       }
+      if (error instanceof Error && error.message === 'SIGNING_SESSION_EXPIRED') {
+        return errorJson(409, 'Signing session expired', undefined, 'SIGNING_SESSION_EXPIRED');
+      }
       if (error instanceof Error && (error.message === 'SIGNING_PRECHECK_INCOMPLETE' || error.message === 'SIGNING_GUARDIAN_REQUIRED')) {
         return errorJson(400, error.message, undefined, error.message);
       }
@@ -1067,6 +1070,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'SIGNING_DEVICE_NOT_CONNECTED') {
         return errorJson(409, 'Signing device is not connected', undefined, 'SIGNING_DEVICE_NOT_CONNECTED');
+      }
+      if (error instanceof Error && error.message === 'SIGNING_SIGNER_NOT_FOUND') {
+        return errorJson(400, 'Signing signer not found', undefined, 'SIGNING_SIGNER_NOT_FOUND');
       }
       if (error instanceof Error && (error.message === 'SIGNING_PRECHECK_INCOMPLETE' || error.message === 'SIGNING_GUARDIAN_REQUIRED')) {
         return errorJson(400, error.message, undefined, error.message);

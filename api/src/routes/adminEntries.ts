@@ -491,10 +491,12 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       id: document.id,
       type: document.type,
       status: document.status,
+      driverPersonId: document.driverPersonId,
       createdAt: document.createdAt
     })
     .from(document)
-    .where(eq(document.entryId, entryId));
+    .where(eq(document.entryId, entryId))
+    .orderBy(sql`${document.createdAt} desc`, sql`${document.id} desc`);
 
   const driverEntryRows = await db
     .select({

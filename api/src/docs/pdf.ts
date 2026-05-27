@@ -215,6 +215,7 @@ type SignedWaiverEvidencePdfPayload = {
   payload: {
     event: { name: string; startsAt: string; endsAt: string; location: string };
     driver: { firstName: string; lastName: string; birthdate: string | null };
+    signer?: { role: 'driver' | 'codriver'; firstName: string; lastName: string; birthdate: string | null; label: string };
     isMinor: boolean;
     requiresMedicalCertificate: boolean;
     contract: { locale: string; version: string; textHash: string; title: string; fullText: string };
@@ -226,7 +227,7 @@ type SignedWaiverEvidencePdfPayload = {
       vehicles: Array<{ role: 'primary' | 'backup'; make: string; model: string; year: number | null; startNumber: string | null; ownerName: string | null }>;
     }>;
   };
-  signer: { type: 'driver' | 'guardian'; guardianName: string | null; guardianRelationship: string | null };
+  signer: { type: 'driver' | 'codriver' | 'guardian'; guardianName: string | null; guardianRelationship: string | null };
   precheckTimestamps: {
     identityCheckedAt?: string | null;
     signerPresentAt?: string | null;
@@ -271,7 +272,9 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     const formatSigner =
       payload.signer.type === 'guardian'
         ? `${payload.signer.guardianName ?? '-'} (${payload.signer.guardianRelationship ?? '-'})`
-        : 'Fahrer selbst';
+        : payload.signer.type === 'codriver'
+          ? 'Beifahrer selbst'
+          : 'Fahrer selbst';
     const vehicleLines = payload.payload.entries.flatMap((entry, index) => [
       `${index + 1}. ${entry.className}, Startnr. ${entry.startNumber ?? '-'}, Orga ${entry.orgaCode ?? '-'}`,
       `   Beifahrer: ${entry.codriver ? `${entry.codriver.firstName} ${entry.codriver.lastName}` : '-'}`,
@@ -283,6 +286,7 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     const metaLines = [
       `Event: ${payload.payload.event.name} (${payload.payload.event.startsAt} bis ${payload.payload.event.endsAt})`,
       `Fahrer: ${payload.payload.driver.firstName} ${payload.payload.driver.lastName}, geb. ${payload.payload.driver.birthdate ?? '-'}`,
+      `Betroffene Person: ${payload.payload.signer?.label ?? 'Fahrer'} ${payload.payload.signer ? `${payload.payload.signer.firstName} ${payload.payload.signer.lastName}, geb. ${payload.payload.signer.birthdate ?? '-'}` : ''}`,
       `Unterzeichner: ${formatSigner}`,
       `Sprache/Version/Text-Hash: ${payload.payload.contract.locale} / ${payload.payload.contract.version} / ${payload.payload.contract.textHash}`,
       `Vorprüfungen: Identität ${payload.precheckTimestamps.identityCheckedAt ?? '-'} | Anwesenheit ${payload.precheckTimestamps.signerPresentAt ?? '-'}`,

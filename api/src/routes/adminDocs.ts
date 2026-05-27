@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { getDb } from '../db/client';
 import { document, documentGenerationJob, entry, event, eventClass, person, vehicle } from '../db/schema';
@@ -324,11 +324,16 @@ export const getOrCreateEntryDocumentDownload = async (
     return getDocumentDownload(attachment.documentId, actorUserId);
   }
 
+  const entryRows =
+    input.type === 'signed_waiver'
+      ? await db.select({ driverPersonId: entry.driverPersonId }).from(entry).where(eq(entry.id, input.entryId)).limit(1)
+      : [];
+  const entryDriverPersonId = entryRows[0]?.driverPersonId ?? null;
   const existingRows = await db
     .select()
     .from(document)
     .where(and(eq(document.eventId, input.eventId), eq(document.entryId, input.entryId), eq(document.type, input.type === 'signed_waiver' ? 'waiver_signed' : input.type)))
-    .orderBy(desc(document.createdAt))
+    .orderBy(sql`case when ${document.driverPersonId} = ${entryDriverPersonId} then 0 else 1 end`, desc(document.createdAt))
     .limit(1);
 
   let docId = existingRows[0]?.id;

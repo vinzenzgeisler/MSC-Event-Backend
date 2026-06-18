@@ -18,7 +18,7 @@ import {
 } from '../db/schema';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
-import { deriveInvoicePaymentStatus } from '../domain/invoiceStatus';
+import { deriveEntryPaymentStatus, deriveInvoicePaymentStatus } from '../domain/invoiceStatus';
 import { getEntryLineTotalCents, getForecastEntryLineTotalCents, getManualEntryTotalOverrideCents } from '../domain/pricingSnapshot';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { decodeCursor, encodeCursor, parseListQuery } from '../http/pagination';
@@ -284,7 +284,9 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleImageS3Key: vehicle.imageS3Key,
-      paymentStatus: invoice.paymentStatus,
+      entryFeeCents: entry.entryFeeCents,
+      invoicePricingSnapshot: invoice.pricingSnapshot,
+      invoicePaymentStatus: invoice.paymentStatus,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt
     })
@@ -299,12 +301,25 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
     .offset(offset);
 
   const mapped = await Promise.all(rows.map(async (row) => {
-    const completed = row.acceptanceStatus === 'accepted' && row.paymentStatus === 'paid';
+    const entryTotalCents =
+      getEntryLineTotalCents(row.invoicePricingSnapshot, row.id) ??
+      getForecastEntryLineTotalCents(row.invoicePricingSnapshot, row.id) ??
+      getManualEntryTotalOverrideCents(row.invoicePricingSnapshot, row.id) ??
+      row.entryFeeCents ??
+      0;
+    const paymentStatus = deriveEntryPaymentStatus(
+      entryTotalCents,
+      row.acceptanceStatus,
+      row.invoicePaymentStatus
+    );
+    const completed = row.acceptanceStatus === 'accepted' && paymentStatus === 'paid';
     const vehicleLabel = toVehicleLabel(row.vehicleMake, row.vehicleModel, row.startNumberNorm);
     const vehicleThumbUrl = await getVehicleThumbUrl(row.vehicleImageS3Key);
     const shouldRedactSensitiveFields = redactSensitiveFields || row.driverProcessingRestricted || row.driverObjectionFlag;
+    const { invoicePricingSnapshot: _pricingSnapshot, invoicePaymentStatus: _invoicePaymentStatus, ...publicRow } = row;
     return {
-      ...row,
+      ...publicRow,
+      paymentStatus,
       completionStatus: completed ? 'completed' : 'open',
       vehicleLabel,
       vehicleThumbUrl,
@@ -571,6 +586,11 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         ? Math.min(current.invoicePaidAmountCents ?? 0, totalCents)
         : 0;
   const amountOpenCents = Math.max(0, totalCents - paidAmountCents);
+  const paymentStatus = deriveEntryPaymentStatus(
+    totalCents,
+    current.acceptanceStatus,
+    current.invoicePaymentStatus
+  );
 
   const historyRows = await db
     .select({
@@ -684,7 +704,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         totalCents,
         paidAmountCents,
         amountOpenCents,
-        paymentStatus: current.invoicePaymentStatus ?? 'due'
+        paymentStatus
       },
       checkin: {
         checkinIdVerified: current.checkinIdVerified,

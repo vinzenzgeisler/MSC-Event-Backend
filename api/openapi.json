@@ -3633,7 +3633,7 @@
         "tags": [
           "admin"
         ],
-        "description": "On-demand document download by entry and type. type=entry_confirmation generates/uses a server-rendered Nennbestätigung PDF (reused when revision hash is unchanged; re-rendered when relevant entry/event/payment data changed). Included fields: eventName/eventDate/organizer, driver (name/address/email/phone), optional codriver (name/birthdate), vehicle + optional backupVehicle, class/startNumber, payment totals/paid/open/deadline and payment settings, legal proof hint.",
+        "description": "On-demand document download by entry and type. type=entry_confirmation generates/uses a server-rendered Nennbestätigung PDF (reused when revision hash is unchanged; re-rendered when relevant entry/event/payment data changed). Included fields: eventName/eventDate/organizer, driver (name/address), optional codriver, vehicle + optional backupVehicle, class/startNumber, payment status and entry fee, legal proof hint.",
         "responses": {
           "200": {
             "description": "OK"

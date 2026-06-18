@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict');
 
 const { renderMailContract } = require('../dist/mail/rendering.js');
-const { resolveMailLocale } = require('../dist/mail/i18n.js');
+const { getAcceptedOpenPaymentHeaderTitle, resolveMailLocale } = require('../dist/mail/i18n.js');
+const { buildAcceptedPaymentInstructionText } = require('../dist/routes/adminMail.js');
 
 const buildBasePayload = () => ({
   eventName: '12. Oberlausitzer Dreieck',
@@ -201,6 +202,32 @@ const buildBasePayload = () => ({
   assert.equal(/Zahlungsinfos in Kurzform/.test(rendered.bodyTextRendered), false);
   assert.equal(rendered.htmlDocument.includes('Empfänger</td>'), false);
   assert.equal(rendered.htmlDocument.includes('IBAN</td>'), false);
+}
+
+// A zero-fee acceptance must not claim that payment is still pending.
+{
+  const localized = [
+    ['de', 'Zugelassen', 'Zugelassen · Zahlung offen', 'Für diese zugelassene Nennung fällt kein Nenngeld an.'],
+    ['en', 'Accepted', 'Accepted · Payment pending', 'No entry fee is due for this accepted entry.'],
+    ['cs', 'Přijato', 'Přijato · platba otevřená', 'Za tuto přijatou přihlášku se neplatí žádné startovné.'],
+    ['pl', 'Zaakceptowano', 'Zaakceptowano · płatność otwarta', 'Za to zaakceptowane zgłoszenie nie jest wymagane wpisowe.']
+  ];
+  for (const [locale, zeroFeeHeader, openPaymentHeader, noFeeText] of localized) {
+    assert.equal(getAcceptedOpenPaymentHeaderTitle(locale, 0), zeroFeeHeader);
+    assert.equal(getAcceptedOpenPaymentHeaderTitle(locale, 1), openPaymentHeader);
+    assert.equal(
+      buildAcceptedPaymentInstructionText({
+        locale,
+        amountOpen: '0,00 EUR',
+        amountOpenCents: 0,
+        paymentDueDate: null,
+        paymentRecipient: null,
+        paymentIban: null,
+        paymentReference: ''
+      }),
+      noFeeText
+    );
+  }
 }
 
 // Payment reminder should include richer payment details in the info card.

@@ -28,7 +28,13 @@ import { PLACEHOLDER_CATALOG, REQUIRED_PLACEHOLDERS_BY_TEMPLATE } from '../mail/
 import { renderMailContract } from '../mail/rendering';
 import { CAMPAIGN_TEMPLATE_KEYS, getTemplateContract, MailRenderOptions } from '../mail/templateContracts';
 import { getAssetObjectMetadata, getPresignedAssetsUploadUrl } from '../docs/storage';
-import { getMailChromeCopy, getProcessTemplateCopy, resolveMailLocale, type SupportedMailLocale } from '../mail/i18n';
+import {
+  getAcceptedOpenPaymentHeaderTitle,
+  getMailChromeCopy,
+  getProcessTemplateCopy,
+  resolveMailLocale,
+  type SupportedMailLocale
+} from '../mail/i18n';
 import { getOrCreateEntryConfirmationAttachment } from '../docs/entryConfirmation';
 import { buildEntryConfirmationConfigFallback, overlayEntryConfirmationConfig } from '../domain/entryConfirmationConfig';
 import { buildPaymentReference } from '../domain/paymentReference';
@@ -448,7 +454,7 @@ const toIsoDate = (value: string | undefined): Date => (value ? new Date(value) 
 
 const formatEuroFromCents = (value: number): string => (value / 100).toFixed(2).replace('.', ',');
 
-const buildAcceptedPaymentInstructionText = (input: {
+export const buildAcceptedPaymentInstructionText = (input: {
   locale: 'de' | 'en' | 'cs' | 'pl';
   amountOpen: string;
   amountOpenCents: number;
@@ -459,15 +465,15 @@ const buildAcceptedPaymentInstructionText = (input: {
 }): string => {
   if (input.amountOpenCents <= 0) {
     if (input.locale === 'en') {
-      return 'There is currently no additional payment due for this accepted entry.';
+      return 'No entry fee is due for this accepted entry.';
     }
     if (input.locale === 'cs') {
-      return 'Pro tuto přijatou přihlášku momentálně není splatná žádná další částka.';
+      return 'Za tuto přijatou přihlášku se neplatí žádné startovné.';
     }
     if (input.locale === 'pl') {
-      return 'Dla tego zaakceptowanego zgłoszenia nie ma obecnie żadnej dodatkowej kwoty do zapłaty.';
+      return 'Za to zaakceptowane zgłoszenie nie jest wymagane wpisowe.';
     }
-    return 'Für diese zugelassene Nennung ist aktuell kein zusätzlicher Zahlbetrag offen.';
+    return 'Für diese zugelassene Nennung fällt kein Nenngeld an.';
   }
 
   if (input.locale === 'en') {
@@ -1976,7 +1982,9 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
               : 'Ta decyzja dotyczy wyłącznie zgłoszenia wskazanego w tej wiadomości.'
       : '';
   const combinedTransferHint =
-    template.templateKey === 'accepted_open_payment' && (hasOpenSiblingEntries || hasAcceptedSiblingEntries)
+    template.templateKey === 'accepted_open_payment' &&
+    amountOpenCents > 0 &&
+    (hasOpenSiblingEntries || hasAcceptedSiblingEntries)
       ? locale === 'de'
         ? hasAcceptedSiblingEntries
           ? `Bei gemeinsamer Überweisung deiner bereits zugelassenen Nennungen beträgt der aktuelle Gesamtbetrag ${acceptedEntriesTotal}.`
@@ -2012,7 +2020,10 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     amountOpen,
     locale,
     fallbackGreeting: chromeCopy.fallbackGreeting,
-    headerTitle: processTemplateCopy?.headerTitle ?? null,
+    headerTitle:
+      template.templateKey === 'accepted_open_payment'
+        ? getAcceptedOpenPaymentHeaderTitle(locale, amountOpenCents)
+        : processTemplateCopy?.headerTitle ?? null,
     preheader: processTemplateCopy?.preheader ?? null,
     ctaText:
       template.templateKey === 'email_confirmation_reminder'

@@ -2,7 +2,10 @@ const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 
 const { renderEntryConfirmationPdf } = require('../dist/docs/pdf.js');
-const { buildEntryConfirmationRevisionHash } = require('../dist/docs/entryConfirmation.js');
+const {
+  buildEntryConfirmationRevisionHash,
+  resolveEntryConfirmationLocale
+} = require('../dist/docs/entryConfirmation.js');
 const { buildGiroCodeMatrix, buildGiroCodePayload } = require('../dist/docs/girocode.js');
 
 const buildPayload = () => ({
@@ -61,15 +64,10 @@ const buildPayload = () => ({
     { label: 'Beifahrer', value: 'Anna Beispiel' }
   ],
   payment: {
-    intro: 'Die Zahlungsdaten sind nachfolgend aufgeführt.',
+    intro: '',
     details: [
       { label: 'Status', value: 'offen' },
-      { label: 'Nenngeld', value: '150,00 EUR' },
-      { label: 'Frist', value: '15.04.2026' },
-      { label: 'Empfänger', value: 'MSC Oberlausitzer Dreiländereck e.V.' },
-      { label: 'IBAN', value: 'DE00123456789012345678' },
-      { label: 'BIC', value: 'WELADED1GRL' },
-      { label: 'Verwendungszweck', value: 'Nennung 11OLD-7K4P9 Max Musterfahrer' }
+      { label: 'Nenngeld', value: '150,00 EUR' }
     ],
     qrCode: null,
     qrCaption: null
@@ -87,6 +85,12 @@ const buildPayload = () => ({
 });
 
 (async () => {
+  assert.equal(resolveEntryConfirmationLocale('de'), 'de');
+  assert.equal(resolveEntryConfirmationLocale('en'), 'en');
+  assert.equal(resolveEntryConfirmationLocale('cs'), 'cs');
+  assert.equal(resolveEntryConfirmationLocale('pl'), 'pl');
+  assert.equal(resolveEntryConfirmationLocale('unsupported'), 'en');
+
   const payload = buildPayload();
   const hashA = buildEntryConfirmationRevisionHash(payload);
   const hashB = buildEntryConfirmationRevisionHash(buildPayload());
@@ -170,7 +174,7 @@ const buildPayload = () => ({
       focusedEntrySummary: 'Class 1: Supermoto · Start Number 42 · KTM EXC (Baujahr 2020, 450 ccm)',
       additionalEntries: ['Class 3: Open · Start Number 77 · Kawasaki KX (Baujahr 2018, 250 ccm)'],
       pendingEntries: ['Class 4: Classic · Start Number 91 · DKW RT 125 (Baujahr 1951, 125 ccm)'],
-      paymentIntro: 'The payment details are listed below.',
+      paymentIntro: null,
       paymentDetails: [
         { label: 'Status', value: 'open' },
         { label: 'Entry Fee', value: '150,00 EUR' }

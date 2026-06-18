@@ -11,3 +11,17 @@ export const deriveInvoicePaymentStatus = (
 
   return effectivePaidAmountCents >= effectiveTotalCents ? 'paid' : 'due';
 };
+
+export const deriveEntryPaymentStatus = (
+  entryTotalCents: number | null | undefined,
+  acceptanceStatus: string | null | undefined,
+  invoicePaymentStatus: string | null | undefined
+): 'due' | 'paid' => {
+  if (Math.max(0, entryTotalCents ?? 0) === 0) {
+    return 'paid';
+  }
+  if (acceptanceStatus !== 'accepted') {
+    return 'due';
+  }
+  return invoicePaymentStatus === 'paid' ? 'paid' : 'due';
+};

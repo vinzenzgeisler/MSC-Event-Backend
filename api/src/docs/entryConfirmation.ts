@@ -2,18 +2,16 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { getDb } from '../db/client';
-import { document, documentGenerationJob, entry, event, eventClass, eventPricingRule, invoice, person, vehicle } from '../db/schema';
+import { consentEvidence, document, documentGenerationJob, entry, event, eventClass, invoice, person, vehicle } from '../db/schema';
 import { renderEntryConfirmationPdf, type EntryConfirmationPdfPayload } from './pdf';
-import { buildGiroCodeMatrix, buildGiroCodePayload, isValidBic, isValidIban } from './girocode';
 import { getAssetObjectBuffer, uploadPdf } from './storage';
 import { writeAuditLog } from '../audit/log';
 import { buildEntryConfirmationConfigFallback, overlayEntryConfirmationConfig } from '../domain/entryConfirmationConfig';
-import { buildPaymentReference } from '../domain/paymentReference';
 import { getEntryLineTotalCents, sumEntryLineTotalCents } from '../domain/pricingSnapshot';
 import { getEntryConfirmationDefaults } from '../routes/adminConfig';
-import { resolveMailLocale, type SupportedMailLocale } from '../mail/i18n';
+import { type SupportedMailLocale } from '../mail/i18n';
 
-const ENTRY_CONFIRMATION_TEMPLATE_VERSION = 'v9';
+const ENTRY_CONFIRMATION_TEMPLATE_VERSION = 'v10';
 const ENTRY_CONFIRMATION_TYPE = 'entry_confirmation';
 const ENTRY_CONFIRMATION_FILE_NAME = 'Nennbestätigung.pdf';
 const MAIL_LOGO_KEY = 'public/mail/msc-logo.png';
@@ -133,7 +131,7 @@ const TRANSLATIONS: Record<SupportedMailLocale, TranslationConfig> = {
         'Bei Zulassung weiterer Nennungen desselben Fahrers können die Beträge gemeinsam überwiesen werden.',
       paymentOpenLine: 'Das Nenngeld ist derzeit noch offen. Bitte überweisen Sie den Betrag fristgerecht unter dem unten angegebenen Verwendungszweck.',
       paymentPaidLine: 'Das Nenngeld ist bereits eingegangen. Vielen Dank.',
-      paymentNoAdditionalAmountLine: 'Für diese zugelassene Nennung ist aktuell kein zusätzlicher Zahlbetrag offen.',
+      paymentNoAdditionalAmountLine: 'Für diese zugelassene Nennung fällt kein Nenngeld an.',
       carryLine: 'Bitte bringen Sie diese Nennbestätigung digital oder ausgedruckt zur Veranstaltung mit.',
       paymentIntroOpen: 'Die Zahlungsdaten sind nachfolgend aufgeführt. Der GiroCode kann direkt mit einer Banking-App gescannt werden.',
       paymentIntroPaid: 'Ihre Zahlung ist bereits verbucht. Die Zahlungsdaten werden daher nur zur Dokumentation aufgeführt.',
@@ -141,7 +139,7 @@ const TRANSLATIONS: Record<SupportedMailLocale, TranslationConfig> = {
       qrCaption: 'GiroCode für Banking-App',
       closingHint: 'Bitte beachten Sie die aufgeführten Hinweise zu Anreise, Fahrerlager und organisatorischem Ablauf. Bei Rückfragen unterstützt Sie das Veranstaltungsteam gern.',
       authorityHint: 'Die deutsche Fassung ist zur Vorlage bei der Veranstaltung maßgeblich.',
-      noAdditionalAmountStatus: 'kein zusätzlicher Betrag offen'
+      noAdditionalAmountStatus: 'bezahlt'
     }
   },
   en: {
@@ -192,7 +190,7 @@ const TRANSLATIONS: Record<SupportedMailLocale, TranslationConfig> = {
         'If further entries for the same rider are accepted, the amounts may be paid together.',
       paymentOpenLine: 'The entry fee is still outstanding. Please transfer the amount in due time using the reference shown below.',
       paymentPaidLine: 'Your payment has already been received. Thank you.',
-      paymentNoAdditionalAmountLine: 'There is currently no additional payment due for this accepted entry.',
+      paymentNoAdditionalAmountLine: 'No entry fee is due for this accepted entry.',
       carryLine: 'Please bring this confirmation with you to the event, either digitally or printed.',
       paymentIntroOpen: 'The payment details are listed below.',
       paymentIntroPaid: 'Your payment has already been recorded. The payment details are shown here for documentation purposes.',
@@ -200,7 +198,7 @@ const TRANSLATIONS: Record<SupportedMailLocale, TranslationConfig> = {
       qrCaption: 'GiroCode',
       closingHint: 'Please note the information below regarding arrival, paddock access and organisational matters. If you have questions, the organising team will be happy to help.',
       authorityHint: 'The German version remains the authoritative version for presentation at the event.',
-      noAdditionalAmountStatus: 'no additional amount due'
+      noAdditionalAmountStatus: 'paid'
     }
   },
   cs: {
@@ -251,7 +249,7 @@ const TRANSLATIONS: Record<SupportedMailLocale, TranslationConfig> = {
         'Budou-li přijaty další přihlášky téhož jezdce, mohou být částky uhrazeny společně.',
       paymentOpenLine: 'Startovné je stále neuhrazené. Prosíme o převod částky včas s uvedeným platebním údajem.',
       paymentPaidLine: 'Vaše platba již byla přijata. Děkujeme.',
-      paymentNoAdditionalAmountLine: 'Pro tuto přijatou přihlášku momentálně není splatná žádná další částka.',
+      paymentNoAdditionalAmountLine: 'Za tuto přijatou přihlášku se neplatí žádné startovné.',
       carryLine: 'Prosíme, přivezte si toto potvrzení na akci, v digitální nebo tištěné podobě.',
       paymentIntroOpen: 'Platební údaje jsou uvedeny níže.',
       paymentIntroPaid: 'Vaše platba již byla zaevidována. Platební údaje jsou uvedeny pouze pro evidenci.',
@@ -259,7 +257,7 @@ const TRANSLATIONS: Record<SupportedMailLocale, TranslationConfig> = {
       qrCaption: 'GiroCode',
       closingHint: 'Věnujte prosím pozornost níže uvedeným informacím k příjezdu, depu a organizaci. V případě dotazů vám pořadatelský tým rád pomůže.',
       authorityHint: 'Německá verze je pro předložení na akci rozhodující.',
-      noAdditionalAmountStatus: 'žádná další částka není splatná'
+      noAdditionalAmountStatus: 'uhrazeno'
     }
   },
   pl: {
@@ -310,7 +308,7 @@ const TRANSLATIONS: Record<SupportedMailLocale, TranslationConfig> = {
         'W przypadku akceptacji kolejnych zgłoszeń tego samego kierowcy kwoty mogą zostać opłacone łącznie.',
       paymentOpenLine: 'Wpisowe jest jeszcze nieopłacone. Prosimy o terminowy przelew z podanym tytułem płatności.',
       paymentPaidLine: 'Twoja płatność została już zaksięgowana. Dziękujemy.',
-      paymentNoAdditionalAmountLine: 'Dla tego zaakceptowanego zgłoszenia nie ma obecnie żadnej dodatkowej kwoty do zapłaty.',
+      paymentNoAdditionalAmountLine: 'Za to zaakceptowane zgłoszenie nie jest wymagane wpisowe.',
       carryLine: 'Prosimy o zabranie tego potwierdzenia na wydarzenie, w wersji elektronicznej lub wydrukowanej.',
       paymentIntroOpen: 'Dane do płatności podano poniżej.',
       paymentIntroPaid: 'Twoja płatność została już odnotowana. Dane płatności są pokazane wyłącznie informacyjnie.',
@@ -318,7 +316,7 @@ const TRANSLATIONS: Record<SupportedMailLocale, TranslationConfig> = {
       qrCaption: 'GiroCode',
       closingHint: 'Prosimy zwrócić uwagę na poniższe informacje dotyczące dojazdu, padoku i organizacji. W razie pytań zespół organizacyjny chętnie pomoże.',
       authorityHint: 'Wersja niemiecka pozostaje wersją obowiązującą do okazania podczas wydarzenia.',
-      noAdditionalAmountStatus: 'brak dodatkowej kwoty do zapłaty'
+      noAdditionalAmountStatus: 'opłacone'
     }
   }
 };
@@ -452,6 +450,13 @@ const translateStatus = (
   return openAmountCents > 0 ? 'offen' : 'bezahlt';
 };
 
+export const resolveEntryConfirmationLocale = (preferredLocale: unknown): SupportedMailLocale => {
+  if (preferredLocale === 'de' || preferredLocale === 'en' || preferredLocale === 'cs' || preferredLocale === 'pl') {
+    return preferredLocale;
+  }
+  return 'en';
+};
+
 const buildEntrySummaryLine = (item: EntrySummary, startNumberLabel: string): string =>
   [item.className, item.startNumber ? `${startNumberLabel} ${item.startNumber}` : null, item.vehicleSummary]
     .filter((value): value is string => Boolean(value))
@@ -472,7 +477,6 @@ const buildPayload = async (
       eventEntryConfirmationConfig: event.entryConfirmationConfig,
       className: eventClass.name,
       startNumber: entry.startNumberNorm,
-      orgaCode: entry.orgaCode,
       driverPersonId: entry.driverPersonId,
       codriverPersonId: entry.codriverPersonId,
       backupVehicleId: entry.backupVehicleId,
@@ -489,7 +493,6 @@ const buildPayload = async (
       pricingSnapshot: invoice.pricingSnapshot,
       paidAmountCents: invoice.paidAmountCents,
       paymentStatus: invoice.paymentStatus,
-      earlyDeadline: eventPricingRule.earlyDeadline,
       entryFeeCents: entry.entryFeeCents
     })
     .from(entry)
@@ -498,7 +501,6 @@ const buildPayload = async (
     .innerJoin(person, eq(entry.driverPersonId, person.id))
     .leftJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
-    .leftJoin(eventPricingRule, eq(eventPricingRule.eventId, entry.eventId))
     .where(and(eq(entry.id, entryId), eq(entry.eventId, eventId), isNull(entry.deletedAt)))
     .limit(1);
 
@@ -506,6 +508,13 @@ const buildPayload = async (
   if (!row) {
     return null;
   }
+
+  const consentRows = await db
+    .select({ locale: consentEvidence.locale })
+    .from(consentEvidence)
+    .where(eq(consentEvidence.entryId, entryId))
+    .orderBy(desc(consentEvidence.createdAt))
+    .limit(1);
 
   const codriverRow = row.codriverPersonId
     ? (
@@ -568,16 +577,9 @@ const buildPayload = async (
   const paidAmountCents = isInvoicePaid ? totalCents : 0;
   const openAmountCents = Math.max(0, totalCents - paidAmountCents);
   const driverFullName = `${row.driverFirstName} ${row.driverLastName}`.trim();
-  const locale = resolveMailLocale({}, 'de');
+  const locale = resolveEntryConfirmationLocale(consentRows[0]?.locale);
   const translation = TRANSLATIONS[locale] ?? TRANSLATIONS.en;
   const eventDateText = formatEventDateText(row.eventStartsAt, row.eventEndsAt);
-  const paymentReference = buildPaymentReference({
-    prefix: config.paymentReferencePrefix,
-    orgaCode: row.orgaCode,
-    firstName: row.driverFirstName,
-    lastName: row.driverLastName
-  });
-  const paymentDueDate = formatDate(row.earlyDeadline);
   const hasPendingSiblings = acceptedSiblingRows.some(
     (item) => item.id !== entryId && (item.acceptanceStatus === 'pending' || item.acceptanceStatus === 'shortlist')
   );
@@ -652,40 +654,13 @@ const buildPayload = async (
 
   const germanPaymentDetails = [
     { label: TRANSLATIONS.de.labels.status, value: translateStatus(openAmountCents, 'de', isInvoicePaid, TRANSLATIONS.de) },
-    { label: TRANSLATIONS.de.labels.fee, value: formatCurrencyCents(totalCents) },
-    paymentDueDate ? { label: TRANSLATIONS.de.labels.dueDate, value: paymentDueDate } : null,
-    normalizeText(paymentReference) ? { label: TRANSLATIONS.de.labels.reference, value: paymentReference } : null,
-    normalizeText(config.paymentRecipient) ? { label: TRANSLATIONS.de.labels.recipient, value: config.paymentRecipient as string } : null,
-    normalizeText(config.paymentIban) ? { label: TRANSLATIONS.de.labels.iban, value: config.paymentIban as string } : null,
-    normalizeText(config.paymentBic) ? { label: TRANSLATIONS.de.labels.bic, value: config.paymentBic as string } : null,
-    normalizeText(config.paymentBankName) ? { label: TRANSLATIONS.de.labels.bank, value: config.paymentBankName as string } : null
-  ].filter((item): item is { label: string; value: string } => Boolean(item));
+    { label: TRANSLATIONS.de.labels.fee, value: formatCurrencyCents(totalCents) }
+  ];
 
   const translatedPaymentDetails = [
     { label: translation.labels.status, value: translateStatus(openAmountCents, locale, isInvoicePaid, translation) },
-    { label: translation.labels.fee, value: formatCurrencyCents(totalCents) },
-    paymentDueDate ? { label: translation.labels.dueDate, value: paymentDueDate } : null,
-    normalizeText(paymentReference) ? { label: translation.labels.reference, value: paymentReference } : null,
-    normalizeText(config.paymentRecipient) ? { label: translation.labels.recipient, value: config.paymentRecipient as string } : null,
-    normalizeText(config.paymentIban) ? { label: translation.labels.iban, value: config.paymentIban as string } : null,
-    normalizeText(config.paymentBic) ? { label: translation.labels.bic, value: config.paymentBic as string } : null,
-    normalizeText(config.paymentBankName) ? { label: translation.labels.bank, value: config.paymentBankName as string } : null
-  ].filter((item): item is { label: string; value: string } => Boolean(item));
-
-  let paymentQrCode: ReturnType<typeof buildGiroCodeMatrix> | null = null;
-  const giroCodePayload =
-    openAmountCents > 0 && config.paymentRecipient && config.paymentIban && isValidIban(config.paymentIban) && isValidBic(config.paymentBic)
-      ? buildGiroCodePayload({
-          recipient: config.paymentRecipient,
-          iban: config.paymentIban,
-          bic: config.paymentBic ?? null,
-          amountEur: openAmountCents / 100,
-          reference: paymentReference
-        })
-      : null;
-  if (giroCodePayload) {
-    paymentQrCode = buildGiroCodeMatrix(giroCodePayload);
-  }
+    { label: translation.labels.fee, value: formatCurrencyCents(totalCents) }
+  ];
 
   const germanEventInfo = [
     normalizeText(config.paddockInfo) ? { label: TRANSLATIONS.de.labels.paddock, value: config.paddockInfo as string } : null,
@@ -746,11 +721,13 @@ const buildPayload = async (
           translation.text.introLine(row.eventName),
           additionalAcceptedEntries.length > 0 ? translation.text.additionalEntriesIntro : '',
           translatedEntryScopeHint,
-          openAmountCents > 0
-            ? translation.text.paymentOpenLine
-            : isInvoicePaid
-              ? translation.text.paymentPaidLine
-              : translation.text.paymentNoAdditionalAmountLine,
+          totalCents === 0
+            ? translation.text.paymentNoAdditionalAmountLine
+            : openAmountCents > 0
+              ? translation.text.paymentOpenLine
+              : isInvoicePaid
+                ? translation.text.paymentPaidLine
+                : translation.text.paymentNoAdditionalAmountLine,
           includeCombinedTransferHint ? translatedCombinedTransferHint : '',
           translation.text.carryLine
         ].filter((value) => value.trim().length > 0),
@@ -773,12 +750,7 @@ const buildPayload = async (
           pendingEntries.length > 0
             ? pendingEntries.map((item) => buildEntrySummaryLine(item, translation.labels.startNumber))
             : null,
-        paymentIntro:
-          openAmountCents > 0
-            ? translation.text.paymentIntroOpen
-            : isInvoicePaid
-              ? translation.text.paymentIntroPaid
-              : translation.text.paymentIntroNoAdditionalAmount,
+        paymentIntro: null,
         paymentDetails: translatedPaymentDetails,
         eventInfo: translatedEventInfo.length > 0 ? translatedEventInfo : null,
         schedule: schedule.length > 0 ? schedule : null,
@@ -819,11 +791,13 @@ const buildPayload = async (
           TRANSLATIONS.de.text.introLine(row.eventName),
           additionalAcceptedEntries.length > 0 ? TRANSLATIONS.de.text.additionalEntriesIntro : '',
           germanEntryScopeHint,
-          openAmountCents > 0
-            ? TRANSLATIONS.de.text.paymentOpenLine
-            : isInvoicePaid
-              ? TRANSLATIONS.de.text.paymentPaidLine
-              : TRANSLATIONS.de.text.paymentNoAdditionalAmountLine,
+          totalCents === 0
+            ? TRANSLATIONS.de.text.paymentNoAdditionalAmountLine
+            : openAmountCents > 0
+              ? TRANSLATIONS.de.text.paymentOpenLine
+              : isInvoicePaid
+                ? TRANSLATIONS.de.text.paymentPaidLine
+                : TRANSLATIONS.de.text.paymentNoAdditionalAmountLine,
           includeCombinedTransferHint ? germanCombinedTransferHint : '',
           TRANSLATIONS.de.text.carryLine
         ].filter((value) => value.trim().length > 0)
@@ -863,15 +837,10 @@ const buildPayload = async (
       payment:
         germanPaymentDetails.length > 0
           ? {
-              intro:
-                openAmountCents > 0
-                  ? TRANSLATIONS.de.text.paymentIntroOpen
-                  : isInvoicePaid
-                    ? TRANSLATIONS.de.text.paymentIntroPaid
-                    : TRANSLATIONS.de.text.paymentIntroNoAdditionalAmount,
+              intro: '',
               details: germanPaymentDetails,
-              qrCode: paymentQrCode,
-              qrCaption: paymentQrCode ? TRANSLATIONS.de.text.qrCaption : null
+              qrCode: null,
+              qrCaption: null
             }
           : null,
       eventInfo: germanEventInfo.length > 0 ? germanEventInfo : null,

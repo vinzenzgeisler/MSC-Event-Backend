@@ -404,3 +404,22 @@ export const getProcessTemplateCopy = (
   const byLocale = PROCESS_COPY[locale] ?? PROCESS_COPY.en;
   return byLocale[templateKey] ?? PROCESS_COPY.en[templateKey];
 };
+
+export const getAcceptedOpenPaymentHeaderTitle = (
+  locale: SupportedMailLocale,
+  amountOpenCents: number
+): string => {
+  if (amountOpenCents > 0) {
+    return getProcessTemplateCopy('accepted_open_payment', locale).headerTitle;
+  }
+  if (locale === 'de') {
+    return 'Zugelassen';
+  }
+  if (locale === 'cs') {
+    return 'Přijato';
+  }
+  if (locale === 'pl') {
+    return 'Zaakceptowano';
+  }
+  return 'Accepted';
+};

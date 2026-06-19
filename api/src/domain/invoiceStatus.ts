@@ -17,6 +17,9 @@ export const deriveEntryPaymentStatus = (
   acceptanceStatus: string | null | undefined,
   invoicePaymentStatus: string | null | undefined
 ): 'due' | 'paid' => {
+  if (entryTotalCents === null || entryTotalCents === undefined) {
+    return 'due';
+  }
   if (Math.max(0, entryTotalCents ?? 0) === 0) {
     return 'paid';
   }
@@ -24,4 +27,29 @@ export const deriveEntryPaymentStatus = (
     return 'due';
   }
   return invoicePaymentStatus === 'paid' ? 'paid' : 'due';
+};
+
+export const resolveEntryTotalCents = (input: {
+  acceptanceStatus: string | null | undefined;
+  focusedBillableTotalCents: number | null;
+  focusedForecastTotalCents: number | null;
+  manualOverrideCents: number | null;
+  acceptedDriverEntryCount: number;
+  invoiceTotalCents: number | null;
+  provisionalTotalCents: number | null;
+}): number | null => {
+  if (input.acceptanceStatus === 'accepted') {
+    return (
+      input.focusedBillableTotalCents ??
+      input.focusedForecastTotalCents ??
+      input.manualOverrideCents ??
+      (input.acceptedDriverEntryCount === 1 ? input.invoiceTotalCents : null) ??
+      input.provisionalTotalCents ??
+      input.invoiceTotalCents
+    );
+  }
+  if (input.acceptanceStatus === 'rejected') {
+    return 0;
+  }
+  return input.focusedForecastTotalCents ?? input.manualOverrideCents ?? input.provisionalTotalCents;
 };

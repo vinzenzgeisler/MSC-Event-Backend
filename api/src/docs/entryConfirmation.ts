@@ -11,7 +11,7 @@ import { getEntryLineTotalCents, sumEntryLineTotalCents } from '../domain/pricin
 import { getEntryConfirmationDefaults } from '../routes/adminConfig';
 import { type SupportedMailLocale } from '../mail/i18n';
 
-const ENTRY_CONFIRMATION_TEMPLATE_VERSION = 'v10';
+const ENTRY_CONFIRMATION_TEMPLATE_VERSION = 'v11';
 const ENTRY_CONFIRMATION_TYPE = 'entry_confirmation';
 const ENTRY_CONFIRMATION_FILE_NAME = 'Nennbestätigung.pdf';
 const MAIL_LOGO_KEY = 'public/mail/msc-logo.png';
@@ -451,8 +451,18 @@ const translateStatus = (
 };
 
 export const resolveEntryConfirmationLocale = (preferredLocale: unknown): SupportedMailLocale => {
-  if (preferredLocale === 'de' || preferredLocale === 'en' || preferredLocale === 'cs' || preferredLocale === 'pl') {
-    return preferredLocale;
+  const normalized = typeof preferredLocale === 'string' ? preferredLocale.trim().toLowerCase() : '';
+  if (normalized === 'de' || normalized === 'de-de') {
+    return 'de';
+  }
+  if (normalized === 'en' || normalized === 'en-gb') {
+    return 'en';
+  }
+  if (normalized === 'cs' || normalized === 'cs-cz') {
+    return 'cs';
+  }
+  if (normalized === 'pl' || normalized === 'pl-pl') {
+    return 'pl';
   }
   return 'en';
 };

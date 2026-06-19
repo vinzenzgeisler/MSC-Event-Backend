@@ -86,9 +86,13 @@ const buildPayload = () => ({
 
 (async () => {
   assert.equal(resolveEntryConfirmationLocale('de'), 'de');
+  assert.equal(resolveEntryConfirmationLocale('de-DE'), 'de');
   assert.equal(resolveEntryConfirmationLocale('en'), 'en');
+  assert.equal(resolveEntryConfirmationLocale('en-GB'), 'en');
   assert.equal(resolveEntryConfirmationLocale('cs'), 'cs');
+  assert.equal(resolveEntryConfirmationLocale('cs-CZ'), 'cs');
   assert.equal(resolveEntryConfirmationLocale('pl'), 'pl');
+  assert.equal(resolveEntryConfirmationLocale('pl-PL'), 'pl');
   assert.equal(resolveEntryConfirmationLocale('unsupported'), 'en');
 
   const payload = buildPayload();
@@ -105,6 +109,8 @@ const buildPayload = () => ({
 
   const firstPdf = await renderEntryConfirmationPdf(payload);
   const secondPdf = await renderEntryConfirmationPdf(payload);
+  const germanPageCount = (firstPdf.toString('latin1').match(/\/Type \/Page\b/g) || []).length;
+  assert.equal(germanPageCount, 1);
   assert.equal(firstPdf.subarray(0, 4).toString('utf8'), '%PDF');
   assert.ok(firstPdf.length > 1500, `expected PDF size > 1500, got ${firstPdf.length}`);
   assert.equal(

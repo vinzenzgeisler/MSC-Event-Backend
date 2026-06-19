@@ -5,6 +5,7 @@ const {
   fingerprintCandidate,
   toManifestCandidate
 } = require('../dist/tools/doublestarterMigration.js');
+const fs = require('node:fs');
 
 const row = (overrides) => ({
   event_id: 'e5dc0ac8-3a6f-4ee3-9a1c-45e2057d2a28',
@@ -82,4 +83,10 @@ const second = row({
   const changed = classifyCandidates([row({}), { ...second, acceptance_status: 'accepted' }]).automatic[0];
   assert.ok(first);
   assert.equal(changed, undefined);
+}
+
+{
+  const source = fs.readFileSync(require.resolve('../dist/tools/doublestarterMigration.js'), 'utf8');
+  assert.match(source, /inner join "class" ec on ec\.id = e\.class_id/);
+  assert.equal(source.includes('inner join event_class ec'), false);
 }

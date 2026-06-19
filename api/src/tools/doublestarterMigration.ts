@@ -351,7 +351,7 @@ const candidateRowsSql = `
     coalesce((select count(*) from invoice_payment ip where ip.invoice_id = i.id), 0)::int as invoice_payment_count
   from entry e
   inner join event ev on ev.id = e.event_id
-  inner join event_class ec on ec.id = e.class_id
+  inner join "class" ec on ec.id = e.class_id
   inner join person p on p.id = e.driver_person_id
   inner join registration_group rg on rg.id = e.registration_group_id
   inner join vehicle v on v.id = e.vehicle_id

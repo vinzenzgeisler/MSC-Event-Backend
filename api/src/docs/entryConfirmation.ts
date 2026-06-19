@@ -4,9 +4,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getDb } from '../db/client';
 import { consentEvidence, document, documentGenerationJob, entry, event, eventClass, invoice, person, vehicle } from '../db/schema';
 import { renderEntryConfirmationPdf, type EntryConfirmationPdfPayload } from './pdf';
+import { buildGiroCodeMatrix, buildGiroCodePayload, isValidBic, isValidIban } from './girocode';
 import { getAssetObjectBuffer, uploadPdf } from './storage';
 import { writeAuditLog } from '../audit/log';
 import { buildEntryConfirmationConfigFallback, overlayEntryConfirmationConfig } from '../domain/entryConfirmationConfig';
+import { buildPaymentReference } from '../domain/paymentReference';
 import { getEntryLineTotalCents, sumEntryLineTotalCents } from '../domain/pricingSnapshot';
 import { getEntryConfirmationDefaults } from '../routes/adminConfig';
 import { type SupportedMailLocale } from '../mail/i18n';
@@ -487,6 +489,7 @@ const buildPayload = async (
       eventEntryConfirmationConfig: event.entryConfirmationConfig,
       className: eventClass.name,
       startNumber: entry.startNumberNorm,
+      orgaCode: entry.orgaCode,
       driverPersonId: entry.driverPersonId,
       codriverPersonId: entry.codriverPersonId,
       backupVehicleId: entry.backupVehicleId,
@@ -662,15 +665,58 @@ const buildPayload = async (
     }))
     .filter((item) => item.className.trim().length > 0 || item.vehicleSummary.trim().length > 0);
 
+  const includePaymentTransferDetails = totalCents > 0;
+  const paymentReference = buildPaymentReference({
+    prefix: config.paymentReferencePrefix,
+    orgaCode: row.orgaCode,
+    firstName: row.driverFirstName,
+    lastName: row.driverLastName
+  });
+
   const germanPaymentDetails = [
     { label: TRANSLATIONS.de.labels.status, value: translateStatus(openAmountCents, 'de', isInvoicePaid, TRANSLATIONS.de) },
-    { label: TRANSLATIONS.de.labels.fee, value: formatCurrencyCents(totalCents) }
-  ];
+    { label: TRANSLATIONS.de.labels.fee, value: formatCurrencyCents(totalCents) },
+    includePaymentTransferDetails && normalizeText(paymentReference)
+      ? { label: TRANSLATIONS.de.labels.reference, value: paymentReference }
+      : null,
+    includePaymentTransferDetails && normalizeText(config.paymentRecipient)
+      ? { label: TRANSLATIONS.de.labels.recipient, value: config.paymentRecipient as string }
+      : null,
+    includePaymentTransferDetails && normalizeText(config.paymentIban) ? { label: TRANSLATIONS.de.labels.iban, value: config.paymentIban as string } : null,
+    includePaymentTransferDetails && normalizeText(config.paymentBic) ? { label: TRANSLATIONS.de.labels.bic, value: config.paymentBic as string } : null,
+    includePaymentTransferDetails && normalizeText(config.paymentBankName)
+      ? { label: TRANSLATIONS.de.labels.bank, value: config.paymentBankName as string }
+      : null
+  ].filter((item): item is { label: string; value: string } => Boolean(item));
 
   const translatedPaymentDetails = [
     { label: translation.labels.status, value: translateStatus(openAmountCents, locale, isInvoicePaid, translation) },
-    { label: translation.labels.fee, value: formatCurrencyCents(totalCents) }
-  ];
+    { label: translation.labels.fee, value: formatCurrencyCents(totalCents) },
+    includePaymentTransferDetails && normalizeText(paymentReference) ? { label: translation.labels.reference, value: paymentReference } : null,
+    includePaymentTransferDetails && normalizeText(config.paymentRecipient)
+      ? { label: translation.labels.recipient, value: config.paymentRecipient as string }
+      : null,
+    includePaymentTransferDetails && normalizeText(config.paymentIban) ? { label: translation.labels.iban, value: config.paymentIban as string } : null,
+    includePaymentTransferDetails && normalizeText(config.paymentBic) ? { label: translation.labels.bic, value: config.paymentBic as string } : null,
+    includePaymentTransferDetails && normalizeText(config.paymentBankName)
+      ? { label: translation.labels.bank, value: config.paymentBankName as string }
+      : null
+  ].filter((item): item is { label: string; value: string } => Boolean(item));
+
+  let paymentQrCode: ReturnType<typeof buildGiroCodeMatrix> | null = null;
+  const giroCodePayload =
+    openAmountCents > 0 && config.paymentRecipient && config.paymentIban && isValidIban(config.paymentIban) && isValidBic(config.paymentBic)
+      ? buildGiroCodePayload({
+          recipient: config.paymentRecipient,
+          iban: config.paymentIban,
+          bic: config.paymentBic ?? null,
+          amountEur: openAmountCents / 100,
+          reference: paymentReference
+        })
+      : null;
+  if (giroCodePayload) {
+    paymentQrCode = buildGiroCodeMatrix(giroCodePayload);
+  }
 
   const germanEventInfo = [
     normalizeText(config.paddockInfo) ? { label: TRANSLATIONS.de.labels.paddock, value: config.paddockInfo as string } : null,
@@ -760,7 +806,13 @@ const buildPayload = async (
           pendingEntries.length > 0
             ? pendingEntries.map((item) => buildEntrySummaryLine(item, translation.labels.startNumber))
             : null,
-        paymentIntro: null,
+        paymentIntro: includePaymentTransferDetails
+          ? openAmountCents > 0
+            ? translation.text.paymentIntroOpen
+            : isInvoicePaid
+              ? translation.text.paymentIntroPaid
+              : translation.text.paymentIntroNoAdditionalAmount
+          : null,
         paymentDetails: translatedPaymentDetails,
         eventInfo: translatedEventInfo.length > 0 ? translatedEventInfo : null,
         schedule: schedule.length > 0 ? schedule : null,
@@ -847,10 +899,16 @@ const buildPayload = async (
       payment:
         germanPaymentDetails.length > 0
           ? {
-              intro: '',
+              intro: includePaymentTransferDetails
+                ? openAmountCents > 0
+                  ? TRANSLATIONS.de.text.paymentIntroOpen
+                  : isInvoicePaid
+                    ? TRANSLATIONS.de.text.paymentIntroPaid
+                    : TRANSLATIONS.de.text.paymentIntroNoAdditionalAmount
+                : '',
               details: germanPaymentDetails,
-              qrCode: null,
-              qrCaption: null
+              qrCode: paymentQrCode,
+              qrCaption: paymentQrCode ? TRANSLATIONS.de.text.qrCaption : null
             }
           : null,
       eventInfo: germanEventInfo.length > 0 ? germanEventInfo : null,

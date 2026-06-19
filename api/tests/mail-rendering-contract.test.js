@@ -139,6 +139,37 @@ const buildBasePayload = () => ({
   assert.match(rendered.htmlDocument, /MSC Oberlausitzer Dreiländereck e\.V\./);
 }
 
+// Double-starter migration notice must render without entry or verification context.
+{
+  const rendered = renderMailContract({
+    templateKey: 'doublestarter_migration_notice',
+    subjectTemplate: 'Information zu deinen Nennungen - {{eventName}}',
+    bodyTextTemplate:
+      'Hallo {{driverName}},\n\nwir führen deine beiden Nennungen technisch zu einem Doppelstarter-Datensatz zusammen.',
+    bodyHtmlTemplate: null,
+    data: {
+      ...buildBasePayload(),
+      locale: 'de',
+      preheader: 'Information zur Zusammenführung deiner Nennungen',
+      headerTitle: 'Nennungen werden zusammengeführt',
+      entryCount: 2,
+      entrySummaries: [
+        'Klasse 1: Supermoto · Startnummer 42 · KTM EXC',
+        'Klasse 2: Classic · Startnummer 43 · Husqvarna WR'
+      ]
+    }
+  });
+  assert.equal(rendered.warnings.length, 0);
+  assert.match(rendered.bodyTextRendered, /Doppelstarter-Datensatz/);
+  assert.match(rendered.htmlDocument, /Nennungen werden zusammengeführt/);
+  assert.match(rendered.htmlDocument, /Betroffene Nennungen/);
+  assert.match(rendered.htmlDocument, /Klasse 1: Supermoto/);
+  assert.match(rendered.htmlDocument, /Husqvarna WR/);
+  assert.equal(rendered.htmlDocument.includes('verify?token='), false);
+  assert.equal((rendered.bodyTextRendered.match(/Viele Grüße/g) ?? []).length, 0);
+  assert.equal((rendered.bodyTextRendered.match(/Mit freundlichen Grüßen/g) ?? []).length, 1);
+}
+
 // Registration confirmation must show all entries for multi-entry registrations.
 {
   const rendered = renderMailContract({

@@ -81,7 +81,8 @@ export const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
   free_form: [],
   payment_reminder_followup: [],
   email_confirmation: ['driverName', 'verificationUrl'],
-  codriver_info: ['eventName', 'driverName', 'codriverName']
+  codriver_info: ['eventName', 'driverName', 'codriverName'],
+  doublestarter_migration_notice: ['eventName', 'driverName']
 };
 
 export const KNOWN_PLACEHOLDER_NAMES = new Set(PLACEHOLDER_CATALOG.map((item) => item.name));

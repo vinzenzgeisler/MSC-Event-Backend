@@ -343,6 +343,12 @@ const CONTRACTS: Record<string, TemplateContract> = {
     includeEntryContextDefault: true,
     showBadgeDefault: false,
     defaultMailLabel: null
+  }),
+  doublestarter_migration_notice: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.doublestarter_migration_notice ?? [],
+    includeEntryContextDefault: true,
+    showBadgeDefault: false,
+    defaultMailLabel: null
   })
 };
 

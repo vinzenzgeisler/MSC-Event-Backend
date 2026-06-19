@@ -13,7 +13,8 @@ const CANONICAL_LAYOUT_ONLY_TEMPLATES = new Set<string>([
   'accepted_paid_completed',
   'payment_reminder',
   'rejected',
-  'codriver_info'
+  'codriver_info',
+  'doublestarter_migration_notice'
 ]);
 
 const readPath = (data: TemplateData, keyPath: string): unknown => {
@@ -439,6 +440,12 @@ const TEMPLATE_VISUALS: Record<string, TemplateVisualConfig> = {
     entryBackground: '#F0F9FF',
     entryBorder: '#BAE6FD',
     entryLabelColor: '#0369A1'
+  },
+  doublestarter_migration_notice: {
+    accentLine: '#7DD3FC',
+    entryBackground: '#F0F9FF',
+    entryBorder: '#BAE6FD',
+    entryLabelColor: '#0369A1'
   }
 };
 
@@ -459,7 +466,12 @@ const buildEntryContextCard = (
   const copy = getMailChromeCopy(locale);
   const labels = getEntryContextLabels(locale);
   const visual = getTemplateVisualConfig(templateKey);
-  const entryContextTitle = templateKey === 'codriver_info' ? copy.codriverEntryContextTitle : copy.entryContextTitle;
+  const entryContextTitle =
+    templateKey === 'codriver_info'
+      ? copy.codriverEntryContextTitle
+      : templateKey === 'doublestarter_migration_notice'
+        ? copy.migrationEntryContextTitle
+        : copy.entryContextTitle;
   const rows: Array<{ label: string; value: string; multiline?: boolean }> = [];
   const entrySummaries = parseMultiline(data.entrySummaries);
   const showFocusedEntryDetails = entrySummaries.length <= 1;
@@ -635,6 +647,10 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   codriver_info: {
     mailLabel: '',
     heroSubtitle: 'Information zu deiner Beifahrer-Eintragung'
+  },
+  doublestarter_migration_notice: {
+    mailLabel: '',
+    heroSubtitle: 'Information zur Zusammenführung deiner Nennungen.'
   }
 };
 

@@ -217,6 +217,8 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
   const offset = decodeCursor(paginationQuery.cursor);
   const isAsc = paginationQuery.sortDir === 'asc';
   const orderTerm = <T>(column: T) => (isAsc ? asc(column as never) : desc(column as never));
+  const startNumberTypeOrder = sql<number>`case when ${entry.startNumberNorm} ~ '^[0-9]+$' then 0 else 1 end`;
+  const numericStartNumber = sql<number>`case when ${entry.startNumberNorm} ~ '^[0-9]+$' then ${entry.startNumberNorm}::int end`;
   const orderBy =
     paginationQuery.sortBy === 'driverLastName'
       ? [orderTerm(person.lastName), orderTerm(person.firstName), orderTerm(entry.id)]
@@ -227,7 +229,12 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
           : paginationQuery.sortBy === 'updatedAt'
             ? [orderTerm(entry.updatedAt), orderTerm(entry.id)]
             : paginationQuery.sortBy === 'startNumberNorm'
-              ? [orderTerm(entry.startNumberNorm), orderTerm(entry.id)]
+              ? [
+                  orderTerm(startNumberTypeOrder),
+                  orderTerm(numericStartNumber),
+                  orderTerm(entry.startNumberNorm),
+                  orderTerm(entry.id)
+                ]
               : paginationQuery.sortBy === 'deletedAt'
                 ? [orderTerm(entry.deletedAt), orderTerm(entry.id)]
                 : [orderTerm(eventClass.name), orderTerm(person.lastName), orderTerm(person.firstName), orderTerm(entry.id)];

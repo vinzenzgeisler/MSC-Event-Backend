@@ -11,7 +11,6 @@ import {
   entry,
   event,
   eventClass,
-  eventPricingRule,
   invoice,
   mailAttachmentUpload,
   person,
@@ -478,7 +477,9 @@ export const buildAcceptedPaymentInstructionText = (input: {
 
   if (input.locale === 'en') {
     return [
-      `Please transfer the entry fee by ${input.paymentDueDate ?? 'the due date shown in the PDF'} using the following account:`,
+      input.paymentDueDate
+        ? `Please transfer the entry fee by ${input.paymentDueDate} using the following account:`
+        : 'Please transfer the entry fee using the following account:',
       `- Amount: ${input.amountOpen}`,
       input.paymentRecipient ? `- Recipient: ${input.paymentRecipient}` : null,
       input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
@@ -489,7 +490,9 @@ export const buildAcceptedPaymentInstructionText = (input: {
   }
   if (input.locale === 'cs') {
     return [
-      `Prosíme o úhradu startovného nejpozději do ${input.paymentDueDate ?? 'termínu uvedeného v PDF'} na následující účet:`,
+      input.paymentDueDate
+        ? `Prosíme o úhradu startovného nejpozději do ${input.paymentDueDate} na následující účet:`
+        : 'Prosíme o úhradu startovného na následující účet:',
       `- Částka: ${input.amountOpen}`,
       input.paymentRecipient ? `- Příjemce: ${input.paymentRecipient}` : null,
       input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
@@ -500,7 +503,9 @@ export const buildAcceptedPaymentInstructionText = (input: {
   }
   if (input.locale === 'pl') {
     return [
-      `Prosimy o opłacenie wpisowego do ${input.paymentDueDate ?? 'terminu podanego w PDF'} na poniższy rachunek:`,
+      input.paymentDueDate
+        ? `Prosimy o opłacenie wpisowego do ${input.paymentDueDate} na poniższy rachunek:`
+        : 'Prosimy o opłacenie wpisowego na poniższy rachunek:',
       `- Kwota: ${input.amountOpen}`,
       input.paymentRecipient ? `- Odbiorca: ${input.paymentRecipient}` : null,
       input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
@@ -510,7 +515,9 @@ export const buildAcceptedPaymentInstructionText = (input: {
       .join('\n');
   }
   return [
-    `Bitte überweise das Nenngeld bis ${input.paymentDueDate ?? 'zu der in der PDF genannten Frist'} auf folgendes Konto:`,
+    input.paymentDueDate
+      ? `Bitte überweise das Nenngeld bis ${input.paymentDueDate} auf folgendes Konto:`
+      : 'Bitte überweise das Nenngeld auf folgendes Konto:',
     `- Betrag: ${input.amountOpen}`,
     input.paymentRecipient ? `- Empfänger: ${input.paymentRecipient}` : null,
     input.paymentIban ? `- IBAN: ${input.paymentIban}` : null,
@@ -780,11 +787,11 @@ const resolveUploadAttachments = async (eventId: string, uploadIds: string[] | u
 const resolvePaymentDeadlineDefault = async (eventId: string): Promise<string | null> => {
   const db = await getDb();
   const rows = await db
-    .select({ earlyDeadline: eventPricingRule.earlyDeadline })
-    .from(eventPricingRule)
-    .where(eq(eventPricingRule.eventId, eventId))
+    .select({ paymentDueAt: event.paymentDueAt })
+    .from(event)
+    .where(eq(event.id, eventId))
     .limit(1);
-  return formatDateOnlyText(rows[0]?.earlyDeadline ?? null);
+  return formatDateOnlyText(rows[0]?.paymentDueAt ?? null);
 };
 
 type MailEntryContextSummary = {
@@ -1815,7 +1822,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       pricingSnapshot: invoice.pricingSnapshot,
       paidAmountCents: invoice.paidAmountCents,
       paymentStatus: invoice.paymentStatus,
-      earlyDeadline: eventPricingRule.earlyDeadline,
+      paymentDueAt: event.paymentDueAt,
       eventName: event.name,
       eventStartsAt: event.startsAt,
       eventEndsAt: event.endsAt,
@@ -1838,7 +1845,6 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     .innerJoin(person, eq(entry.driverPersonId, person.id))
     .leftJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
-    .leftJoin(eventPricingRule, eq(eventPricingRule.eventId, entry.eventId))
     .where(and(eq(entry.eventId, input.eventId), eq(entry.id, input.entryId)));
 
   if (rows.length === 0) {
@@ -1936,7 +1942,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     template.templateKey === 'accepted_open_payment' ? sumEntryLineTotalCents(row.pricingSnapshot, acceptedEntryIds) : 0;
   const acceptedEntriesTotal =
     template.templateKey === 'accepted_open_payment' ? `${formatEuroFromCents(acceptedEntriesTotalCents)} EUR` : '';
-  const paymentDueDate = formatDateOnlyText(row.earlyDeadline ?? null);
+  const paymentDueDate = formatDateOnlyText(row.paymentDueAt ?? null);
   const entryScopeHint =
     template.templateKey === 'accepted_open_payment'
       ? locale === 'de'

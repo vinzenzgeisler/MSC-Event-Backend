@@ -26,6 +26,7 @@ export const event = pgTable(
     isCurrent: boolean('is_current').notNull().default(false),
     registrationOpenAt: timestamp('registration_open_at', { withTimezone: true }),
     registrationCloseAt: timestamp('registration_close_at', { withTimezone: true }),
+    paymentDueAt: timestamp('payment_due_at', { withTimezone: true }),
     contactEmail: text('contact_email'),
     websiteUrl: text('website_url'),
     entryConfirmationConfig: jsonb('entry_confirmation_config').$type<EntryConfirmationConfig>().notNull().default(sql`'{}'::jsonb`),

@@ -261,6 +261,22 @@ const buildBasePayload = () => ({
   }
 }
 
+// Without an event payment deadline, acceptance instructions must not invent or reference another deadline.
+{
+  const instruction = buildAcceptedPaymentInstructionText({
+    locale: 'de',
+    amountOpen: '100,00 EUR',
+    amountOpenCents: 10000,
+    paymentDueDate: null,
+    paymentRecipient: 'MSC',
+    paymentIban: 'DE001234',
+    paymentReference: 'Nennung TEST'
+  });
+  assert.equal(instruction.includes('Frist'), false);
+  assert.equal(instruction.includes('PDF'), false);
+  assert.equal(instruction.includes('Bitte überweise das Nenngeld auf folgendes Konto:'), true);
+}
+
 // Payment reminder should include richer payment details in the info card.
 {
   const rendered = renderMailContract({

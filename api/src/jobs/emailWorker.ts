@@ -293,6 +293,9 @@ export const isDueForPaymentReminder = (
 ): boolean => {
   const acceptedMailAt = candidate.accepted_mail_at ? new Date(candidate.accepted_mail_at) : null;
   const paymentDueDate = candidate.payment_due_date ? new Date(candidate.payment_due_date) : null;
+  if (!paymentDueDate || Number.isNaN(paymentDueDate.getTime())) {
+    return false;
+  }
   const validBaseDates = [acceptedMailAt, paymentDueDate].filter((value): value is Date => Boolean(value && !Number.isNaN(value.getTime())));
   if (validBaseDates.length === 0) {
     return false;
@@ -318,14 +321,13 @@ const queueAutomaticPaymentReminders = async (
         e.event_id,
         e.id as entry_id,
         accepted_mail.accepted_mail_at,
-        epr.early_deadline::text as payment_due_date,
+        ev.payment_due_at::text as payment_due_date,
         reminders.last_reminder_at
       from entry e
       inner join event ev on ev.id = e.event_id
       inner join invoice i
         on i.event_id = e.event_id
        and i.driver_person_id = e.driver_person_id
-      left join event_pricing_rule epr on epr.event_id = e.event_id
       left join lateral (
         select max(o.created_at) as accepted_mail_at
         from email_outbox o

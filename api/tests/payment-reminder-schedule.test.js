@@ -68,4 +68,36 @@ const now = new Date('2026-03-18T12:00:00.000Z');
   assert.equal(followupNotDue, false);
 }
 
+{
+  const disabledWithoutConfiguredDeadline = isDueForPaymentReminder(
+    {
+      event_id: 'event-1',
+      entry_id: 'entry-5',
+      accepted_mail_at: '2026-01-10T10:00:00.000Z',
+      payment_due_date: null,
+      last_reminder_at: null
+    },
+    30,
+    14,
+    now
+  );
+  assert.equal(disabledWithoutConfiguredDeadline, false);
+}
+
+{
+  const acceptanceAfterDeadlineDefinesFirstReminderBase = isDueForPaymentReminder(
+    {
+      event_id: 'event-1',
+      entry_id: 'entry-6',
+      accepted_mail_at: '2026-03-01T10:00:00.000Z',
+      payment_due_date: '2026-01-15T00:00:00.000Z',
+      last_reminder_at: null
+    },
+    30,
+    14,
+    now
+  );
+  assert.equal(acceptanceAfterDeadlineDefinesFirstReminderBase, false);
+}
+
 console.log('payment-reminder-schedule.test.js: ok');

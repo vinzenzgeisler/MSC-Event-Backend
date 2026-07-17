@@ -15,6 +15,7 @@ const createEventSchema = z.object({
   endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   registrationOpenAt: z.string().datetime().optional(),
   registrationCloseAt: z.string().datetime().optional(),
+  paymentDueAt: z.string().datetime().optional(),
   contactEmail: z.string().email().optional(),
   websiteUrl: z.string().url().optional(),
   entryConfirmationConfig: entryConfirmationConfigSchema.optional(),
@@ -37,6 +38,7 @@ const updateEventSchema = z
     endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     registrationOpenAt: z.string().datetime().nullable().optional(),
     registrationCloseAt: z.string().datetime().nullable().optional(),
+    paymentDueAt: z.string().datetime().nullable().optional(),
     contactEmail: z.string().email().nullable().optional(),
     websiteUrl: z.string().url().nullable().optional(),
     entryConfirmationConfig: entryConfirmationConfigSchema.optional()
@@ -114,6 +116,7 @@ export const listEvents = async (input: ListEventsInput) => {
       isCurrent: event.isCurrent,
       registrationOpenAt: event.registrationOpenAt,
       registrationCloseAt: event.registrationCloseAt,
+      paymentDueAt: event.paymentDueAt,
       contactEmail: event.contactEmail,
       websiteUrl: event.websiteUrl,
       entryConfirmationConfig: event.entryConfirmationConfig,
@@ -153,6 +156,7 @@ export const getCurrentEvent = async () => {
       isCurrent: event.isCurrent,
       registrationOpenAt: event.registrationOpenAt,
       registrationCloseAt: event.registrationCloseAt,
+      paymentDueAt: event.paymentDueAt,
       contactEmail: event.contactEmail,
       websiteUrl: event.websiteUrl,
       entryConfirmationConfig: event.entryConfirmationConfig,
@@ -179,6 +183,7 @@ export const getEventById = async (eventId: string) => {
       isCurrent: event.isCurrent,
       registrationOpenAt: event.registrationOpenAt,
       registrationCloseAt: event.registrationCloseAt,
+      paymentDueAt: event.paymentDueAt,
       contactEmail: event.contactEmail,
       websiteUrl: event.websiteUrl,
       entryConfirmationConfig: event.entryConfirmationConfig,
@@ -210,6 +215,7 @@ export const createEvent = async (input: CreateEventInput, actorUserId: string |
       isCurrent: false,
       registrationOpenAt: input.registrationOpenAt ? new Date(input.registrationOpenAt) : null,
       registrationCloseAt: input.registrationCloseAt ? new Date(input.registrationCloseAt) : null,
+      paymentDueAt: input.paymentDueAt ? new Date(input.paymentDueAt) : null,
       contactEmail: input.contactEmail ?? null,
       websiteUrl: input.websiteUrl ?? null,
       entryConfirmationConfig: nextEntryConfirmationConfig,
@@ -386,6 +392,12 @@ export const updateEvent = async (eventId: string, input: UpdateEventInput, acto
           : input.registrationCloseAt === null
             ? null
             : new Date(input.registrationCloseAt),
+      paymentDueAt:
+        input.paymentDueAt === undefined
+          ? existing.paymentDueAt
+          : input.paymentDueAt === null
+            ? null
+            : new Date(input.paymentDueAt),
       contactEmail:
         input.contactEmail === undefined
           ? existing.contactEmail

@@ -9252,6 +9252,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "driverPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "className": {
+            "type": "string"
+          },
           "groupId": {
             "oneOf": [
               {
@@ -9281,6 +9288,69 @@
                 "type": "null"
               }
             ]
+          },
+          "startNumberNorm": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "orgaCode": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "driverFirstName": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when sensitive driver data is redacted."
+          },
+          "driverLastName": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when sensitive driver data is redacted."
+          },
+          "driverEmail": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when sensitive driver data is redacted."
+          },
+          "vehicleLabel": {
+            "type": "string"
+          },
+          "confirmationMailSent": {
+            "type": "boolean"
+          },
+          "confirmationMailVerified": {
+            "type": "boolean"
           },
           "deletedAt": {
             "oneOf": [

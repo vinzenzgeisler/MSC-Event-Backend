@@ -10,6 +10,7 @@ interface AuthStackProps extends StackProps {
 export class AuthStack extends Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
+  public readonly supportUserPoolClient: cognito.UserPoolClient;
   public readonly userPoolIssuerUrl: string;
 
   constructor(scope: Construct, id: string, props: AuthStackProps) {
@@ -73,6 +74,29 @@ export class AuthStack extends Stack {
       enableTokenRevocation: true
     });
 
+    const supportReadScope = new cognito.ResourceServerScope({
+      scopeName: 'entries.read',
+      scopeDescription: 'Read current-event registration data for the MSC support workflow'
+    });
+    const supportResourceServer = this.userPool.addResourceServer('SupportResourceServer', {
+      identifier: 'msc-support',
+      userPoolResourceServerName: `${props.config.prefix}-support-api`,
+      scopes: [supportReadScope]
+    });
+    this.supportUserPoolClient = new cognito.UserPoolClient(this, 'SupportUserPoolClient', {
+      userPool: this.userPool,
+      userPoolClientName: `${props.config.prefix}-support-machine-client`,
+      generateSecret: true,
+      oAuth: {
+        flows: {
+          clientCredentials: true
+        },
+        scopes: [cognito.OAuthScope.resourceServer(supportResourceServer, supportReadScope)]
+      },
+      accessTokenValidity: Duration.minutes(15),
+      enableTokenRevocation: true
+    });
+
     const userPoolDomain = this.userPool.addDomain('UserPoolDomain', {
       cognitoDomain: {
         domainPrefix
@@ -97,6 +121,11 @@ export class AuthStack extends Stack {
     new CfnOutput(this, 'UserPoolClientId', {
       value: this.userPoolClient.userPoolClientId,
       exportName: `${props.config.prefix}-user-pool-client-id`
+    });
+
+    new CfnOutput(this, 'SupportUserPoolClientId', {
+      value: this.supportUserPoolClient.userPoolClientId,
+      exportName: `${props.config.prefix}-support-user-pool-client-id`
     });
 
     new CfnOutput(this, 'UserPoolIssuerUrl', {

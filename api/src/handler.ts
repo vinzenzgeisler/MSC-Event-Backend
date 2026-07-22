@@ -2,7 +2,7 @@ import { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-l
 import { ZodError } from 'zod';
 import { sql } from 'drizzle-orm';
 import { getDb } from './db/client';
-import { getAuthContext, hasAnyGroup, hasGroup, hasPermission } from './http/auth';
+import { getAuthContext, hasAnyGroup, hasGroup, hasPermission, hasSupportRegistrationRead } from './http/auth';
 import { buildPublicRateLimitKey, enforcePublicRateLimit } from './http/publicRateLimit';
 import { errorJson, json } from './http/response';
 import { parseJsonBody } from './http/parse';
@@ -848,7 +848,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/events/current') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasSupportRegistrationRead(auth)) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1890,7 +1890,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/entries') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'entries.read')) {
+    if (!hasSupportRegistrationRead(auth)) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1951,7 +1951,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const entryDetailMatch = path.match(/^\/admin\/entries\/([^/]+)$/);
   if (method === 'GET' && entryDetailMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'entries.read')) {
+    if (!hasSupportRegistrationRead(auth)) {
       return errorJson(403, 'Forbidden');
     }
     try {

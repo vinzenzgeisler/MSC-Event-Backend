@@ -421,6 +421,12 @@ export class ApiStack extends Stack {
     const jwtAuthorizer = new authorizers.HttpJwtAuthorizer('CognitoAuthorizer', props.authStack.userPoolIssuerUrl, {
       jwtAudience: [props.authStack.userPoolClient.userPoolClientId]
     });
+    const supportJwtAuthorizer = new authorizers.HttpJwtAuthorizer('SupportCognitoAuthorizer', props.authStack.userPoolIssuerUrl, {
+      jwtAudience: [
+        props.authStack.userPoolClient.userPoolClientId,
+        props.authStack.supportUserPoolClient.userPoolClientId
+      ]
+    });
 
     this.api.addRoutes({
       path: '/admin/ping',
@@ -580,7 +586,7 @@ export class ApiStack extends Stack {
       path: '/admin/events/current',
       methods: [apigwv2.HttpMethod.GET],
       integration,
-      authorizer: jwtAuthorizer
+      authorizer: supportJwtAuthorizer
     });
 
     this.api.addRoutes({
@@ -713,7 +719,7 @@ export class ApiStack extends Stack {
       path: '/admin/entries',
       methods: [apigwv2.HttpMethod.GET],
       integration,
-      authorizer: jwtAuthorizer
+      authorizer: supportJwtAuthorizer
     });
 
     this.api.addRoutes({
@@ -725,7 +731,14 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/entries/{id}',
-      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.DELETE],
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: supportJwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/entries/{id}',
+      methods: [apigwv2.HttpMethod.DELETE],
       integration,
       authorizer: jwtAuthorizer
     });

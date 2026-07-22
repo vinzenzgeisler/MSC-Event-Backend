@@ -58,8 +58,11 @@ export type AuthContext = {
   sub: string | null;
   email: string | null;
   groups: AllowedRole[];
+  scopes: string[];
   mfaAuthenticated: boolean;
 };
+
+export const MSC_SUPPORT_READ_SCOPE = 'msc-support/entries.read';
 
 const normalizeRole = (value: string): AllowedRole | null => {
   const normalized = value.trim().toLowerCase();
@@ -163,6 +166,7 @@ export const getAuthContext = (event: APIGatewayProxyEventV2): AuthContext => {
     sub: typeof claims.sub === 'string' ? claims.sub : null,
     email: typeof claims.email === 'string' ? claims.email : null,
     groups,
+    scopes: parseClaimAsStringArray(claims.scope),
     mfaAuthenticated: isMfaAuthenticated(claims)
   };
 };
@@ -177,3 +181,6 @@ export const hasPermission = (ctx: AuthContext, permission: AdminPermission): bo
 
 export const hasAnyPermission = (ctx: AuthContext, permissions: AdminPermission[]): boolean =>
   permissions.some((permission) => hasPermission(ctx, permission));
+
+export const hasSupportRegistrationRead = (ctx: AuthContext): boolean =>
+  hasPermission(ctx, 'entries.read') || ctx.scopes.includes(MSC_SUPPORT_READ_SCOPE);

@@ -21,6 +21,7 @@ import { getPresignedAssetsUploadUrl, getAssetObjectBuffer, getAssetObjectMetada
 import { validateImageBuffer } from '../domain/imageValidation';
 import { normalizeStartNumber } from '../domain/startNumber';
 import { buildOrgaCode } from '../domain/orgaCode';
+import { assertClassRegistrationOpen } from '../domain/classRegistration';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { getPublicLegalCurrent, resolvePublicLegalLocale } from './publicLegal';
 import { DuplicateRequestError, queueLifecycleMail, queueMail } from './adminMail';
@@ -701,7 +702,13 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         }
 
         const classRows = await tx
-          .select({ id: eventClass.id, eventId: eventClass.eventId, vehicleType: eventClass.vehicleType, allowsCodriver: eventClass.allowsCodriver })
+          .select({
+            id: eventClass.id,
+            eventId: eventClass.eventId,
+            vehicleType: eventClass.vehicleType,
+            allowsCodriver: eventClass.allowsCodriver,
+            registrationClosed: eventClass.registrationClosed
+          })
           .from(eventClass)
           .where(eq(eventClass.id, item.classId))
           .limit(1);
@@ -709,6 +716,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         if (!clazz || clazz.eventId !== input.eventId) {
           throw new Error('CLASS_NOT_FOUND');
         }
+        assertClassRegistrationOpen(clazz.registrationClosed);
         if (item.vehicle.vehicleType && clazz.vehicleType !== item.vehicle.vehicleType) {
           throw new Error('CLASS_VEHICLE_TYPE_MISMATCH');
         }
@@ -1298,7 +1306,8 @@ export const getPublicCurrentEventWithClasses = async () => {
       eventId: eventClass.eventId,
       name: eventClass.name,
       vehicleType: eventClass.vehicleType,
-      allowsCodriver: eventClass.allowsCodriver
+      allowsCodriver: eventClass.allowsCodriver,
+      registrationClosed: eventClass.registrationClosed
     })
     .from(eventClass)
     .where(eq(eventClass.eventId, current.id))
@@ -1378,7 +1387,8 @@ export const validatePublicStartNumber = async (input: ValidateStartNumberInput)
   const classRows = await db
     .select({
       id: eventClass.id,
-      eventId: eventClass.eventId
+      eventId: eventClass.eventId,
+      registrationClosed: eventClass.registrationClosed
     })
     .from(eventClass)
     .where(eq(eventClass.id, input.classId))
@@ -1387,6 +1397,7 @@ export const validatePublicStartNumber = async (input: ValidateStartNumberInput)
   if (!clazz || clazz.eventId !== input.eventId) {
     throw new Error('CLASS_NOT_FOUND');
   }
+  assertClassRegistrationOpen(clazz.registrationClosed);
 
   const conflictRows = await db
     .select({

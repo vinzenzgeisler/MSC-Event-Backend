@@ -313,6 +313,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') {
         return errorJson(404, 'Class not found');
       }
+      if (error instanceof Error && error.message === 'CLASS_REGISTRATION_CLOSED') {
+        return errorJson(409, 'Class is closed for new registrations', undefined, 'CLASS_REGISTRATION_CLOSED');
+      }
       if (error instanceof Error && error.message === 'CLASS_VEHICLE_TYPE_MISMATCH') {
         return errorJson(409, 'Class does not match vehicle type');
       }
@@ -423,6 +426,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') {
         return errorJson(404, 'Class not found');
+      }
+      if (error instanceof Error && error.message === 'CLASS_REGISTRATION_CLOSED') {
+        return errorJson(409, 'Class is closed for new registrations', undefined, 'CLASS_REGISTRATION_CLOSED');
       }
       if (error instanceof Error && error.message === 'CLASS_VEHICLE_TYPE_MISMATCH') {
         return errorJson(409, 'Class does not match vehicle type');
@@ -537,6 +543,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') {
         return errorJson(404, 'Class not found');
+      }
+      if (error instanceof Error && error.message === 'CLASS_REGISTRATION_CLOSED') {
+        return errorJson(409, 'Class is closed for new registrations', undefined, 'CLASS_REGISTRATION_CLOSED');
       }
       return errorJson(500, 'Start number validation failed');
     }

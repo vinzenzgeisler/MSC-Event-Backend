@@ -9,14 +9,16 @@ import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 const classInputSchema = z.object({
   name: z.string().min(1),
   vehicleType: z.enum(['moto', 'auto']),
-  allowsCodriver: z.boolean().default(false)
+  allowsCodriver: z.boolean().default(false),
+  registrationClosed: z.boolean().default(false)
 });
 
 const classUpdateSchema = z
   .object({
     name: z.string().min(1).optional(),
     vehicleType: z.enum(['moto', 'auto']).optional(),
-    allowsCodriver: z.boolean().optional()
+    allowsCodriver: z.boolean().optional(),
+    registrationClosed: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'Provide at least one field to update.' });
 
@@ -32,6 +34,7 @@ export const listClassesByEvent = async (eventId: string) => {
       name: eventClass.name,
       vehicleType: eventClass.vehicleType,
       allowsCodriver: eventClass.allowsCodriver,
+      registrationClosed: eventClass.registrationClosed,
       createdAt: eventClass.createdAt,
       updatedAt: eventClass.updatedAt
     })
@@ -54,6 +57,7 @@ export const listClassesByEventWithQuery = async (
       name: eventClass.name,
       vehicleType: eventClass.vehicleType,
       allowsCodriver: eventClass.allowsCodriver,
+      registrationClosed: eventClass.registrationClosed,
       createdAt: eventClass.createdAt,
       updatedAt: eventClass.updatedAt
     })
@@ -84,6 +88,7 @@ export const createClass = async (eventId: string, input: ClassInput, actorUserI
       name: input.name,
       vehicleType: input.vehicleType,
       allowsCodriver: input.allowsCodriver,
+      registrationClosed: input.registrationClosed,
       createdAt: now,
       updatedAt: now
     })
@@ -98,7 +103,8 @@ export const createClass = async (eventId: string, input: ClassInput, actorUserI
     payload: {
       name: input.name,
       vehicleType: input.vehicleType,
-      allowsCodriver: input.allowsCodriver
+      allowsCodriver: input.allowsCodriver,
+      registrationClosed: input.registrationClosed
     }
   });
 
@@ -120,6 +126,7 @@ export const updateClass = async (classId: string, input: ClassUpdateInput, acto
       name: input.name ?? existing.name,
       vehicleType: input.vehicleType ?? existing.vehicleType,
       allowsCodriver: input.allowsCodriver ?? existing.allowsCodriver,
+      registrationClosed: input.registrationClosed ?? existing.registrationClosed,
       updatedAt: new Date()
     })
     .where(eq(eventClass.id, classId))

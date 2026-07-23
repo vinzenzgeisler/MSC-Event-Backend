@@ -89,6 +89,7 @@ export const eventClass = pgTable(
     name: text('name').notNull(),
     vehicleType: text('vehicle_type').notNull(),
     allowsCodriver: boolean('allows_codriver').notNull().default(false),
+    registrationClosed: boolean('registration_closed').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },

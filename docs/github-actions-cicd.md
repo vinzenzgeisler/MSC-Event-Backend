@@ -12,7 +12,7 @@
 3. Im Environment `prod` unter `Required reviewers` mindestens einen Freigeber eintragen
 4. Secrets und Variables jeweils im passenden Environment speichern, nicht als globale Repository-Werte
 
-Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`. Sobald `prod` einen Required Reviewer hat, hält GitHub den Prod-Deploy nach einem Push auf `main` automatisch an, bis die Freigabe erteilt wurde.
+Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`. Sobald `prod` einen Required Reviewer hat, hält GitHub ausschließlich den Prod-Deploy nach einem Push auf `main` automatisch an. Validierungen in Pull Requests greifen nicht auf das geschützte Environment zu und benötigen deshalb keine zusätzliche Freigabe.
 
 ## Backend Repo Secrets / Variables
 ### Environment `dev`
@@ -60,7 +60,7 @@ Die Workflow-Datei verwendet bereits `environment: dev` und `environment: prod`.
 - Push auf `dev` deployt `stage=dev` mit `devProfile=test`.
 - Ein täglicher Scheduler deployt `stage=dev` automatisch mit `devProfile=idle`, um Kosten zu sparen.
 - Manueller `workflow_dispatch` kann `stage=dev` mit `devProfile=test` oder `idle` deployen.
-- Push auf `main` deployt `stage=prod`.
+- Push auf `main` führt nach der allgemeinen Validierung genau einen geschützten Prod-Job aus. Dieser synthetisiert und deployt `stage=prod`.
 
 ## Deploy-Reihenfolge
 - `dev` mit `test`:

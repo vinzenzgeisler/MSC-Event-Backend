@@ -102,58 +102,6 @@ jobs:
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
 
-  validate_prod:
-    if: |
-      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    needs: validate_common
-    runs-on: ubuntu-latest
-    environment: prod
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install
-        run: npm ci
-
-      - name: Validate Prod environment configuration
-        run: |
-          if [ -z "${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}" ]; then
-            echo "AWS_DEPLOY_ROLE_ARN_PROD is missing in GitHub Environment 'prod'."
-            exit 1
-          fi
-          if [ -z "${{ vars.AWS_ACCOUNT_ID }}" ]; then
-            echo "AWS_ACCOUNT_ID is missing in GitHub Environment 'prod'."
-            exit 1
-          fi
-          if [ -z "${{ vars.AWS_REGION }}" ]; then
-            echo "AWS_REGION is missing in GitHub Environment 'prod'."
-            exit 1
-          fi
-          if [ -z "${{ vars.PROD_PUBLIC_BASE_URL }}" ]; then
-            echo "PROD_PUBLIC_BASE_URL is missing in GitHub Environment 'prod'."
-            exit 1
-          fi
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: CDK synth (prod)
-        run: npm --workspace infra run synth -- -c stage=prod
-        env:
-          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
-          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
-          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
-
   deploy_dev:
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
@@ -264,7 +212,7 @@ jobs:
   deploy_prod:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
-      - validate_prod
+      - validate_common
     runs-on: ubuntu-latest
     environment: prod
     env:
@@ -306,6 +254,13 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
+
+      - name: CDK synth (prod)
+        run: npm --workspace infra run synth -- -c stage=prod
+        env:
+          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
 
       - name: Deploy Prod base stacks
         run: >

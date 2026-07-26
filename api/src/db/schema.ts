@@ -483,6 +483,69 @@ export const auditLog = pgTable(
   })
 );
 
+export const technicalInspectorAssignment = pgTable(
+  'technical_inspector_assignment',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    userEmailNorm: text('user_email_norm').notNull(),
+    validFrom: timestamp('valid_from', { withTimezone: true }).notNull(),
+    validUntil: timestamp('valid_until', { withTimezone: true }).notNull(),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    userEventUnique: uniqueIndex('technical_inspector_assignment_user_event_unique').on(
+      table.userEmailNorm,
+      table.eventId
+    ),
+    eventValidityIndex: index('technical_inspector_assignment_event_validity_idx').on(
+      table.eventId,
+      table.validFrom,
+      table.validUntil
+    ),
+    validityCheck: check(
+      'technical_inspector_assignment_validity_check',
+      sql`${table.validUntil} > ${table.validFrom}`
+    )
+  })
+);
+
+export const technicalInspectionDecision = pgTable(
+  'technical_inspection_decision',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => entry.id, { onDelete: 'cascade' }),
+    status: text('status').notNull(),
+    note: text('note'),
+    inspectorUserId: text('inspector_user_id').notNull(),
+    inspectorEmail: text('inspector_email'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    entryCreatedIndex: index('technical_inspection_decision_entry_created_idx').on(
+      table.entryId,
+      table.createdAt
+    ),
+    statusCheck: check(
+      'technical_inspection_decision_status_check',
+      sql`${table.status} in ('pending', 'passed', 'failed')`
+    ),
+    failedNoteCheck: check(
+      'technical_inspection_decision_failed_note_check',
+      sql`${table.status} != 'failed' or length(trim(coalesce(${table.note}, ''))) > 0`
+    )
+  })
+);
+
 export const emailOutbox = pgTable(
   'email_outbox',
   {

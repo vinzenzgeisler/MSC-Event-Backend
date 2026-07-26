@@ -1,6 +1,6 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-const allowedRoles = ['admin', 'editor', 'viewer'] as const;
+const allowedRoles = ['admin', 'editor', 'viewer', 'technical_inspector'] as const;
 export type AllowedRole = (typeof allowedRoles)[number];
 const allowedRoleSet = new Set<string>(allowedRoles);
 const legacyRoleAliases: Record<string, AllowedRole> = {
@@ -22,7 +22,9 @@ export type AdminPermission =
   | 'settings.read'
   | 'settings.write'
   | 'iam.read'
-  | 'iam.write';
+  | 'iam.write'
+  | 'inspection.read'
+  | 'inspection.write';
 
 const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
   admin: [
@@ -40,7 +42,9 @@ const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
     'settings.read',
     'settings.write',
     'iam.read',
-    'iam.write'
+    'iam.write',
+    'inspection.read',
+    'inspection.write'
   ],
   editor: [
     'dashboard.read',
@@ -51,7 +55,8 @@ const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
     'entries.notes.write',
     'exports.read'
   ],
-  viewer: ['dashboard.read', 'entries.read', 'exports.read']
+  viewer: ['dashboard.read', 'entries.read', 'exports.read'],
+  technical_inspector: ['inspection.read', 'inspection.write']
 };
 
 export type AuthContext = {

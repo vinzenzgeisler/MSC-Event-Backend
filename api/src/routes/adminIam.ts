@@ -12,7 +12,7 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider';
 import { z } from 'zod';
 
-const allowedRoles = ['admin', 'editor', 'viewer'] as const;
+const allowedRoles = ['admin', 'editor', 'viewer', 'technical_inspector'] as const;
 
 const roleSchema = z.enum(allowedRoles);
 
@@ -170,6 +170,10 @@ export const listIamRoles = () => ({
     {
       key: 'viewer',
       description: 'Dashboard, entries, and exports read-only access'
+    },
+    {
+      key: 'technical_inspector',
+      description: 'Event-scoped access to the technical inspection workspace only'
     }
   ]
 });

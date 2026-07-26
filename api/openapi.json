@@ -22,6 +22,121 @@
     }
   ],
   "paths": {
+    "/inspection/context": {
+      "get": {
+        "operationId": "get_inspection_context",
+        "tags": ["admin"],
+        "summary": "Resolve the active event assignment for the signed-in technical inspector",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Active inspection context" },
+          "403": { "description": "No active assignment" }
+        }
+      }
+    },
+    "/inspection/entries": {
+      "get": {
+        "operationId": "get_inspection_entries",
+        "tags": ["admin"],
+        "summary": "Search accepted entries within the inspector's assigned event",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50 } }
+        ],
+        "responses": {
+          "200": { "description": "Matching inspection entries" },
+          "403": { "description": "No active assignment" }
+        }
+      }
+    },
+    "/inspection/entries/{id}": {
+      "get": {
+        "operationId": "get_inspection_entry",
+        "tags": ["admin"],
+        "summary": "Read the inspection-safe details of one accepted entry",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Inspection entry" },
+          "404": { "description": "Entry not found" }
+        }
+      },
+      "patch": {
+        "operationId": "patch_inspection_entry",
+        "tags": ["admin"],
+        "summary": "Confirm, reject, or reset a technical inspection",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["techStatus"],
+                "properties": {
+                  "techStatus": { "type": "string", "enum": ["pending", "passed", "failed"] },
+                  "note": { "type": ["string", "null"], "maxLength": 2000 }
+                },
+                "description": "note is mandatory when techStatus is failed"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Inspection decision saved" },
+          "400": { "description": "Invalid decision or missing rejection note" }
+        }
+      }
+    },
+    "/inspection/entries/{id}/history": {
+      "get": {
+        "operationId": "get_inspection_entry_history",
+        "tags": ["admin"],
+        "summary": "List the immutable decision history for an inspection",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Inspection history" }
+        }
+      }
+    },
+    "/admin/entries/{id}/inspection-qr": {
+      "get": {
+        "operationId": "get_admin_entry_inspection_qr",
+        "tags": ["admin"],
+        "summary": "Generate a stable inspection QR code for one entry",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["svg", "png"], "default": "svg" } }
+        ],
+        "responses": {
+          "200": { "description": "Base64 encoded QR download" }
+        }
+      }
+    },
+    "/admin/events/{id}/inspection-qr-export": {
+      "post": {
+        "operationId": "post_admin_event_inspection_qr_export",
+        "tags": ["admin"],
+        "summary": "Generate a printable PDF sheet for selected inspection QR codes",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Base64 encoded PDF download" }
+        }
+      }
+    },
     "/health": {
       "get": {
         "operationId": "get_health",

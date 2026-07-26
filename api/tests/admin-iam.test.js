@@ -30,6 +30,15 @@ const createNamedError = (name) => {
 process.env.COGNITO_USER_POOL_ID = process.env.COGNITO_USER_POOL_ID || 'eu-central-1_testpool';
 
 const run = async () => {
+  assert.deepEqual(
+    validateCreateIamUserInput({
+      email: 'inspector@example.org',
+      roles: ['technical_inspector'],
+      sendInvitation: true
+    }).roles,
+    ['technical_inspector']
+  );
+
   // sendInvitation=false must require temporaryPassword.
   try {
     validateCreateIamUserInput({

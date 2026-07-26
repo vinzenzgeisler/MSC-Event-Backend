@@ -86,6 +86,21 @@ import {
   validatePatchIamUserStatusInput
 } from './routes/adminIam';
 import {
+  createInspectionQrDownload,
+  createInspectionQrSheet,
+  getInspectionContext,
+  getInspectionEntry,
+  listInspectionHistory,
+  listInspectorAssignments,
+  searchInspectionEntries,
+  updateInspectionDecision,
+  upsertInspectorAssignment,
+  validateInspectionDecisionInput,
+  validateInspectionSearchInput,
+  validateInspectorAssignmentInput,
+  validateQrExportInput
+} from './routes/technicalInspection';
+import {
   DuplicateRequestError,
   LifecycleMailError,
   MissingRequiredPlaceholdersError,
@@ -716,7 +731,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/ping') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer', 'technical_inspector'])) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -729,7 +744,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/auth/me') {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer', 'technical_inspector'])) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -2605,6 +2620,188 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return errorJson(403, 'Forbidden');
     }
     return json(200, { ok: true, ...listIamRoles() });
+  }
+
+  if (method === 'GET' && path === '/admin/iam/technical-inspector-assignments') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'iam.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    const assignments = await listInspectorAssignments(event.queryStringParameters?.eventId);
+    return json(200, { ok: true, assignments });
+  }
+
+  const inspectorAssignmentMatch = path.match(/^\/admin\/iam\/users\/([^/]+)\/technical-inspector-assignment$/);
+  if (method === 'PUT' && inspectorAssignmentMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'iam.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const userEmail = decodeURIComponent(inspectorAssignmentMatch[1]);
+      const input = validateInspectorAssignmentInput(parseJsonBody(event));
+      const assignment = await upsertInspectorAssignment(userEmail, input, auth.sub);
+      return json(200, { ok: true, assignment });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Technical inspector assignment failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/inspection/context') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'inspection.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const result = await getInspectionContext(auth, event.queryStringParameters?.eventId);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'INSPECTION_ASSIGNMENT_REQUIRED') {
+        return errorJson(403, 'No active technical inspection assignment');
+      }
+      return errorJson(500, 'Inspection context failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/inspection/entries') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'inspection.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const input = validateInspectionSearchInput(event.queryStringParameters ?? {});
+      const entries = await searchInspectionEntries(auth, input);
+      return json(200, { ok: true, entries });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && error.message === 'INSPECTION_ASSIGNMENT_REQUIRED') {
+        return errorJson(403, 'No active technical inspection assignment');
+      }
+      return errorJson(500, 'Inspection search failed');
+    }
+  }
+
+  const inspectionHistoryMatch = path.match(/^\/inspection\/entries\/([^/]+)\/history$/);
+  if (method === 'GET' && inspectionHistoryMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'inspection.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const history = await listInspectionHistory(auth, inspectionHistoryMatch[1]);
+      if (!history) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, history });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'INSPECTION_ASSIGNMENT_REQUIRED') {
+        return errorJson(403, 'No active technical inspection assignment');
+      }
+      return errorJson(500, 'Inspection history failed');
+    }
+  }
+
+  const inspectionEntryMatch = path.match(/^\/inspection\/entries\/([^/]+)$/);
+  if (method === 'GET' && inspectionEntryMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'inspection.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const result = await getInspectionEntry(auth, inspectionEntryMatch[1]);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, entry: result });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'INSPECTION_ASSIGNMENT_REQUIRED') {
+        return errorJson(403, 'No active technical inspection assignment');
+      }
+      return errorJson(500, 'Inspection entry failed');
+    }
+  }
+
+  if (method === 'PATCH' && inspectionEntryMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'inspection.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const input = validateInspectionDecisionInput(parseJsonBody(event));
+      const result = await updateInspectionDecision(auth, inspectionEntryMatch[1], input);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'INSPECTION_ASSIGNMENT_REQUIRED') {
+        return errorJson(403, 'No active technical inspection assignment');
+      }
+      return errorJson(500, 'Inspection update failed');
+    }
+  }
+
+  const inspectionQrMatch = path.match(/^\/admin\/entries\/([^/]+)\/inspection-qr$/);
+  if (method === 'GET' && inspectionQrMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const format = event.queryStringParameters?.format === 'png' ? 'png' : 'svg';
+      const download = await createInspectionQrDownload(inspectionQrMatch[1], format);
+      return json(200, {
+        ok: true,
+        filename: download.filename,
+        mimeType: download.mimeType,
+        dataBase64: download.data.toString('base64')
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'INSPECTION_PUBLIC_URL_NOT_CONFIGURED') {
+        return errorJson(500, 'Inspection public URL is not configured');
+      }
+      return errorJson(500, 'Inspection QR generation failed');
+    }
+  }
+
+  const inspectionQrExportMatch = path.match(/^\/admin\/events\/([^/]+)\/inspection-qr-export$/);
+  if (method === 'POST' && inspectionQrExportMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const input = validateQrExportInput(parseJsonBody(event));
+      const data = await createInspectionQrSheet(inspectionQrExportMatch[1], input.entryIds);
+      return json(200, {
+        ok: true,
+        filename: 'technische-abnahme-qr-codes.pdf',
+        mimeType: 'application/pdf',
+        dataBase64: data.toString('base64')
+      });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Inspection QR export failed');
+    }
   }
 
   if (method === 'GET' && path === '/admin/iam/users') {

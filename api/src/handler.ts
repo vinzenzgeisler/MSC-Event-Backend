@@ -2751,6 +2751,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'INSPECTION_ASSIGNMENT_REQUIRED') {
         return errorJson(403, 'No active technical inspection assignment');
       }
+      if (error instanceof Error && error.message === 'INSPECTION_BACKUP_VEHICLE_REQUIRED') {
+        return errorJson(409, 'This entry has no backup vehicle');
+      }
       return errorJson(500, 'Inspection update failed');
     }
   }

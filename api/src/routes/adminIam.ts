@@ -217,6 +217,53 @@ export const listIamUsers = async (input: ListUsersInput) => {
   }
 };
 
+export const resolveIamUserDisplayNames = async (userIds: string[]) => {
+  const requested = new Set(userIds.map((value) => value.trim()).filter(Boolean));
+  const resolved = new Map<string, string>();
+  if (requested.size === 0) {
+    return resolved;
+  }
+
+  const client = createClient();
+  let userPoolId: string;
+  try {
+    userPoolId = getUserPoolId();
+  } catch {
+    return resolved;
+  }
+
+  try {
+    let paginationToken: string | undefined;
+    do {
+      const response = await client.send(
+        new ListUsersCommand({
+          UserPoolId: userPoolId,
+          Limit: 60,
+          PaginationToken: paginationToken
+        })
+      );
+      for (const user of response.Users ?? []) {
+        const attrs = getAttributesMap(user);
+        const userId = attrs.get('sub') ?? '';
+        const username = user.Username ?? '';
+        if (!requested.has(userId) && !requested.has(username)) {
+          continue;
+        }
+        const fullName = [attrs.get('given_name'), attrs.get('family_name')].filter(Boolean).join(' ').trim();
+        const displayName = fullName || attrs.get('name') || attrs.get('email') || username;
+        if (displayName) {
+          if (userId) resolved.set(userId, displayName);
+          if (username) resolved.set(username, displayName);
+        }
+      }
+      paginationToken = response.PaginationToken;
+    } while (paginationToken);
+  } catch {
+    return resolved;
+  }
+  return resolved;
+};
+
 export const createIamUser = async (input: CreateUserInput) => {
   const client = createClient();
   const userPoolId = getUserPoolId();

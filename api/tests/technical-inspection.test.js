@@ -8,6 +8,7 @@ const {
   createInspectionQrDownload,
   validateInspectionDecisionInput
 } = require('../dist/routes/technicalInspection');
+const { validateEntryNotesPatchInput } = require('../dist/routes/adminEntries');
 
 void (async () => {
   assert.deepEqual(validateInspectionDecisionInput({ techStatus: 'passed', note: '' }), {
@@ -27,6 +28,9 @@ void (async () => {
     validateInspectionDecisionInput({ techStatus: 'failed', note: 'Bremsleitung undicht' }).note,
     'Bremsleitung undicht'
   );
+  assert.deepEqual(validateEntryNotesPatchInput({ inspectionNote: 'Lenkkopflager nachprüfen' }), {
+    inspectionNote: 'Lenkkopflager nachprüfen'
+  });
 
   const svg = await createInspectionQrDownload(
     '62a51216-d4b2-4aca-bc9a-5bc93cbef204',
@@ -57,6 +61,12 @@ void (async () => {
   );
   assert.match(backupMigration, /backup_tech_status/);
   assert.match(backupMigration, /technical_inspection_decision_target_check/);
+
+  const inspectorNoteMigration = readFileSync(
+    join(__dirname, '..', 'migrations', '0060_technical_inspector_note.sql'),
+    'utf8'
+  );
+  assert.match(inspectorNoteMigration, /inspection_note/);
 
   console.log('technical-inspection.test.js: ok');
 })().catch((error) => {

@@ -172,6 +172,7 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
       cylinders: vehicle.cylinders,
       brakes: vehicle.brakes,
       vehicleHistory: vehicle.vehicleHistory,
+      inspectionNote: entry.inspectionNote,
       techStatus: entry.techStatus,
       techCheckedAt: entry.techCheckedAt,
       techCheckedBy: entry.techCheckedBy,
@@ -264,12 +265,14 @@ export const updateInspectionDecision = async (
               backupTechStatus: input.techStatus,
               backupTechCheckedAt: input.techStatus === 'pending' ? null : now,
               backupTechCheckedBy: input.techStatus === 'pending' ? null : actorUserId,
+              inspectionNote: note,
               updatedAt: now
             }
           : {
               techStatus: input.techStatus,
               techCheckedAt: input.techStatus === 'pending' ? null : now,
               techCheckedBy: input.techStatus === 'pending' ? null : actorUserId,
+              inspectionNote: note,
               updatedAt: now
             }
       )

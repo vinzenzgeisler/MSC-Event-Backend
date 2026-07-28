@@ -6,6 +6,7 @@ import {
   AdminGetUserCommand,
   AdminListGroupsForUserCommand,
   AdminRemoveUserFromGroupCommand,
+  AdminUpdateUserAttributesCommand,
   CognitoIdentityProviderClient,
   ListUsersCommand,
   UserType
@@ -26,6 +27,8 @@ const listUsersSchema = z.object({
 
 const createUserSchema = z.object({
   email: z.string().email(),
+  firstName: z.string().trim().min(1).max(100),
+  lastName: z.string().trim().min(1).max(100),
   roles: z.array(roleSchema).min(1),
   temporaryPassword: z.string().min(8).max(256).optional(),
   sendInvitation: z.boolean().default(true)
@@ -40,6 +43,11 @@ const createUserSchema = z.object({
   }
 });
 
+const patchProfileSchema = z.object({
+  firstName: z.string().trim().min(1).max(100),
+  lastName: z.string().trim().min(1).max(100)
+});
+
 const patchRolesSchema = z.object({
   roles: z.array(roleSchema).min(1)
 });
@@ -50,6 +58,7 @@ const patchStatusSchema = z.object({
 
 type ListUsersInput = z.infer<typeof listUsersSchema>;
 type CreateUserInput = z.infer<typeof createUserSchema>;
+type PatchProfileInput = z.infer<typeof patchProfileSchema>;
 type PatchRolesInput = z.infer<typeof patchRolesSchema>;
 type PatchStatusInput = z.infer<typeof patchStatusSchema>;
 
@@ -95,6 +104,8 @@ const mapUserDto = async (client: CognitoIdentityProviderClient, userPoolId: str
     id: user.Username ?? '',
     username: user.Username ?? '',
     email: attrs.get('email') ?? null,
+    firstName: attrs.get('given_name') ?? null,
+    lastName: attrs.get('family_name') ?? null,
     enabled: user.Enabled ?? false,
     status: (user.UserStatus ?? 'UNKNOWN').toLowerCase(),
     emailVerified: attrs.get('email_verified') === 'true',
@@ -120,6 +131,8 @@ const loadUserDto = async (client: CognitoIdentityProviderClient, userPoolId: st
     id: response.Username ?? userId,
     username: response.Username ?? userId,
     email: attrs.get('email') ?? null,
+    firstName: attrs.get('given_name') ?? null,
+    lastName: attrs.get('family_name') ?? null,
     enabled: response.Enabled ?? false,
     status: (response.UserStatus ?? 'UNKNOWN').toLowerCase(),
     emailVerified: attrs.get('email_verified') === 'true',
@@ -280,7 +293,10 @@ export const createIamUser = async (input: CreateUserInput) => {
         Username: username,
         UserAttributes: [
           { Name: 'email', Value: username },
-          { Name: 'email_verified', Value: 'false' }
+          { Name: 'email_verified', Value: 'false' },
+          { Name: 'given_name', Value: input.firstName },
+          { Name: 'family_name', Value: input.lastName },
+          { Name: 'name', Value: `${input.firstName} ${input.lastName}` }
         ],
         DesiredDeliveryMediums: input.sendInvitation ? ['EMAIL'] : undefined,
         MessageAction: input.sendInvitation ? undefined : 'SUPPRESS',
@@ -300,6 +316,30 @@ export const createIamUser = async (input: CreateUserInput) => {
 
     return {
       user: await loadUserDto(client, userPoolId, username)
+    };
+  } catch (error) {
+    mapCognitoError(error);
+  }
+};
+
+export const patchIamUserProfile = async (userId: string, input: PatchProfileInput) => {
+  const client = createClient();
+  const userPoolId = getUserPoolId();
+
+  try {
+    await client.send(
+      new AdminUpdateUserAttributesCommand({
+        UserPoolId: userPoolId,
+        Username: userId,
+        UserAttributes: [
+          { Name: 'given_name', Value: input.firstName },
+          { Name: 'family_name', Value: input.lastName },
+          { Name: 'name', Value: `${input.firstName} ${input.lastName}` }
+        ]
+      })
+    );
+    return {
+      user: await loadUserDto(client, userPoolId, userId)
     };
   } catch (error) {
     mapCognitoError(error);
@@ -388,5 +428,6 @@ export const validateListIamUsersInput = (query: Record<string, string | undefin
   });
 
 export const validateCreateIamUserInput = (payload: unknown) => createUserSchema.parse(payload);
+export const validatePatchIamUserProfileInput = (payload: unknown) => patchProfileSchema.parse(payload);
 export const validatePatchIamUserRolesInput = (payload: unknown) => patchRolesSchema.parse(payload);
 export const validatePatchIamUserStatusInput = (payload: unknown) => patchStatusSchema.parse(payload);

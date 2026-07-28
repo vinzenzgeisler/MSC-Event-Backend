@@ -23,6 +23,7 @@ import { getEntryLineTotalCents, getForecastEntryLineTotalCents, getManualEntryT
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { decodeCursor, encodeCursor, parseListQuery } from '../http/pagination';
 import { recalculateInvoices } from './adminFinance';
+import { resolveIamUserDisplayNames } from './adminIam';
 import { queueLifecycleMail } from './adminMail';
 
 const listEntriesQuerySchema = z.object({
@@ -71,11 +72,18 @@ const entryClassPatchSchema = z.object({
 const entryNotesPatchSchema = z
   .object({
     internalNote: z.string().max(2000).nullable().optional(),
-    driverNote: z.string().max(2000).nullable().optional()
+    driverNote: z.string().max(2000).nullable().optional(),
+    inspectionNote: z.string().max(2000).nullable().optional()
   })
-  .refine((value) => value.internalNote !== undefined || value.driverNote !== undefined, {
-    message: 'Provide at least one note field'
-  });
+  .refine(
+    (value) =>
+      value.internalNote !== undefined ||
+      value.driverNote !== undefined ||
+      value.inspectionNote !== undefined,
+    {
+      message: 'Provide at least one note field'
+    }
+  );
 
 const entryPaymentStatusPatchSchema = z.object({
   paymentStatus: z.literal('paid'),
@@ -442,6 +450,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       specialNotes: entry.specialNotes,
       internalNote: entry.internalNote,
       driverNote: entry.driverNote,
+      inspectionNote: entry.inspectionNote,
       confirmationMailSentAt: entry.confirmationMailSentAt,
       confirmationMailVerifiedAt: entry.confirmationMailVerifiedAt,
       consentTermsAccepted: entry.consentTermsAccepted,
@@ -659,6 +668,9 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .from(auditLog)
     .where(and(eq(auditLog.entityType, 'entry'), eq(auditLog.entityId, entryId as never)))
     .orderBy(asc(auditLog.createdAt));
+  const actorDisplayNames = await resolveIamUserDisplayNames(
+    Array.from(new Set(historyRows.map((row) => row.actorUserId).filter((value): value is string => Boolean(value))))
+  );
 
   const vehicleLabel = toVehicleLabel(current.vehicleMake, current.vehicleModel, current.startNumberNorm);
   const [vehicleThumbUrl, backupVehicleThumbUrl] = await Promise.all([
@@ -774,6 +786,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       specialNotes: current.specialNotes,
       internalNote: current.internalNote,
       driverNote: current.driverNote,
+      inspectionNote: current.inspectionNote,
       consent: {
         termsAccepted: current.consentTermsAccepted,
         privacyAccepted: current.consentPrivacyAccepted,
@@ -797,7 +810,10 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       createdAt: current.createdAt,
       updatedAt: current.updatedAt
     },
-    history: historyRows
+    history: historyRows.map((row) => ({
+      ...row,
+      actorDisplay: row.actorUserId ? actorDisplayNames.get(row.actorUserId) ?? null : 'System'
+    }))
   };
 };
 
@@ -1100,6 +1116,7 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
       eventId: entry.eventId,
       internalNote: entry.internalNote,
       driverNote: entry.driverNote,
+      inspectionNote: entry.inspectionNote,
       updatedAt: entry.updatedAt
     })
     .from(entry)
@@ -1112,12 +1129,18 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
 
   const nextInternalNote = input.internalNote === undefined ? existing.internalNote : input.internalNote;
   const nextDriverNote = input.driverNote === undefined ? existing.driverNote : input.driverNote;
-  if (nextInternalNote === existing.internalNote && nextDriverNote === existing.driverNote) {
+  const nextInspectionNote = input.inspectionNote === undefined ? existing.inspectionNote : input.inspectionNote;
+  if (
+    nextInternalNote === existing.internalNote &&
+    nextDriverNote === existing.driverNote &&
+    nextInspectionNote === existing.inspectionNote
+  ) {
     return {
       id: existing.id,
       eventId: existing.eventId,
       internalNote: existing.internalNote,
       driverNote: existing.driverNote,
+      inspectionNote: existing.inspectionNote,
       updatedAt: existing.updatedAt
     };
   }
@@ -1128,6 +1151,7 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
     .set({
       internalNote: nextInternalNote,
       driverNote: nextDriverNote,
+      inspectionNote: nextInspectionNote,
       updatedAt: now
     })
     .where(eq(entry.id, entryId))
@@ -1136,6 +1160,7 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
       eventId: entry.eventId,
       internalNote: entry.internalNote,
       driverNote: entry.driverNote,
+      inspectionNote: entry.inspectionNote,
       updatedAt: entry.updatedAt
     });
 
@@ -1147,7 +1172,8 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
     entityId: entryId,
     payload: {
       internalNoteUpdated: input.internalNote !== undefined,
-      driverNoteUpdated: input.driverNote !== undefined
+      driverNoteUpdated: input.driverNote !== undefined,
+      inspectionNoteUpdated: input.inspectionNote !== undefined
     }
   });
 

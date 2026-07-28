@@ -2236,6 +2236,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         entryId: result.id,
         internalNote: result.internalNote,
         driverNote: result.driverNote,
+        inspectionNote: result.inspectionNote,
         updatedAt: result.updatedAt
       });
     } catch (error) {

@@ -134,11 +134,12 @@ export const handler = async () => {
      set "special_notes" = null,
          "internal_note" = null,
          "driver_note" = null,
+         "inspection_note" = null,
          "updated_at" = now()
      from "event"
      where "entry"."event_id" = "event"."id"
        and "event"."ends_at" < current_date - ($1 * interval '1 day')
-       and ("special_notes" is not null or "internal_note" is not null or "driver_note" is not null)`,
+       and ("special_notes" is not null or "internal_note" is not null or "driver_note" is not null or "inspection_note" is not null)`,
     [settings.eventOperationalDays]
   );
 

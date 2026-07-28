@@ -81,6 +81,12 @@
                 "required": ["techStatus"],
                 "properties": {
                   "techStatus": { "type": "string", "enum": ["pending", "passed", "failed"] },
+                  "target": {
+                    "type": "string",
+                    "enum": ["primary", "backup"],
+                    "default": "primary",
+                    "description": "Selects the nominated primary or optional backup vehicle"
+                  },
                   "note": { "type": ["string", "null"], "maxLength": 2000 }
                 },
                 "description": "note is mandatory when techStatus is failed"

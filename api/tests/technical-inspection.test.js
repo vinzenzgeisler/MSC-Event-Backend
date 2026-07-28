@@ -12,8 +12,13 @@ const {
 void (async () => {
   assert.deepEqual(validateInspectionDecisionInput({ techStatus: 'passed', note: '' }), {
     techStatus: 'passed',
+    target: 'primary',
     note: ''
   });
+  assert.equal(
+    validateInspectionDecisionInput({ techStatus: 'passed', target: 'backup', note: '' }).target,
+    'backup'
+  );
   assert.throws(
     () => validateInspectionDecisionInput({ techStatus: 'failed', note: '   ' }),
     /A note is required/
@@ -45,6 +50,13 @@ void (async () => {
   assert.match(migration, /technical_inspector_assignment/);
   assert.match(migration, /technical_inspection_decision/);
   assert.match(migration, /technical_inspection_decision_failed_note_check/);
+
+  const backupMigration = readFileSync(
+    join(__dirname, '..', 'migrations', '0059_backup_vehicle_technical_inspection.sql'),
+    'utf8'
+  );
+  assert.match(backupMigration, /backup_tech_status/);
+  assert.match(backupMigration, /technical_inspection_decision_target_check/);
 
   console.log('technical-inspection.test.js: ok');
 })().catch((error) => {

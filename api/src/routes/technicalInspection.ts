@@ -27,6 +27,7 @@ const inspectionSearchSchema = z.object({
 const inspectionDecisionSchema = z
   .object({
     techStatus: z.enum(['pending', 'passed', 'failed']),
+    target: z.enum(['primary', 'backup']).default('primary'),
     note: z.string().trim().max(2000).nullable().optional()
   })
   .superRefine((value, ctx) => {
@@ -123,6 +124,8 @@ export const searchInspectionEntries = async (auth: AuthContext, input: Inspecti
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       techStatus: entry.techStatus,
+      backupVehicleId: entry.backupVehicleId,
+      backupTechStatus: entry.backupTechStatus,
       techCheckedAt: entry.techCheckedAt
     })
     .from(entry)
@@ -157,6 +160,8 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
       acceptanceStatus: entry.acceptanceStatus,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      codriverPersonId: entry.codriverPersonId,
+      backupVehicleId: entry.backupVehicleId,
       className: eventClass.name,
       vehicleType: vehicle.vehicleType,
       vehicleMake: vehicle.make,
@@ -169,7 +174,10 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
       vehicleHistory: vehicle.vehicleHistory,
       techStatus: entry.techStatus,
       techCheckedAt: entry.techCheckedAt,
-      techCheckedBy: entry.techCheckedBy
+      techCheckedBy: entry.techCheckedBy,
+      backupTechStatus: entry.backupTechStatus,
+      backupTechCheckedAt: entry.backupTechCheckedAt,
+      backupTechCheckedBy: entry.backupTechCheckedBy
     })
     .from(entry)
     .innerJoin(person, eq(entry.driverPersonId, person.id))
@@ -191,7 +199,41 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
   if (!assignedEvent) {
     throw new Error('INSPECTION_ASSIGNMENT_REQUIRED');
   }
-  return result;
+  const [codriverRows, backupVehicleRows] = await Promise.all([
+    result.codriverPersonId
+      ? db
+          .select({
+            firstName: person.firstName,
+            lastName: person.lastName,
+            birthdate: person.birthdate,
+            country: person.country
+          })
+          .from(person)
+          .where(eq(person.id, result.codriverPersonId))
+          .limit(1)
+      : Promise.resolve([]),
+    result.backupVehicleId
+      ? db
+          .select({
+            vehicleType: vehicle.vehicleType,
+            make: vehicle.make,
+            model: vehicle.model,
+            year: vehicle.year,
+            displacementCcm: vehicle.displacementCcm,
+            engineType: vehicle.engineType,
+            cylinders: vehicle.cylinders,
+            vehicleHistory: vehicle.vehicleHistory
+          })
+          .from(vehicle)
+          .where(eq(vehicle.id, result.backupVehicleId))
+          .limit(1)
+      : Promise.resolve([])
+  ]);
+  return {
+    ...result,
+    codriver: codriverRows[0] ?? null,
+    backupVehicle: backupVehicleRows[0] ?? null
+  };
 };
 
 export const updateInspectionDecision = async (
@@ -209,16 +251,28 @@ export const updateInspectionDecision = async (
   }
   const db = await getDb();
   const note = input.note?.trim() || null;
+  if (input.target === 'backup' && !existing.backupVehicleId) {
+    throw new Error('INSPECTION_BACKUP_VEHICLE_REQUIRED');
+  }
   const now = new Date();
   return db.transaction(async (tx) => {
     const [updated] = await tx
       .update(entry)
-      .set({
-        techStatus: input.techStatus,
-        techCheckedAt: input.techStatus === 'pending' ? null : now,
-        techCheckedBy: input.techStatus === 'pending' ? null : actorUserId,
-        updatedAt: now
-      })
+      .set(
+        input.target === 'backup'
+          ? {
+              backupTechStatus: input.techStatus,
+              backupTechCheckedAt: input.techStatus === 'pending' ? null : now,
+              backupTechCheckedBy: input.techStatus === 'pending' ? null : actorUserId,
+              updatedAt: now
+            }
+          : {
+              techStatus: input.techStatus,
+              techCheckedAt: input.techStatus === 'pending' ? null : now,
+              techCheckedBy: input.techStatus === 'pending' ? null : actorUserId,
+              updatedAt: now
+            }
+      )
       .where(eq(entry.id, entryId))
       .returning({
         id: entry.id,
@@ -233,6 +287,7 @@ export const updateInspectionDecision = async (
         eventId: existing.eventId,
         entryId,
         status: input.techStatus,
+        target: input.target,
         note,
         inspectorUserId: actorUserId,
         inspectorEmail: auth.email
@@ -245,7 +300,7 @@ export const updateInspectionDecision = async (
       action: 'entry_tech_status_updated',
       entityType: 'entry',
       entityId: entryId,
-      payload: { techStatus: input.techStatus }
+      payload: { techStatus: input.techStatus, target: input.target }
     });
     return { entry: updated, decision };
   });

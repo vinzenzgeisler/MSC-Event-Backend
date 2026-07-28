@@ -212,6 +212,9 @@ export const entry = pgTable(
     techStatus: text('tech_status').notNull().default('pending'),
     techCheckedAt: timestamp('tech_checked_at', { withTimezone: true }),
     techCheckedBy: text('tech_checked_by'),
+    backupTechStatus: text('backup_tech_status').notNull().default('pending'),
+    backupTechCheckedAt: timestamp('backup_tech_checked_at', { withTimezone: true }),
+    backupTechCheckedBy: text('backup_tech_checked_by'),
     specialNotes: text('special_notes'),
     internalNote: text('internal_note'),
     driverNote: text('driver_note'),
@@ -245,6 +248,10 @@ export const entry = pgTable(
       sql`${table.acceptanceStatus} in ('pending', 'shortlist', 'accepted', 'rejected')`
     ),
     techStatusCheck: check('entry_tech_status_check', sql`${table.techStatus} in ('pending', 'passed', 'failed')`),
+    backupTechStatusCheck: check(
+      'entry_backup_tech_status_check',
+      sql`${table.backupTechStatus} in ('pending', 'passed', 'failed')`
+    ),
     backupNotSelfCheck: check('entry_backup_not_self_check', sql`${table.backupOfEntryId} is null or ${table.backupOfEntryId} != ${table.id}`),
     backupVehicleNotPrimaryCheck: check(
       'entry_backup_vehicle_not_primary_check',
@@ -525,6 +532,7 @@ export const technicalInspectionDecision = pgTable(
       .notNull()
       .references(() => entry.id, { onDelete: 'cascade' }),
     status: text('status').notNull(),
+    target: text('target').notNull().default('primary'),
     note: text('note'),
     inspectorUserId: text('inspector_user_id').notNull(),
     inspectorEmail: text('inspector_email'),
@@ -538,6 +546,10 @@ export const technicalInspectionDecision = pgTable(
     statusCheck: check(
       'technical_inspection_decision_status_check',
       sql`${table.status} in ('pending', 'passed', 'failed')`
+    ),
+    targetCheck: check(
+      'technical_inspection_decision_target_check',
+      sql`${table.target} in ('primary', 'backup')`
     ),
     failedNoteCheck: check(
       'technical_inspection_decision_failed_note_check',

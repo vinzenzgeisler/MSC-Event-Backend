@@ -6715,6 +6715,11 @@
                     "type": "string",
                     "nullable": true,
                     "maxLength": 2000
+                  },
+                  "inspectionNote": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 2000
                   }
                 },
                 "additionalProperties": false,
@@ -6728,6 +6733,11 @@
                     "required": [
                       "driverNote"
                     ]
+                  },
+                  {
+                    "required": [
+                      "inspectionNote"
+                    ]
                   }
                 ]
               },
@@ -6735,7 +6745,8 @@
                 "saveBoth": {
                   "value": {
                     "internalNote": "Check insurance copy",
-                    "driverNote": "Bitte Kennzeichen lesbar anbringen"
+                    "driverNote": "Bitte Kennzeichen lesbar anbringen",
+                    "inspectionNote": "Lenkkopflager bei Nachprüfung kontrollieren"
                   }
                 },
                 "clearDriver": {
@@ -6770,6 +6781,10 @@
                       "type": "string",
                       "nullable": true
                     },
+                    "inspectionNote": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "updatedAt": {
                       "type": "string",
                       "format": "date-time"
@@ -6780,6 +6795,7 @@
                     "entryId",
                     "internalNote",
                     "driverNote",
+                    "inspectionNote",
                     "updatedAt"
                   ]
                 }

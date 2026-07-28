@@ -12,6 +12,7 @@ import {
   technicalInspectorAssignment,
   vehicle
 } from '../db/schema';
+import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import type { AuthContext } from '../http/auth';
 
 // Standalone build keeps Lambda PDF rendering independent from host font files.
@@ -60,6 +61,19 @@ type InspectionDecisionInput = z.infer<typeof inspectionDecisionSchema>;
 type InspectorAssignmentInput = z.infer<typeof inspectorAssignmentSchema>;
 
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
+
+const getVehicleImageUrl = async (s3Key: string | null): Promise<string | null> => {
+  if (!s3Key) {
+    return null;
+  }
+  const candidates = [s3Key, `${s3Key}.jpg`, `${s3Key}.jpeg`, `${s3Key}.png`, `${s3Key}.webp`];
+  for (const candidate of candidates) {
+    if (await doesAssetObjectExist(candidate)) {
+      return getPresignedAssetsDownloadUrl(candidate, 900);
+    }
+  }
+  return null;
+};
 
 const resolveAssignedEvent = async (auth: AuthContext, requestedEventId?: string) => {
   const db = await getDb();
@@ -172,6 +186,7 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
       cylinders: vehicle.cylinders,
       brakes: vehicle.brakes,
       vehicleHistory: vehicle.vehicleHistory,
+      vehicleImageS3Key: vehicle.imageS3Key,
       inspectionNote: entry.inspectionNote,
       techStatus: entry.techStatus,
       techCheckedAt: entry.techCheckedAt,
@@ -223,17 +238,33 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
             displacementCcm: vehicle.displacementCcm,
             engineType: vehicle.engineType,
             cylinders: vehicle.cylinders,
-            vehicleHistory: vehicle.vehicleHistory
+            vehicleHistory: vehicle.vehicleHistory,
+            imageS3Key: vehicle.imageS3Key
           })
           .from(vehicle)
           .where(eq(vehicle.id, result.backupVehicleId))
           .limit(1)
       : Promise.resolve([])
   ]);
+  const backupVehicle = backupVehicleRows[0] ?? null;
+  const [vehicleImageUrl, backupVehicleImageUrl] = await Promise.all([
+    getVehicleImageUrl(result.vehicleImageS3Key),
+    getVehicleImageUrl(backupVehicle?.imageS3Key ?? null)
+  ]);
+  const { vehicleImageS3Key: _vehicleImageS3Key, ...entryResult } = result;
+  const backupVehicleResult = backupVehicle
+    ? (({ imageS3Key: _imageS3Key, ...vehicleResult }) => vehicleResult)(backupVehicle)
+    : null;
   return {
-    ...result,
+    ...entryResult,
+    vehicleImageUrl,
     codriver: codriverRows[0] ?? null,
-    backupVehicle: backupVehicleRows[0] ?? null
+    backupVehicle: backupVehicleResult
+      ? {
+          ...backupVehicleResult,
+          imageUrl: backupVehicleImageUrl
+        }
+      : null
   };
 };
 

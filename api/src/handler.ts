@@ -78,10 +78,12 @@ import {
   createIamUser,
   listIamRoles,
   listIamUsers,
+  patchIamUserProfile,
   patchIamUserRoles,
   patchIamUserStatus,
   validateCreateIamUserInput,
   validateListIamUsersInput,
+  validatePatchIamUserProfileInput,
   validatePatchIamUserRolesInput,
   validatePatchIamUserStatusInput
 } from './routes/adminIam';
@@ -94,8 +96,10 @@ import {
   listInspectorAssignments,
   searchInspectionEntries,
   updateInspectionDecision,
+  updateInspectionNote,
   upsertInspectorAssignment,
   validateInspectionDecisionInput,
+  validateInspectionNoteInput,
   validateInspectionSearchInput,
   validateInspectorAssignmentInput,
   validateQrExportInput
@@ -2710,6 +2714,36 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  const inspectionNoteMatch = path.match(/^\/inspection\/entries\/([^/]+)\/note$/);
+  if (method === 'PATCH' && inspectionNoteMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'inspection.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const input = validateInspectionNoteInput(parseJsonBody(event));
+      const result = await updateInspectionNote(auth, inspectionNoteMatch[1], input);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'INSPECTION_ASSIGNMENT_REQUIRED') {
+        return errorJson(403, 'No active technical inspection assignment');
+      }
+      if (error instanceof Error && error.message === 'INSPECTION_BACKUP_VEHICLE_REQUIRED') {
+        return errorJson(409, 'Entry has no backup vehicle');
+      }
+      return errorJson(500, 'Inspection note update failed');
+    }
+  }
+
   const inspectionEntryMatch = path.match(/^\/inspection\/entries\/([^/]+)$/);
   if (method === 'GET' && inspectionEntryMatch) {
     const auth = getAuthContext(event);
@@ -2880,6 +2914,42 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   const iamRolesMatch = path.match(/^\/admin\/iam\/users\/([^/]+)\/roles$/);
+  const iamProfileMatch = path.match(/^\/admin\/iam\/users\/([^/]+)\/profile$/);
+  if (method === 'PATCH' && iamProfileMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'iam.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    let userId: string;
+    try {
+      userId = decodeURIComponent(iamProfileMatch[1]);
+    } catch {
+      return errorJson(400, 'Invalid user id');
+    }
+    try {
+      const input = validatePatchIamUserProfileInput(parseJsonBody(event));
+      const updated = await patchIamUserProfile(userId, input);
+      if (!updated) {
+        return errorJson(500, 'Update IAM user profile failed');
+      }
+      return json(200, { ok: true, user: updated.user });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'IAM_USER_NOT_FOUND') {
+        return errorJson(404, 'User not found');
+      }
+      if (error instanceof Error && error.message === 'IAM_INVALID_PARAMETER') {
+        return errorJson(400, 'Invalid IAM user profile');
+      }
+      return errorJson(500, 'Update IAM user profile failed');
+    }
+  }
+
   if (method === 'PATCH' && iamRolesMatch) {
     const auth = getAuthContext(event);
     if (!hasPermission(auth, 'iam.write')) {

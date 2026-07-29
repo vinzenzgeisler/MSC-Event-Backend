@@ -14,6 +14,7 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   entry_status_updated: ['from', 'to'],
   entry_class_updated: ['previousClassId', 'classId', 'isBackupVehicle', 'backupOfEntryId', 'backupVehicleId'],
   entry_tech_status_updated: ['techStatus', 'target'],
+  entry_inspection_note_updated: ['target', 'noteUpdated'],
   entry_notes_updated: ['internalNoteUpdated', 'driverNoteUpdated', 'inspectionNoteUpdated'],
   entry_payment_status_set: ['paymentStatus', 'paidAmountCents', 'amountOpenCents', 'invoiceId'],
   entry_payment_amounts_set: ['invoiceId', 'totalCents', 'paidAmountCents', 'amountOpenCents', 'paymentStatus'],

@@ -5,10 +5,16 @@ const {
   AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
   AdminGetUserCommand,
-  AdminListGroupsForUserCommand
+  AdminListGroupsForUserCommand,
+  AdminUpdateUserAttributesCommand
 } = require('@aws-sdk/client-cognito-identity-provider');
 
-const { createIamUser, validateCreateIamUserInput } = require('../dist/routes/adminIam.js');
+const {
+  createIamUser,
+  patchIamUserProfile,
+  validateCreateIamUserInput,
+  validatePatchIamUserProfileInput
+} = require('../dist/routes/adminIam.js');
 
 const originalSend = CognitoIdentityProviderClient.prototype.send;
 
@@ -33,6 +39,8 @@ const run = async () => {
   assert.deepEqual(
     validateCreateIamUserInput({
       email: 'inspector@example.org',
+      firstName: 'Erika',
+      lastName: 'Prüfer',
       roles: ['technical_inspector'],
       sendInvitation: true
     }).roles,
@@ -43,6 +51,8 @@ const run = async () => {
   try {
     validateCreateIamUserInput({
       email: 'user@example.org',
+      firstName: 'Max',
+      lastName: 'Muster',
       roles: ['viewer'],
       sendInvitation: false
     });
@@ -66,6 +76,8 @@ const run = async () => {
       () =>
         createIamUser({
           email: 'user@example.org',
+          firstName: 'Max',
+          lastName: 'Muster',
           roles: ['viewer'],
           sendInvitation: true,
           temporaryPassword: 'short'
@@ -85,6 +97,8 @@ const run = async () => {
       () =>
         createIamUser({
           email: 'user@example.org',
+          firstName: 'Max',
+          lastName: 'Muster',
           roles: ['viewer'],
           sendInvitation: true
         }),
@@ -101,6 +115,8 @@ const run = async () => {
       assert.equal(command.input.Username, 'new-admin@example.org');
       const emailVerifiedAttr = (command.input.UserAttributes || []).find((attr) => attr.Name === 'email_verified');
       assert.equal(emailVerifiedAttr?.Value, 'false');
+      assert.equal((command.input.UserAttributes || []).find((attr) => attr.Name === 'given_name')?.Value, 'Nina');
+      assert.equal((command.input.UserAttributes || []).find((attr) => attr.Name === 'family_name')?.Value, 'Neumann');
       return {};
     }
     if (command instanceof AdminAddUserToGroupCommand) {
@@ -116,7 +132,9 @@ const run = async () => {
         UserLastModifiedDate: new Date('2026-02-28T00:00:00.000Z'),
         UserAttributes: [
           { Name: 'email', Value: 'new-admin@example.org' },
-          { Name: 'email_verified', Value: 'false' }
+          { Name: 'email_verified', Value: 'false' },
+          { Name: 'given_name', Value: 'Nina' },
+          { Name: 'family_name', Value: 'Neumann' }
         ]
       };
     }
@@ -129,13 +147,55 @@ const run = async () => {
   }, async () => {
     const result = await createIamUser({
       email: 'NEW-ADMIN@EXAMPLE.ORG',
+      firstName: 'Nina',
+      lastName: 'Neumann',
       roles: ['viewer', 'admin'],
       sendInvitation: false,
       temporaryPassword: 'TempPass123!'
     });
     assert.equal(result?.user?.email, 'new-admin@example.org');
     assert.equal(result?.user?.emailVerified, false);
+    assert.equal(result?.user?.firstName, 'Nina');
+    assert.equal(result?.user?.lastName, 'Neumann');
     assert.deepEqual(result?.user?.roles.sort(), ['admin', 'viewer']);
+  });
+
+  assert.deepEqual(validatePatchIamUserProfileInput({ firstName: '  Petra ', lastName: ' Prüfer ' }), {
+    firstName: 'Petra',
+    lastName: 'Prüfer'
+  });
+
+  await withMockedSend(async (command) => {
+    if (command instanceof AdminUpdateUserAttributesCommand) {
+      assert.equal(command.input.Username, 'inspector@example.org');
+      assert.equal((command.input.UserAttributes || []).find((attr) => attr.Name === 'given_name')?.Value, 'Petra');
+      assert.equal((command.input.UserAttributes || []).find((attr) => attr.Name === 'family_name')?.Value, 'Prüfer');
+      return {};
+    }
+    if (command instanceof AdminGetUserCommand) {
+      return {
+        Username: command.input.Username,
+        Enabled: true,
+        UserStatus: 'CONFIRMED',
+        UserAttributes: [
+          { Name: 'email', Value: 'inspector@example.org' },
+          { Name: 'email_verified', Value: 'true' },
+          { Name: 'given_name', Value: 'Petra' },
+          { Name: 'family_name', Value: 'Prüfer' }
+        ]
+      };
+    }
+    if (command instanceof AdminListGroupsForUserCommand) {
+      return { Groups: [{ GroupName: 'technical_inspector' }] };
+    }
+    return {};
+  }, async () => {
+    const result = await patchIamUserProfile('inspector@example.org', {
+      firstName: 'Petra',
+      lastName: 'Prüfer'
+    });
+    assert.equal(result?.user?.firstName, 'Petra');
+    assert.equal(result?.user?.lastName, 'Prüfer');
   });
 
   console.log('admin-iam.test.js: ok');

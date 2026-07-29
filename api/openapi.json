@@ -114,6 +114,37 @@
         }
       }
     },
+    "/inspection/entries/{id}/note": {
+      "patch": {
+        "operationId": "patch_inspection_entry_note",
+        "tags": ["admin"],
+        "summary": "Save a technical inspector note without changing the inspection status",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["note"],
+                "properties": {
+                  "target": { "type": "string", "enum": ["primary", "backup"], "default": "primary" },
+                  "note": { "type": ["string", "null"], "maxLength": 2000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Inspection note saved" },
+          "400": { "description": "Invalid note" },
+          "409": { "description": "Backup vehicle does not exist" }
+        }
+      }
+    },
     "/admin/entries/{id}/inspection-qr": {
       "get": {
         "operationId": "get_admin_entry_inspection_qr",
@@ -6334,6 +6365,42 @@
             "bearerAuth": []
           }
         ]
+      }
+    },
+    "/admin/iam/users/{id}/profile": {
+      "patch": {
+        "operationId": "patch_admin_iam_users_id_profile",
+        "tags": ["admin"],
+        "summary": "Update the first and last name stored on an IAM account",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["firstName", "lastName"],
+                "properties": {
+                  "firstName": { "type": "string", "minLength": 1, "maxLength": 100 },
+                  "lastName": { "type": "string", "minLength": 1, "maxLength": 100 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "IAM user profile updated" },
+          "400": { "description": "Invalid profile" },
+          "404": { "description": "User not found" }
+        },
+        "security": [{ "bearerAuth": [] }]
       }
     },
     "/admin/iam/users/{id}/roles": {

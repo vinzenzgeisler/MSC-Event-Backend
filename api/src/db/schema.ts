@@ -219,6 +219,7 @@ export const entry = pgTable(
     internalNote: text('internal_note'),
     driverNote: text('driver_note'),
     inspectionNote: text('inspection_note'),
+    backupInspectionNote: text('backup_inspection_note'),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     deletedBy: text('deleted_by'),
     deletedByDisplay: text('deleted_by_display'),

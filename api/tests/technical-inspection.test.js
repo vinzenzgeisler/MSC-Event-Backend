@@ -6,7 +6,8 @@ process.env.MAIL_PUBLIC_BASE_URL = 'https://event.example.test/';
 
 const {
   createInspectionQrDownload,
-  validateInspectionDecisionInput
+  validateInspectionDecisionInput,
+  validateInspectionNoteInput
 } = require('../dist/routes/technicalInspection');
 const { validateEntryNotesPatchInput } = require('../dist/routes/adminEntries');
 
@@ -30,6 +31,10 @@ void (async () => {
   );
   assert.deepEqual(validateEntryNotesPatchInput({ inspectionNote: 'Lenkkopflager nachprüfen' }), {
     inspectionNote: 'Lenkkopflager nachprüfen'
+  });
+  assert.deepEqual(validateInspectionNoteInput({ target: 'backup', note: '  Reifen prüfen  ' }), {
+    target: 'backup',
+    note: 'Reifen prüfen'
   });
 
   const svg = await createInspectionQrDownload(
@@ -67,6 +72,12 @@ void (async () => {
     'utf8'
   );
   assert.match(inspectorNoteMigration, /inspection_note/);
+
+  const backupInspectorNoteMigration = readFileSync(
+    join(__dirname, '..', 'migrations', '0061_backup_inspection_note.sql'),
+    'utf8'
+  );
+  assert.match(backupInspectorNoteMigration, /backup_inspection_note/);
 
   console.log('technical-inspection.test.js: ok');
 })().catch((error) => {

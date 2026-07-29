@@ -14,6 +14,7 @@ import {
 } from '../db/schema';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import type { AuthContext } from '../http/auth';
+import { resolveIamUserDisplayNames } from './adminIam';
 
 // Standalone build keeps Lambda PDF rendering independent from host font files.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -41,6 +42,11 @@ const inspectionDecisionSchema = z
     }
   });
 
+const inspectionNoteSchema = z.object({
+  target: z.enum(['primary', 'backup']).default('primary'),
+  note: z.string().trim().max(2000).nullable()
+});
+
 const inspectorAssignmentSchema = z
   .object({
     eventId: z.string().uuid(),
@@ -58,6 +64,7 @@ const qrExportSchema = z.object({
 
 type InspectionSearchInput = z.infer<typeof inspectionSearchSchema>;
 type InspectionDecisionInput = z.infer<typeof inspectionDecisionSchema>;
+type InspectionNoteInput = z.infer<typeof inspectionNoteSchema>;
 type InspectorAssignmentInput = z.infer<typeof inspectorAssignmentSchema>;
 
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
@@ -188,6 +195,7 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
       vehicleHistory: vehicle.vehicleHistory,
       vehicleImageS3Key: vehicle.imageS3Key,
       inspectionNote: entry.inspectionNote,
+      backupInspectionNote: entry.backupInspectionNote,
       techStatus: entry.techStatus,
       techCheckedAt: entry.techCheckedAt,
       techCheckedBy: entry.techCheckedBy,
@@ -296,7 +304,7 @@ export const updateInspectionDecision = async (
               backupTechStatus: input.techStatus,
               backupTechCheckedAt: input.techStatus === 'pending' ? null : now,
               backupTechCheckedBy: input.techStatus === 'pending' ? null : actorUserId,
-              inspectionNote: note,
+              backupInspectionNote: note,
               updatedAt: now
             }
           : {
@@ -340,18 +348,73 @@ export const updateInspectionDecision = async (
   });
 };
 
+export const updateInspectionNote = async (
+  auth: AuthContext,
+  entryId: string,
+  input: InspectionNoteInput
+) => {
+  if (!auth.sub) {
+    throw new Error('INSPECTION_IDENTITY_REQUIRED');
+  }
+  const existing = await getInspectionEntry(auth, entryId);
+  if (!existing) {
+    return null;
+  }
+  if (input.target === 'backup' && !existing.backupVehicleId) {
+    throw new Error('INSPECTION_BACKUP_VEHICLE_REQUIRED');
+  }
+
+  const note = input.note?.trim() || null;
+  const currentNote =
+    input.target === 'backup' ? existing.backupInspectionNote ?? null : existing.inspectionNote ?? null;
+  if (currentNote === note) {
+    return { changed: false, note, target: input.target };
+  }
+
+  const db = await getDb();
+  const now = new Date();
+  return db.transaction(async (tx) => {
+    await tx
+      .update(entry)
+      .set(
+        input.target === 'backup'
+          ? { backupInspectionNote: note, updatedAt: now }
+          : { inspectionNote: note, updatedAt: now }
+      )
+      .where(eq(entry.id, entryId));
+
+    await writeAuditLog(tx as never, {
+      eventId: existing.eventId,
+      actorUserId: auth.sub,
+      action: 'entry_inspection_note_updated',
+      entityType: 'entry',
+      entityId: entryId,
+      payload: { target: input.target, noteUpdated: true }
+    });
+
+    return { changed: true, note, target: input.target };
+  });
+};
+
 export const listInspectionHistory = async (auth: AuthContext, entryId: string) => {
   const existing = await getInspectionEntry(auth, entryId);
   if (!existing) {
     return null;
   }
   const db = await getDb();
-  return db
+  const rows = await db
     .select()
     .from(technicalInspectionDecision)
     .where(eq(technicalInspectionDecision.entryId, entryId))
     .orderBy(desc(technicalInspectionDecision.createdAt))
     .limit(50);
+  const displayNames = await resolveIamUserDisplayNames(
+    Array.from(new Set(rows.map((row) => row.inspectorUserId).filter(Boolean)))
+  );
+  return rows.map((row) => ({
+    ...row,
+    inspectorDisplay: displayNames.get(row.inspectorUserId) ?? row.inspectorEmail ?? null
+  }));
 };
 
 export const listInspectorAssignments = async (eventId?: string) => {
@@ -491,5 +554,6 @@ export const validateInspectionSearchInput = (query: Record<string, string | und
     limit: query.limit === undefined ? undefined : Number(query.limit)
   });
 export const validateInspectionDecisionInput = (payload: unknown) => inspectionDecisionSchema.parse(payload);
+export const validateInspectionNoteInput = (payload: unknown) => inspectionNoteSchema.parse(payload);
 export const validateInspectorAssignmentInput = (payload: unknown) => inspectorAssignmentSchema.parse(payload);
 export const validateQrExportInput = (payload: unknown) => qrExportSchema.parse(payload);

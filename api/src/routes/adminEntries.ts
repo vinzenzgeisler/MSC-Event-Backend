@@ -667,7 +667,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     })
     .from(auditLog)
     .where(and(eq(auditLog.entityType, 'entry'), eq(auditLog.entityId, entryId as never)))
-    .orderBy(asc(auditLog.createdAt));
+    .orderBy(desc(auditLog.createdAt));
   const actorDisplayNames = await resolveIamUserDisplayNames(
     Array.from(new Set(historyRows.map((row) => row.actorUserId).filter((value): value is string => Boolean(value))))
   );

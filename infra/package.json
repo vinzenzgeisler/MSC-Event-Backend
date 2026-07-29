@@ -11,14 +11,13 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
-    "aws-cdk": "2.177.0",
+    "aws-cdk": "^2.1133.0",
     "esbuild": "^0.19.12",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
   },
   "dependencies": {
-    "aws-cdk-lib": "2.177.0",
-    "constructs": "^10.3.0",
-    "psql": "^0.0.1"
+    "aws-cdk-lib": "^2.262.1",
+    "constructs": "^10.3.0"
   }
 }

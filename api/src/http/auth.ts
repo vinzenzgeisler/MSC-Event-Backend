@@ -7,32 +7,38 @@ const legacyRoleAliases: Record<string, AllowedRole> = {
   checkin: 'editor'
 };
 
-export type AdminPermission =
-  | 'dashboard.read'
-  | 'entries.read'
-  | 'entries.status.write'
-  | 'entries.checkin.write'
-  | 'entries.payment.write'
-  | 'entries.notes.write'
-  | 'entries.delete'
-  | 'communication.read'
-  | 'communication.write'
-  | 'exports.read'
-  | 'exports.write'
-  | 'settings.read'
-  | 'settings.write'
-  | 'iam.read'
-  | 'iam.write'
-  | 'inspection.read'
-  | 'inspection.write'
-  | 'marshals.read'
-  | 'marshals.write'
-  | 'marshals.export';
+export const adminPermissions = [
+  'dashboard.read',
+  'entries.read',
+  'entries.payment.read',
+  'entries.status.write',
+  'entries.checkin.write',
+  'entries.payment.write',
+  'entries.notes.write',
+  'entries.delete',
+  'communication.read',
+  'communication.write',
+  'exports.read',
+  'exports.write',
+  'settings.read',
+  'settings.write',
+  'iam.read',
+  'iam.write',
+  'inspection.read',
+  'inspection.write',
+  'marshals.read',
+  'marshals.write',
+  'marshals.export'
+] as const;
+export type AdminPermission = (typeof adminPermissions)[number];
+export type AdminReadPermission = Extract<AdminPermission, `${string}.read`>;
+const adminPermissionSet = new Set<string>(adminPermissions);
 
 const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
   admin: [
     'dashboard.read',
     'entries.read',
+    'entries.payment.read',
     'entries.status.write',
     'entries.checkin.write',
     'entries.payment.write',
@@ -55,13 +61,14 @@ const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
   editor: [
     'dashboard.read',
     'entries.read',
+    'entries.payment.read',
     'entries.status.write',
     'entries.checkin.write',
     'entries.payment.write',
     'entries.notes.write',
     'exports.read'
   ],
-  viewer: ['dashboard.read', 'entries.read', 'exports.read'],
+  viewer: ['dashboard.read', 'entries.read', 'entries.payment.read', 'exports.read'],
   technical_inspector: ['inspection.read', 'inspection.write'],
   marshal_manager: ['marshals.read', 'marshals.write', 'marshals.export']
 };
@@ -77,6 +84,23 @@ export type AuthContext = {
 export const MSC_SUPPORT_SCOPE_PREFIX = 'msc-support/';
 export const MSC_SUPPORT_READ_SCOPE = `${MSC_SUPPORT_SCOPE_PREFIX}entries.read`;
 export const MSC_SUPPORT_DELETE_SCOPE = `${MSC_SUPPORT_SCOPE_PREFIX}entries.delete`;
+export const MSC_AUTOMATION_SCOPE_PREFIX = 'msc-automation/';
+
+export const automationScopeForPermission = (
+  permission: AdminPermission
+): string => `${MSC_AUTOMATION_SCOPE_PREFIX}${permission}`;
+
+export const permissionFromAutomationScope = (
+  scope: string
+): AdminPermission | null => {
+  if (!scope.startsWith(MSC_AUTOMATION_SCOPE_PREFIX)) {
+    return null;
+  }
+  const permission = scope.slice(MSC_AUTOMATION_SCOPE_PREFIX.length);
+  return adminPermissionSet.has(permission)
+    ? (permission as AdminPermission)
+    : null;
+};
 
 const normalizeRole = (value: string): AllowedRole | null => {
   const normalized = value.trim().toLowerCase();
@@ -193,6 +217,17 @@ export const hasAnyGroup = (ctx: AuthContext, groups: AllowedRole[]): boolean =>
 export const hasPermission = (ctx: AuthContext, permission: AdminPermission): boolean =>
   ctx.groups.some((group) => rolePermissions[group].includes(permission)) ||
   ctx.scopes.includes(`${MSC_SUPPORT_SCOPE_PREFIX}${permission}`);
+
+export const hasAutomationPermission = (
+  ctx: AuthContext,
+  permission: AdminPermission
+): boolean => ctx.scopes.includes(automationScopeForPermission(permission));
+
+export const hasPermissionOrAutomation = (
+  ctx: AuthContext,
+  permission: AdminReadPermission
+): boolean => hasPermission(ctx, permission) ||
+  (permission.endsWith('.read') && hasAutomationPermission(ctx, permission));
 
 export const hasAnyPermission = (ctx: AuthContext, permissions: AdminPermission[]): boolean =>
   permissions.some((permission) => hasPermission(ctx, permission));

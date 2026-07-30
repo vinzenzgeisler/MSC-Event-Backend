@@ -419,7 +419,10 @@ export class ApiStack extends Stack {
     });
 
     const jwtAuthorizer = new authorizers.HttpJwtAuthorizer('CognitoAuthorizer', props.authStack.userPoolIssuerUrl, {
-      jwtAudience: [props.authStack.userPoolClient.userPoolClientId]
+      jwtAudience: [
+        props.authStack.userPoolClient.userPoolClientId,
+        props.authStack.supportUserPoolClient.userPoolClientId
+      ]
     });
     const supportJwtAuthorizer = new authorizers.HttpJwtAuthorizer('SupportCognitoAuthorizer', props.authStack.userPoolIssuerUrl, {
       jwtAudience: [

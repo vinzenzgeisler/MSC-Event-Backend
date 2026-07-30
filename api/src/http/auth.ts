@@ -7,29 +7,35 @@ const legacyRoleAliases: Record<string, AllowedRole> = {
   checkin: 'editor'
 };
 
-export type AdminPermission =
-  | 'dashboard.read'
-  | 'entries.read'
-  | 'entries.status.write'
-  | 'entries.checkin.write'
-  | 'entries.payment.write'
-  | 'entries.notes.write'
-  | 'entries.delete'
-  | 'communication.read'
-  | 'communication.write'
-  | 'exports.read'
-  | 'exports.write'
-  | 'settings.read'
-  | 'settings.write'
-  | 'iam.read'
-  | 'iam.write'
-  | 'inspection.read'
-  | 'inspection.write';
+export const adminPermissions = [
+  'dashboard.read',
+  'entries.read',
+  'entries.payment.read',
+  'entries.status.write',
+  'entries.checkin.write',
+  'entries.payment.write',
+  'entries.notes.write',
+  'entries.delete',
+  'communication.read',
+  'communication.write',
+  'exports.read',
+  'exports.write',
+  'settings.read',
+  'settings.write',
+  'iam.read',
+  'iam.write',
+  'inspection.read',
+  'inspection.write'
+] as const;
+export type AdminPermission = (typeof adminPermissions)[number];
+export type AdminReadPermission = Extract<AdminPermission, `${string}.read`>;
+const adminPermissionSet = new Set<string>(adminPermissions);
 
 const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
   admin: [
     'dashboard.read',
     'entries.read',
+    'entries.payment.read',
     'entries.status.write',
     'entries.checkin.write',
     'entries.payment.write',
@@ -49,13 +55,14 @@ const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
   editor: [
     'dashboard.read',
     'entries.read',
+    'entries.payment.read',
     'entries.status.write',
     'entries.checkin.write',
     'entries.payment.write',
     'entries.notes.write',
     'exports.read'
   ],
-  viewer: ['dashboard.read', 'entries.read', 'exports.read'],
+  viewer: ['dashboard.read', 'entries.read', 'entries.payment.read', 'exports.read'],
   technical_inspector: ['inspection.read', 'inspection.write']
 };
 
@@ -65,9 +72,27 @@ export type AuthContext = {
   groups: AllowedRole[];
   scopes: string[];
   mfaAuthenticated: boolean;
+  automationApproval: AutomationApprovalContext | null;
 };
 
 export const MSC_SUPPORT_READ_SCOPE = 'msc-support/entries.read';
+export const MSC_AUTOMATION_SCOPE_PREFIX = 'msc-automation/';
+
+export const automationScopeForPermission = (
+  permission: AdminPermission
+): string => `${MSC_AUTOMATION_SCOPE_PREFIX}${permission}`;
+
+export const permissionFromAutomationScope = (
+  scope: string
+): AdminPermission | null => {
+  if (!scope.startsWith(MSC_AUTOMATION_SCOPE_PREFIX)) {
+    return null;
+  }
+  const permission = scope.slice(MSC_AUTOMATION_SCOPE_PREFIX.length);
+  return adminPermissionSet.has(permission)
+    ? (permission as AdminPermission)
+    : null;
+};
 
 const normalizeRole = (value: string): AllowedRole | null => {
   const normalized = value.trim().toLowerCase();
@@ -130,6 +155,7 @@ export const getAuthContext = (event: APIGatewayProxyEventV2): AuthContext => {
   const claims = ((event.requestContext as { authorizer?: { jwt?: { claims?: unknown } } }).authorizer?.jwt?.claims ??
     {}) as Record<string, unknown>;
   const rawGroups = claims['cognito:groups'];
+  const automationApproval = getAutomationApprovalContext(event);
   const groups = (() => {
     if (rawGroups === undefined || rawGroups === null) {
       return [];
@@ -168,11 +194,16 @@ export const getAuthContext = (event: APIGatewayProxyEventV2): AuthContext => {
   })();
 
   return {
-    sub: typeof claims.sub === 'string' ? claims.sub : null,
+    sub: automationApproval
+      ? `automation:${automationApproval.actionId}`
+      : typeof claims.sub === 'string'
+        ? claims.sub
+        : null,
     email: typeof claims.email === 'string' ? claims.email : null,
     groups,
     scopes: parseClaimAsStringArray(claims.scope),
-    mfaAuthenticated: isMfaAuthenticated(claims)
+    mfaAuthenticated: isMfaAuthenticated(claims),
+    automationApproval
   };
 };
 
@@ -181,11 +212,70 @@ export const hasGroup = (ctx: AuthContext, group: AllowedRole): boolean => ctx.g
 export const hasAnyGroup = (ctx: AuthContext, groups: AllowedRole[]): boolean =>
   groups.some((group) => ctx.groups.includes(group));
 
-export const hasPermission = (ctx: AuthContext, permission: AdminPermission): boolean =>
-  ctx.groups.some((group) => rolePermissions[group].includes(permission));
+export const hasPermission = (
+  ctx: AuthContext,
+  permission: AdminPermission
+): boolean => ctx.groups.some((group) =>
+  rolePermissions[group].includes(permission)
+) || (
+  !permission.endsWith('.read') &&
+  ctx.automationApproval !== null &&
+  hasAutomationPermission(ctx, permission)
+);
+
+export const hasAutomationPermission = (
+  ctx: AuthContext,
+  permission: AdminPermission
+): boolean => ctx.scopes.includes(automationScopeForPermission(permission));
+
+export const hasPermissionOrAutomation = (
+  ctx: AuthContext,
+  permission: AdminReadPermission
+): boolean => hasPermission(ctx, permission) ||
+  (permission.endsWith('.read') && hasAutomationPermission(ctx, permission));
+
+const approvalActionIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const payloadHashPattern = /^[a-f0-9]{64}$/;
+
+export type AutomationApprovalContext = {
+  actionId: string;
+  payloadHash: string;
+  approvedAt: string;
+};
+
+export const getAutomationApprovalContext = (
+  event: APIGatewayProxyEventV2,
+  nowMs = Date.now()
+): AutomationApprovalContext | null => {
+  const headers = Object.fromEntries(
+    Object.entries(event.headers ?? {}).map(([key, value]) => [
+      key.toLowerCase(),
+      value
+    ])
+  );
+  const actionId = headers['x-msc-approval-action-id']?.trim() ?? '';
+  const payloadHash =
+    headers['x-msc-approval-payload-sha256']?.trim().toLowerCase() ?? '';
+  const approvedAt = headers['x-msc-approval-approved-at']?.trim() ?? '';
+  const idempotencyKey = headers['idempotency-key']?.trim() ?? '';
+  const approvedAtMs = Date.parse(approvedAt);
+  if (
+    !approvalActionIdPattern.test(actionId) ||
+    !payloadHashPattern.test(payloadHash) ||
+    idempotencyKey !== actionId ||
+    !Number.isFinite(approvedAtMs) ||
+    approvedAtMs > nowMs + 60_000 ||
+    nowMs - approvedAtMs > 20 * 60_000
+  ) {
+    return null;
+  }
+  return { actionId, payloadHash, approvedAt };
+};
 
 export const hasAnyPermission = (ctx: AuthContext, permissions: AdminPermission[]): boolean =>
   permissions.some((permission) => hasPermission(ctx, permission));
 
 export const hasSupportRegistrationRead = (ctx: AuthContext): boolean =>
-  hasPermission(ctx, 'entries.read') || ctx.scopes.includes(MSC_SUPPORT_READ_SCOPE);
+  hasPermissionOrAutomation(ctx, 'entries.read') ||
+  ctx.scopes.includes(MSC_SUPPORT_READ_SCOPE);

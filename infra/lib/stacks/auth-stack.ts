@@ -83,19 +83,67 @@ export class AuthStack extends Stack {
       userPoolResourceServerName: `${props.config.prefix}-support-api`,
       scopes: [supportReadScope]
     });
-    this.supportUserPoolClient = new cognito.UserPoolClient(this, 'SupportUserPoolClient', {
-      userPool: this.userPool,
-      userPoolClientName: `${props.config.prefix}-support-machine-client`,
-      generateSecret: true,
-      oAuth: {
-        flows: {
-          clientCredentials: true
+    const automationScopeDefinitions = [
+      ['dashboard.read', 'Read dashboard aggregates'],
+      ['entries.read', 'Read registration and participant data'],
+      ['entries.payment.read', 'Read invoices and payment history'],
+      ['entries.status.write', 'Change registration and acceptance status'],
+      ['entries.checkin.write', 'Change check-in identity state'],
+      ['entries.payment.write', 'Change payment state and amounts'],
+      ['entries.notes.write', 'Change registration notes and class assignment'],
+      ['entries.delete', 'Soft-delete and restore registrations'],
+      ['communication.read', 'Read communication configuration and outbox state'],
+      ['communication.write', 'Create or retry communication actions'],
+      ['exports.read', 'Read export metadata'],
+      ['exports.write', 'Create exports'],
+      ['settings.read', 'Read event, class, pricing and system settings'],
+      ['settings.write', 'Change event, class, pricing and system settings'],
+      ['iam.read', 'Read roles and users'],
+      ['iam.write', 'Change users, roles and account status'],
+      ['inspection.read', 'Read technical inspection data'],
+      ['inspection.write', 'Change technical inspection data']
+    ] as const;
+    const automationScopes = automationScopeDefinitions.map(
+      ([scopeName, scopeDescription]) => new cognito.ResourceServerScope({
+        scopeName,
+        scopeDescription
+      })
+    );
+    const automationResourceServer = this.userPool.addResourceServer(
+      'AutomationResourceServer',
+      {
+        identifier: 'msc-automation',
+        userPoolResourceServerName: `${props.config.prefix}-automation-api`,
+        scopes: automationScopes
+      }
+    );
+    this.supportUserPoolClient = new cognito.UserPoolClient(
+      this,
+      'SupportUserPoolClient',
+      {
+        userPool: this.userPool,
+        userPoolClientName: `${props.config.prefix}-support-machine-client`,
+        generateSecret: true,
+        oAuth: {
+          flows: {
+            clientCredentials: true
+          },
+          scopes: [
+            cognito.OAuthScope.resourceServer(
+              supportResourceServer,
+              supportReadScope
+            ),
+            ...automationScopes.map((scope) =>
+              cognito.OAuthScope.resourceServer(
+                automationResourceServer,
+                scope
+              ))
+          ]
         },
-        scopes: [cognito.OAuthScope.resourceServer(supportResourceServer, supportReadScope)]
-      },
-      accessTokenValidity: Duration.minutes(15),
-      enableTokenRevocation: true
-    });
+        accessTokenValidity: Duration.minutes(5),
+        enableTokenRevocation: true
+      }
+    );
 
     const userPoolDomain = this.userPool.addDomain('UserPoolDomain', {
       cognitoDomain: {

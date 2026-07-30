@@ -11,7 +11,6 @@ export class AuthStack extends Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
   public readonly supportUserPoolClient: cognito.UserPoolClient;
-  public readonly automationUserPoolClient: cognito.UserPoolClient;
   public readonly userPoolIssuerUrl: string;
 
   constructor(scope: Construct, id: string, props: AuthStackProps) {
@@ -121,7 +120,6 @@ export class AuthStack extends Stack {
       accessTokenValidity: Duration.minutes(15),
       enableTokenRevocation: true
     });
-
     const automationScopeDefinitions = [
       ['dashboard.read', 'Read dashboard aggregates'],
       ['entries.read', 'Read registration and participant data'],
@@ -156,26 +154,28 @@ export class AuthStack extends Stack {
         scopes: automationScopes
       }
     );
-    const automationReadScopes = automationScopeDefinitions
-      .map(([scopeName], index) => ({ scopeName, scope: automationScopes[index] }))
-      .filter(({ scopeName }) => scopeName.endsWith('.read'))
-      .map(({ scope }) => scope);
-    this.automationUserPoolClient = new cognito.UserPoolClient(
+    this.supportUserPoolClient = new cognito.UserPoolClient(
       this,
-      'AutomationUserPoolClient',
+      'SupportUserPoolClient',
       {
         userPool: this.userPool,
-        userPoolClientName: `${props.config.prefix}-automation-machine-client`,
+        userPoolClientName: `${props.config.prefix}-support-machine-client`,
         generateSecret: true,
         oAuth: {
           flows: {
             clientCredentials: true
           },
-          scopes: automationReadScopes.map((scope) =>
+          scopes: [
             cognito.OAuthScope.resourceServer(
-              automationResourceServer,
-              scope
-            ))
+              supportResourceServer,
+              supportReadScope
+            ),
+            ...automationScopes.map((scope) =>
+              cognito.OAuthScope.resourceServer(
+                automationResourceServer,
+                scope
+              ))
+          ]
         },
         accessTokenValidity: Duration.minutes(5),
         enableTokenRevocation: true
@@ -211,11 +211,6 @@ export class AuthStack extends Stack {
     new CfnOutput(this, 'SupportUserPoolClientId', {
       value: this.supportUserPoolClient.userPoolClientId,
       exportName: `${props.config.prefix}-support-user-pool-client-id`
-    });
-
-    new CfnOutput(this, 'AutomationUserPoolClientId', {
-      value: this.automationUserPoolClient.userPoolClientId,
-      exportName: `${props.config.prefix}-automation-user-pool-client-id`
     });
 
     new CfnOutput(this, 'UserPoolIssuerUrl', {

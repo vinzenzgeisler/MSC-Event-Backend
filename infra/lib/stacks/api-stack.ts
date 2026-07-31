@@ -726,7 +726,7 @@ export class ApiStack extends Stack {
       path: '/admin/entries/deleted',
       methods: [apigwv2.HttpMethod.GET],
       integration,
-      authorizer: jwtAuthorizer
+      authorizer: supportJwtAuthorizer
     });
 
     this.api.addRoutes({

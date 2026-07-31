@@ -2,7 +2,7 @@ export type LegalUiLocale = "de" | "en" | "cz" | "pl";
 export type ConsentLocale = "de-DE" | "en-GB" | "cs-CZ" | "pl-PL";
 export type LegalDocId = "impressum" | "datenschutz" | "teilnahmebedingungen" | "haftverzicht";
 
-export const CONSENT_VERSION = "privacy-v2.1+terms-v2.0+waiver-v2.0+media-v2.0+club-info-v1.0";
+export const CONSENT_VERSION = "privacy-v2.1+terms-v2.0+waiver-v3.0+media-v2.0+club-info-v1.0";
 
 export type LegalDocSection = {
   title: string;
@@ -281,20 +281,86 @@ const termsDocDe: LegalDoc = {
 
 const waiverDocDe: LegalDoc = {
   id: "haftverzicht",
-  title: "Haftverzicht",
+  title: "Vertrags- und Verzichtserklärung",
   summaryLinkLabel: "Haftverzicht",
   intro: [
-    "Der nachfolgende Haftverzicht dient der Vorabinformation im Rahmen der Online-Anmeldung. Maßgeblich ist die bei der Veranstaltung vor Ort zu unterzeichnende Fassung. Mit der Online-Anmeldung bestätigt der Teilnehmer, den Haftungsverzicht zur Kenntnis genommen zu haben.",
-    "Der Teilnehmer nimmt zur Kenntnis, dass die Teilnahme an der Veranstaltung auf eigene Verantwortung erfolgt und ergänzend die vor Ort ausgehändigte beziehungsweise bereitgestellte Haftungsverzichtserklärung verbindlich zu unterzeichnen ist."
+    "Mit der Online-Anmeldung bestätigt der Teilnehmer, die nachfolgende Vertrags- und Verzichtserklärung zur Kenntnis genommen zu haben. Die verbindliche Unterzeichnung der vollständigen Erklärung erfolgt persönlich bei der Veranstaltung vor Ort. Maßgeblich ist die dort vorgelegte Fassung."
   ],
   sections: [
-    { title: "1. Teilnahme auf eigene Gefahr", paragraphs: ["Die Teilnahme an der Veranstaltung erfolgt auf eigene Gefahr. Der Teilnehmer trägt die zivil- und strafrechtliche Verantwortung für alle von ihm oder dem eingesetzten Fahrzeug verursachten Schäden, soweit kein wirksamer Haftungsausschluss entgegensteht."] },
-    { title: "2. Eigenverantwortung und Fahrzeugzustand", paragraphs: ["Der Teilnehmer bestätigt, dass seine Angaben im Rahmen der Anmeldung richtig und vollständig sind, das Fahrzeug den technischen Anforderungen entspricht und in technisch sowie optisch ordnungsgemäßem Zustand eingesetzt wird."] },
-    { title: "3. Verzicht auf Ansprüche", paragraphs: ["Mit der Online-Anmeldung nimmt der Teilnehmer zur Kenntnis, dass im Zusammenhang mit der Veranstaltung auf Ansprüche wegen Schäden jeder Art insbesondere gegenüber dem Veranstalter, beteiligten Verbänden, Funktionsträgern, Helfern sowie sonstigen mit Organisation und Durchführung befassten Personen verzichtet wird, soweit dies rechtlich zulässig ist."] },
-    { title: "4. Geltung für weitere Beteiligte", paragraphs: ["Der Haftungsverzicht erfasst auch Ansprüche gegenüber anderen Teilnehmern, deren Helfern, Eigentümern anderer Fahrzeuge sowie gegenüber eigenen Helfern des Teilnehmers."] },
-    { title: "5. Ausnahmen vom Haftungsausschluss", paragraphs: ["Nicht vom Haftungsverzicht erfasst sind Ansprüche wegen Schäden aus der Verletzung des Lebens, des Körpers oder der Gesundheit sowie Ansprüche, die auf vorsätzlichem oder grob fahrlässigem Verhalten beruhen."] },
-    { title: "6. Ergänzende Veranstaltungsregelungen", paragraphs: ["Der Teilnehmer bestätigt die Kenntnis der Ausschreibungsbedingungen, ergänzender Veranstaltungsregeln, behördlicher Vorgaben und Sicherheitsanweisungen. Bei Absage der Veranstaltung aufgrund höherer Gewalt oder behördlicher Maßnahmen können Rückerstattungsansprüche ausgeschlossen sein, soweit dies in den Veranstaltungsunterlagen geregelt ist."] },
-    { title: "7. Verbindliche Unterzeichnung vor Ort", paragraphs: ["Maßgeblich bleibt die bei der Veranstaltung vor Ort zu unterzeichnende Fassung des Haftungsverzichts."] }
+    {
+      title: "1. Vertragserklärung — Angaben und Fahrzeug",
+      paragraphs: ["Der Teilnehmer (Fahrer, Beifahrer) versichert, dass:"],
+      bullets: [
+        "die im Nennformular gemachten Angaben richtig und vollständig sind",
+        "Fahrer (und Beifahrer) den Anforderungen der Motorsportveranstaltung gesundheitlich gewachsen sind",
+        "das Fahrzeug den technischen Bestimmungen entspricht und er für die technische Sicherheit selbst verantwortlich ist",
+        "das Fahrzeug in allen Teilen durch die Technischen Kommissare untersucht werden kann",
+        "er das Fahrzeug nur in technisch und optisch einwandfreiem Zustand bei der Veranstaltung einsetzt"
+      ]
+    },
+    {
+      title: "2. Vertragserklärung — Regelakzeptanz und Pflichten",
+      paragraphs: ["Der Teilnehmer (Fahrer, Beifahrer) erklärt mit seiner Unterschrift weiter, dass:"],
+      bullets: [
+        "er die Ausschreibungsbedingungen zur Kenntnis genommen hat",
+        "diese als für sich verbindlich anerkennt und sie befolgen wird",
+        "er im Besitz eines gültigen Führerscheins ist; der Führerschein ist bei der Anmeldung vorzulegen",
+        "diese Regelungen und Bestimmungen und die Erklärung in der Nennung mit seiner Zustimmung Bestandteil des Vertrages mit dem Veranstalter werden",
+        "der Veranstalter im Rahmen seiner Zuständigkeit berechtigt ist, neben anderen Maßnahmen auch Strafen bei Verstößen zu beschreiten",
+        "er sich verpflichtet, keine verbotenen Substanzen einzunehmen oder verbotene Methoden zu verwenden",
+        "er seine Einwilligung zur Veröffentlichung und Verbreitung seines Bildnisses auf Foto- und Videoaufnahmen, die während der Veranstaltung entstanden sind, gibt",
+        "er sich mit der Speicherung und Verarbeitung seiner Daten durch den MSC Oberlausitzer Dreiländereck e.V. einverstanden erklärt",
+        "das Einsatzfahrzeug sein Eigentum ist, beziehungsweise er eine entsprechende Verzichtserklärung des Fahrzeugeigentümers vorlegt",
+        "sogenannte \"Burnouts\" auf dem Veranstaltungsgelände zu unterlassen sind; bei Schäden durch Nichteinhaltung wird der Verursacher in Haftung genommen"
+      ]
+    },
+    {
+      title: "3. Hinweis zur Unfallversicherung",
+      paragraphs: [
+        "Bewerber, die nicht privat unfallversichert sind, müssen die DMV-Tagesversicherung abschließen. Diese kann bei der Anmeldung im Organisationsbüro abgeschlossen werden."
+      ]
+    },
+    {
+      title: "4. Zulassungsvoraussetzungen — Führerschein und ärztliches Attest",
+      paragraphs: [
+        "Für das Befahren des Rundkurses ist ein gültiger Führerschein erforderlich. Der Führerschein ist bei der Anmeldung im Veranstaltungsbüro vorzulegen.",
+        "Starter ab 70 Jahren (Stichtagsregelung) müssen ein aktuelles ärztliches Attest über die Tauglichkeit zur Teilnahme an der Motorsportveranstaltung vorlegen. Das Attest verbleibt im Fahrtleitungsbüro."
+      ]
+    },
+    {
+      title: "5. Verzichtserklärung — Teilnahme auf eigene Gefahr",
+      paragraphs: [
+        "Der Teilnehmer (Fahrer, Beifahrer) nimmt auf eigene Gefahr an der Veranstaltung teil. Er trägt allein die zivil- und strafrechtliche Verantwortung für alle von ihm oder dem von ihm benutzten Fahrzeug verursachten Schäden, soweit kein Haftungsausschluss vereinbart wurde.",
+        "Der Teilnehmer (Fahrer, Beifahrer) erklärt mit Abgabe der Nennung den Verzicht auf Ansprüche jeder Art für Schäden, die im Zusammenhang mit der Veranstaltung entstehen, und zwar gegen:"
+      ],
+      bullets: [
+        "den DMV, den DMSB, die Mitgliedsorganisationen des DMSB sowie deren Vertreter und Funktionäre",
+        "den Veranstalter und alle Personen, die mit der Organisation und Durchführung der Veranstaltung in Verbindung stehen",
+        "den Straßenbaulastträger, soweit Schäden durch die Beschaffenheit der bei der Veranstaltung zu benutzenden Straßen samt Zubehör verursacht werden",
+        "die Erfüllungs- und Verrichtungsgehilfen aller zuvor genannten Personen und Stellen",
+        "die anderen Teilnehmer, deren Helfer, die Eigentümer und Fahrzeugeigentümer der anderen Fahrzeuge",
+        "den eigenen Bewerber, Fahrer, Beifahrer und eigene Helfer"
+      ]
+    },
+    {
+      title: "6. Ausnahmen vom Haftungsverzicht",
+      paragraphs: [
+        "Der Haftungsverzicht gilt nicht für Schäden aus der Verletzung des Lebens, des Körpers oder der Gesundheit, die auf einer vorsätzlichen oder grob fahrlässigen Pflichtverletzung — auch eines gesetzlichen Vertreters oder eines Erfüllungsgehilfen des enthafteten Personenkreises — beruhen."
+      ]
+    },
+    {
+      title: "7. Wirksamkeit des Haftungsausschlusses",
+      paragraphs: [
+        "Der Haftungsausschluss wird mit Abgabe der Nennung an den Veranstalter allen Beteiligten gegenüber wirksam, auch gegenüber unterhaltsberechtigten oder dritten Personen.",
+        "Der Haftungsverzicht gilt für Ansprüche aus jeglichem Rechtsgrund, sowohl für Schadenersatzansprüche aus vertraglicher wie auch außervertraglicher Haftung und auch aus unerlaubter Handlung."
+      ]
+    },
+    {
+      title: "8. Höhere Gewalt — Rückerstattung des Nenngeldes",
+      paragraphs: [
+        "Muss die Veranstaltung auf Grund höherer Gewalt, zum Beispiel Unwetter, behördliche Bestimmungen oder Fahrverbot, abgesagt werden, verzichtet der Teilnehmer auf die Rückerstattung des Nenngeldes."
+      ]
+    }
   ]
 };
 
@@ -354,20 +420,86 @@ const termsDocEn: LegalDoc = {
 
 const waiverDocEn: LegalDoc = {
   id: "haftverzicht",
-  title: "Waiver",
+  title: "Participation Agreement and Waiver",
   summaryLinkLabel: "Waiver",
   intro: [
-    "This waiver is provided in advance for online registration. The binding version is the waiver document to be signed on site during the event. The online registration only confirms that the participant has taken note of it.",
-    "The participant acknowledges that participation in the event takes place under personal responsibility and that the waiver made available on site must additionally be signed in binding form."
+    "By registering online, the participant confirms having read this agreement and waiver. The binding signed version is required in person at the event. The version presented on site is authoritative."
   ],
   sections: [
-    { title: "1. Participation at own risk", paragraphs: ["Participation in the event is at the participant's own risk. The participant bears civil and criminal responsibility for all damage caused by the participant or the vehicle used, unless an effective exclusion of liability applies."] },
-    { title: "2. Personal responsibility and vehicle condition", paragraphs: ["The participant confirms that all registration information is correct and complete, that the vehicle complies with the technical requirements and is used in proper technical and visual condition."] },
-    { title: "3. Waiver of claims", paragraphs: ["By registering online, the participant acknowledges that, in connection with the event, claims for damages of any kind are waived to the extent legally permissible, in particular against the organizer, involved associations, officials, helpers and other persons involved in organization and execution."] },
-    { title: "4. Scope towards further parties", paragraphs: ["The waiver also covers claims against other participants, their helpers, owners of other vehicles and the participant's own helpers."] },
-    { title: "5. Exceptions from the waiver", paragraphs: ["The waiver does not cover claims for injury to life, body or health, or claims based on intentional or grossly negligent conduct."] },
-    { title: "6. Additional event rules", paragraphs: ["The participant confirms awareness of the official event regulations, supplementary rules, governmental requirements and safety instructions. If the event is cancelled due to force majeure or official measures, refund claims may be excluded insofar as this is provided for in the event documents."] },
-    { title: "7. Binding signature on site", paragraphs: ["The binding version remains the waiver document to be signed on site during registration."] }
+    {
+      title: "1. Participation Agreement — Declarations regarding vehicle and entry",
+      paragraphs: ["The participant (driver, co-driver) confirms that:"],
+      bullets: [
+        "all information provided in the registration form is correct and complete",
+        "driver (and co-driver) are in good health to meet the requirements of the motorsport event",
+        "the vehicle complies with the technical regulations and the participant bears personal responsibility for technical safety",
+        "the vehicle may be inspected in all its parts by the technical commissioners",
+        "the vehicle will only be used in technically and visually proper condition"
+      ]
+    },
+    {
+      title: "2. Participation Agreement — Rules acceptance and obligations",
+      paragraphs: ["The participant (driver, co-driver) further declares with their signature that:"],
+      bullets: [
+        "they have taken note of the official event regulations",
+        "they accept these as binding and will comply with them",
+        "they hold a valid driving licence; the driving licence must be presented at registration",
+        "these rules, regulations and declarations become part of the contract with the organizer with the participant's agreement",
+        "the organizer is entitled to impose penalties for violations within their competence",
+        "they undertake not to take prohibited substances or use prohibited methods",
+        "they consent to the publication and distribution of their image in photos and videos taken during the event",
+        "they agree to the storage and processing of their data by MSC Oberlausitzer Dreiłändereck e.V.",
+        "the vehicle entered is their own property, or they will provide a corresponding waiver from the vehicle owner",
+        "so-called \"burnouts\" on the event site are prohibited; damage caused by non-compliance will be charged to the person responsible"
+      ]
+    },
+    {
+      title: "3. Notice on accident insurance",
+      paragraphs: [
+        "Participants who are not privately insured against accidents must take out the DMV daily accident insurance. This can be arranged at the registration office."
+      ]
+    },
+    {
+      title: "4. Admission requirements — driving licence and medical certificate",
+      paragraphs: [
+        "A valid driving licence is required to use the circuit. The driving licence must be presented at registration.",
+        "Participants aged 70 or over (key-date rule) must present a current medical certificate confirming fitness for participation in a motorsport event. The certificate remains with the race management office."
+      ]
+    },
+    {
+      title: "5. Waiver — Participation at own risk",
+      paragraphs: [
+        "The participant (driver, co-driver) takes part in the event at their own risk. They bear sole civil and criminal responsibility for all damage caused by themselves or the vehicle used, unless an exclusion of liability has been agreed.",
+        "The participant (driver, co-driver) declares upon submission of the entry form that they waive all claims for damages of any kind arising in connection with the event, specifically against:"
+      ],
+      bullets: [
+        "the DMV, the DMSB, the member organisations of the DMSB and their representatives and officials",
+        "the organizer and all persons involved in the organisation and execution of the event",
+        "the road authority, insofar as damage is caused by the condition of the roads used at the event",
+        "the vicarious agents and employees of all persons and bodies named above",
+        "the other participants, their helpers, the owners and vehicle owners of other vehicles",
+        "their own entrant, driver, co-driver and own helpers"
+      ]
+    },
+    {
+      title: "6. Exceptions from the waiver",
+      paragraphs: [
+        "The waiver does not apply to claims for damage arising from injury to life, body or health caused by an intentional or grossly negligent breach of duty — including by a legal representative or vicarious agent of the indemnified group of persons."
+      ]
+    },
+    {
+      title: "7. Effectiveness of the liability waiver",
+      paragraphs: [
+        "The liability waiver takes effect upon submission of the entry to the organizer, towards all parties involved, including persons entitled to maintenance or third parties.",
+        "The waiver covers claims arising from any legal basis, both from contractual and non-contractual liability as well as from tort."
+      ]
+    },
+    {
+      title: "8. Force majeure — refund of entry fee",
+      paragraphs: [
+        "If the event must be cancelled due to force majeure, such as severe weather, official restrictions or a driving ban, the participant waives any claim to a refund of the entry fee."
+      ]
+    }
   ]
 };
 

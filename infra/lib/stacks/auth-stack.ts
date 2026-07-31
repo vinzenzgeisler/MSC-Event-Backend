@@ -74,14 +74,36 @@ export class AuthStack extends Stack {
       enableTokenRevocation: true
     });
 
-    const supportReadScope = new cognito.ResourceServerScope({
-      scopeName: 'entries.read',
-      scopeDescription: 'Read current-event registration data for the MSC support workflow'
-    });
+    const supportScopeDefinitions: Array<{ name: string; description: string }> = [
+      { name: 'dashboard.read',        description: 'Read dashboard data' },
+      { name: 'entries.read',          description: 'Read registration entries' },
+      { name: 'entries.status.write',  description: 'Update entry acceptance status' },
+      { name: 'entries.checkin.write', description: 'Update entry check-in status' },
+      { name: 'entries.payment.write', description: 'Update entry payment status' },
+      { name: 'entries.notes.write',   description: 'Update entry notes' },
+      { name: 'entries.delete',        description: 'Soft-delete and restore entries' },
+      { name: 'communication.read',    description: 'Read communication data' },
+      { name: 'communication.write',   description: 'Send communications' },
+      { name: 'exports.read',          description: 'Read export data' },
+      { name: 'exports.write',         description: 'Trigger exports' },
+      { name: 'settings.read',         description: 'Read event settings' },
+      { name: 'settings.write',        description: 'Update event settings' },
+      { name: 'iam.read',              description: 'Read IAM accounts' },
+      { name: 'iam.write',             description: 'Manage IAM accounts' },
+      { name: 'inspection.read',       description: 'Read technical inspection data' },
+      { name: 'inspection.write',      description: 'Update technical inspection data' },
+    ];
+    const supportScopes = supportScopeDefinitions.map(
+      (def) =>
+        new cognito.ResourceServerScope({
+          scopeName: def.name,
+          scopeDescription: def.description
+        })
+    );
     const supportResourceServer = this.userPool.addResourceServer('SupportResourceServer', {
       identifier: 'msc-support',
       userPoolResourceServerName: `${props.config.prefix}-support-api`,
-      scopes: [supportReadScope]
+      scopes: supportScopes
     });
     this.supportUserPoolClient = new cognito.UserPoolClient(this, 'SupportUserPoolClient', {
       userPool: this.userPool,
@@ -91,7 +113,9 @@ export class AuthStack extends Stack {
         flows: {
           clientCredentials: true
         },
-        scopes: [cognito.OAuthScope.resourceServer(supportResourceServer, supportReadScope)]
+        scopes: supportScopes.map((s) =>
+          cognito.OAuthScope.resourceServer(supportResourceServer, s)
+        )
       },
       accessTokenValidity: Duration.minutes(15),
       enableTokenRevocation: true

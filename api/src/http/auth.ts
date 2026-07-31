@@ -67,7 +67,9 @@ export type AuthContext = {
   mfaAuthenticated: boolean;
 };
 
-export const MSC_SUPPORT_READ_SCOPE = 'msc-support/entries.read';
+export const MSC_SUPPORT_SCOPE_PREFIX = 'msc-support/';
+export const MSC_SUPPORT_READ_SCOPE = `${MSC_SUPPORT_SCOPE_PREFIX}entries.read`;
+export const MSC_SUPPORT_DELETE_SCOPE = `${MSC_SUPPORT_SCOPE_PREFIX}entries.delete`;
 
 const normalizeRole = (value: string): AllowedRole | null => {
   const normalized = value.trim().toLowerCase();
@@ -182,10 +184,16 @@ export const hasAnyGroup = (ctx: AuthContext, groups: AllowedRole[]): boolean =>
   groups.some((group) => ctx.groups.includes(group));
 
 export const hasPermission = (ctx: AuthContext, permission: AdminPermission): boolean =>
-  ctx.groups.some((group) => rolePermissions[group].includes(permission));
+  ctx.groups.some((group) => rolePermissions[group].includes(permission)) ||
+  ctx.scopes.includes(`${MSC_SUPPORT_SCOPE_PREFIX}${permission}`);
 
 export const hasAnyPermission = (ctx: AuthContext, permissions: AdminPermission[]): boolean =>
   permissions.some((permission) => hasPermission(ctx, permission));
 
+/** @deprecated Use hasPermission(ctx, 'entries.read') directly. */
 export const hasSupportRegistrationRead = (ctx: AuthContext): boolean =>
-  hasPermission(ctx, 'entries.read') || ctx.scopes.includes(MSC_SUPPORT_READ_SCOPE);
+  hasPermission(ctx, 'entries.read');
+
+/** @deprecated Use hasPermission(ctx, 'entries.delete') directly. */
+export const hasSupportEntryDelete = (ctx: AuthContext): boolean =>
+  hasPermission(ctx, 'entries.delete');

@@ -497,7 +497,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .innerJoin(person, eq(entry.driverPersonId, person.id))
     .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
-    .where(and(eq(entry.id, entryId), sql`${entry.deletedAt} is null`))
+    .where(eq(entry.id, entryId))
     .limit(1);
 
   const current = rows[0];

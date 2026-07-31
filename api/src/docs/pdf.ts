@@ -251,9 +251,9 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: 'A4',
-      margin: 24,
+      margins: { top: 36, bottom: 36, left: 40, right: 40 },
       info: {
-        Title: 'Haftverzicht vor Ort',
+        Title: 'Persönliche Haftverzichtserklärung',
         Author: 'MSC Oberlausitzer Dreiländereck e.V.',
         Subject: payload.payload.event.name
       }
@@ -263,91 +263,192 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-    const pageBottom = doc.page.height - doc.page.margins.bottom;
-    const leftX = doc.page.margins.left;
-    const topY = doc.page.margins.top;
-    const columnGap = 12;
-    const columnWidth = (contentWidth - columnGap) / 2;
-    const formatSigner =
-      payload.signer.type === 'guardian'
-        ? `${payload.signer.guardianName ?? '-'} (${payload.signer.guardianRelationship ?? '-'})`
-        : payload.signer.type === 'codriver'
-          ? 'Beifahrer selbst'
-          : 'Fahrer selbst';
-    const vehicleLines = payload.payload.entries.flatMap((entry, index) => [
-      `${index + 1}. ${entry.className}, Startnr. ${entry.startNumber ?? '-'}, Orga ${entry.orgaCode ?? '-'}`,
-      `   Beifahrer: ${entry.codriver ? `${entry.codriver.firstName} ${entry.codriver.lastName}` : '-'}`,
-      ...entry.vehicles.map((vehicle) => {
-        const role = vehicle.role === 'backup' ? 'Ersatz' : 'Fahrzeug';
-        return `   ${role}: ${vehicle.make} ${vehicle.model}, ${vehicle.year ?? '-'}, #${vehicle.startNumber ?? '-'}, Eigentümer: ${vehicle.ownerName ?? '-'}`;
-      })
-    ]);
-    const metaLines = [
-      `Event: ${payload.payload.event.name} (${payload.payload.event.startsAt} bis ${payload.payload.event.endsAt})`,
-      `Fahrer: ${payload.payload.driver.firstName} ${payload.payload.driver.lastName}, geb. ${payload.payload.driver.birthdate ?? '-'}`,
-      `Betroffene Person: ${payload.payload.signer?.label ?? 'Fahrer'} ${payload.payload.signer ? `${payload.payload.signer.firstName} ${payload.payload.signer.lastName}, geb. ${payload.payload.signer.birthdate ?? '-'}` : ''}`,
-      `Unterzeichner: ${formatSigner}`,
-      `Sprache/Version/Text-Hash: ${payload.payload.contract.locale} / ${payload.payload.contract.version} / ${payload.payload.contract.textHash}`,
-      `Vorprüfungen: Identität ${payload.precheckTimestamps.identityCheckedAt ?? '-'} | Anwesenheit ${payload.precheckTimestamps.signerPresentAt ?? '-'}`,
-      `Attest: ${payload.payload.requiresMedicalCertificate ? payload.precheckTimestamps.medicalCertificateCheckedAt ?? '-' : 'nicht erforderlich'} | Guardian: ${payload.payload.isMinor ? `${payload.precheckTimestamps.guardianPresentAt ?? '-'} / ${payload.precheckTimestamps.guardianAuthorityCheckedAt ?? '-'}` : 'nicht erforderlich'}`,
-      `Angezeigt: ${payload.displayedAt} | Gelesen: ${payload.waiverAcceptedAt} | Unterschrieben: ${payload.signedAt}`,
-      `Operator: ${payload.operatorDisplay ?? '-'} | Session: ${payload.sessionId}`,
-      ...vehicleLines
-    ];
+    // ── design constants ──────────────────────────────────────────────────
+    const LEFT = doc.page.margins.left;
+    const W = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const TOP = doc.page.margins.top;
+    const BLUE = '#163A70';
+    const YELLOW = '#E6B800';
+    const LABEL = '#334155';
+    const BODY = '#0F172A';
+    const DIM = '#475569';
+    const RULE = '#D8DEE9';
+    const LW = Math.floor(W * 0.37);
 
-    doc.font('Helvetica-Bold').fontSize(13).fillColor('#111827').text('Persönliche Haftverzichtserklärung - Vor-Ort-Unterschrift', leftX, topY, {
-      width: contentWidth
-    });
-    doc.moveDown(0.25);
-    doc.save().lineWidth(0.7).strokeColor('#CBD5E1').moveTo(leftX, doc.y).lineTo(leftX + contentWidth, doc.y).stroke().restore();
-    const metaTop = doc.y + 4;
-    doc.font('Helvetica').fontSize(6.8).fillColor('#111827').text(metaLines.join('\n'), leftX, metaTop, {
-      width: contentWidth,
-      lineGap: 0.6
-    });
-    const signatureTop = pageBottom - 72;
-    const textTop = Math.min(doc.y + 6, signatureTop - 150);
-    doc.font('Helvetica-Bold').fontSize(8.2).text(payload.payload.contract.title, leftX, textTop, { width: contentWidth });
-    const waiverTop = doc.y + 3;
-    const waiverHeight = Math.max(90, signatureTop - waiverTop - 8);
-    let waiverFontSize = 6.4;
-    for (let size = 6.4; size >= 4.4; size -= 0.2) {
-      doc.font('Helvetica').fontSize(size);
-      const height = doc.heightOfString(payload.payload.contract.fullText, {
-        width: contentWidth,
-        columns: 2,
-        columnGap,
-        lineGap: 0
-      });
-      if (height <= waiverHeight) {
-        waiverFontSize = size;
-        break;
+    // ── helpers ───────────────────────────────────────────────────────────
+    const rule = (color = RULE) => {
+      doc.save()
+        .lineWidth(0.8).strokeColor(color)
+        .moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y)
+        .stroke().restore();
+    };
+
+    const sectionHeader = (title: string) => {
+      doc.y += 4;
+      doc.font('Helvetica-Bold').fontSize(7.8).fillColor(BLUE)
+        .text(title.toUpperCase(), LEFT, doc.y, { width: W, characterSpacing: 0.7 });
+      const lineY = doc.y + 1;
+      doc.save().lineWidth(1).strokeColor(YELLOW)
+        .moveTo(LEFT, lineY).lineTo(LEFT + W, lineY).stroke().restore();
+      doc.y = lineY + 7;
+    };
+
+    const kv = (label: string, value: string) => {
+      const startY = doc.y;
+      doc.font('Helvetica-Bold').fontSize(8.3).fillColor(LABEL)
+        .text(label, LEFT, startY, { width: LW });
+      const afterLabel = doc.y;
+      doc.font('Helvetica').fontSize(8.8).fillColor(BODY)
+        .text(value || '—', LEFT + LW, startY, { width: W - LW, lineGap: 0.5 });
+      doc.y = Math.max(doc.y, afterLabel) + 2;
+    };
+
+    const checkRow = (label: string, ts: string | null | undefined, required: boolean) => {
+      const mark = ts ? '✓' : (required ? '—' : 'n/a');
+      const markColor = ts ? '#16A34A' : (required ? '#DC2626' : DIM);
+      const startY = doc.y;
+      doc.font('Helvetica').fontSize(8.5).fillColor(LABEL)
+        .text(label, LEFT + 8, startY, { width: LW - 8 });
+      const afterText = doc.y;
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(markColor)
+        .text(mark, LEFT + LW, startY, { width: 16 });
+      if (ts) {
+        doc.font('Helvetica').fontSize(7.8).fillColor(DIM)
+          .text(ts, LEFT + LW + 20, startY, { width: W - LW - 20, lineGap: 0.3 });
       }
-      waiverFontSize = size;
+      doc.y = Math.max(doc.y, afterText) + 2;
+    };
+
+    const signature = dataUrlToBuffer(payload.signatureDataUrl);
+
+    // ════════════════════════════════════════════════════════════════════════
+    // PAGE 1 — evidence summary
+    // ════════════════════════════════════════════════════════════════════════
+    doc.y = TOP;
+
+    // title bar
+    doc.font('Helvetica-Bold').fontSize(13).fillColor(BLUE)
+      .text('Persönliche Haftverzichtserklärung', LEFT, doc.y, { width: W });
+    doc.font('Helvetica').fontSize(8.5).fillColor(DIM)
+      .text('Vor-Ort-Unterzeichnung · MSC Oberlausitzer Dreiländereck e.V.', LEFT, doc.y, { width: W });
+    doc.y += 4;
+    doc.save().lineWidth(1.5).strokeColor(BLUE)
+      .moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 8;
+
+    // VERANSTALTUNG
+    sectionHeader('Veranstaltung');
+    kv('Veranstaltung', payload.payload.event.name);
+    kv('Datum', `${payload.payload.event.startsAt} – ${payload.payload.event.endsAt}`);
+    kv('Ort', payload.payload.event.location || '—');
+
+    // TEILNEHMER
+    sectionHeader('Teilnehmer');
+    const driver = payload.payload.driver;
+    kv('Fahrer', `${driver.firstName} ${driver.lastName}${driver.birthdate ? `, geb. ${driver.birthdate}` : ''}`);
+    const signer = payload.payload.signer;
+    if (signer) {
+      kv('Unterzeichner', `${signer.firstName} ${signer.lastName}${signer.birthdate ? `, geb. ${signer.birthdate}` : ''}`);
+      kv('Rolle', signer.label);
     }
-    doc.font('Helvetica').fontSize(waiverFontSize).text(payload.payload.contract.fullText, leftX, waiverTop, {
-      width: contentWidth,
-      height: waiverHeight,
-      columns: 2,
-      columnGap,
-      lineGap: 0,
-      ellipsis: false
+    if (payload.signer.type === 'guardian' && payload.signer.guardianName) {
+      kv('Erziehungsberechtigte/r', `${payload.signer.guardianName} (${payload.signer.guardianRelationship ?? '—'})`);
+    }
+    const flags: string[] = [];
+    if (payload.payload.isMinor) flags.push('Minderjährig');
+    if (payload.payload.requiresMedicalCertificate) flags.push('Attest ab 70 J. erforderlich');
+    if (flags.length > 0) kv('Hinweise', flags.join(' · '));
+
+    // FAHRZEUGE
+    sectionHeader('Fahrzeuge & Nennungen');
+    payload.payload.entries.forEach((entry, idx) => {
+      const entryVal = [
+        entry.className,
+        entry.startNumber ? `#${entry.startNumber}` : null,
+        entry.orgaCode ? `Orga: ${entry.orgaCode}` : null
+      ].filter(Boolean).join(' · ');
+      kv(`Nennung ${idx + 1}`, entryVal);
+      if (entry.codriver) {
+        kv('  Beifahrer', `${entry.codriver.firstName} ${entry.codriver.lastName}`);
+      }
+      entry.vehicles.forEach((v) => {
+        const vLabel = v.role === 'backup' ? '  Ersatzfahrzeug' : '  Fahrzeug';
+        const vVal = [v.make, v.model, v.year ? String(v.year) : null, v.startNumber ? `#${v.startNumber}` : null]
+          .filter(Boolean).join(' ');
+        kv(vLabel, vVal);
+      });
     });
 
-    doc.save().lineWidth(0.7).strokeColor('#CBD5E1').moveTo(leftX, signatureTop - 5).lineTo(leftX + contentWidth, signatureTop - 5).stroke().restore();
-    doc.font('Helvetica-Bold').fontSize(8).fillColor('#111827').text('Unterschrift', leftX, signatureTop, { width: columnWidth });
-    doc.font('Helvetica').fontSize(6.7).text(`Dokument-Hash und Audit-JSON werden privat in S3 gespeichert. Text-Hash: ${payload.payload.contract.textHash}`, leftX + columnWidth + columnGap, signatureTop, {
-      width: columnWidth
-    });
-    const signature = dataUrlToBuffer(payload.signatureDataUrl);
+    // VORPRÜFUNGEN
+    sectionHeader('Vorprüfungen (Operator)');
+    checkRow('Identität / Ausweis geprüft', payload.precheckTimestamps.identityCheckedAt, true);
+    checkRow('Person persönlich anwesend', payload.precheckTimestamps.signerPresentAt, true);
+    checkRow('Ärztliches Attest geprüft', payload.precheckTimestamps.medicalCertificateCheckedAt, payload.payload.requiresMedicalCertificate);
+    checkRow('Erziehungsberechtigte/r anwesend', payload.precheckTimestamps.guardianPresentAt, payload.payload.isMinor);
+    checkRow('Berechtigung Erziehungsberechtigte/r', payload.precheckTimestamps.guardianAuthorityCheckedAt, payload.payload.isMinor);
+
+    // UNTERZEICHNUNG
+    sectionHeader('Unterzeichnung');
+    kv('Haftverzicht angezeigt', payload.displayedAt);
+    kv('Gelesen und bestätigt', payload.waiverAcceptedAt);
+    kv('Unterschrift gesetzt', payload.signedAt);
+    kv('Operator', payload.operatorDisplay ?? '—');
+    kv('Session-ID', payload.sessionId);
+    kv('Version / Sprache', `${payload.payload.contract.version} / ${payload.payload.contract.locale}`);
+    doc.y += 8;
+
+    // Signature image
+    rule();
+    doc.y += 5;
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor(LABEL)
+      .text('Unterschrift:', LEFT, doc.y);
+    doc.y += 4;
     if (signature) {
-      doc.image(signature, leftX, signatureTop + 12, { fit: [230, 50] });
+      doc.image(signature, LEFT, doc.y, { fit: [260, 72], align: 'left' });
+      doc.y += 80;
     } else {
-      doc.font('Helvetica').fontSize(8).text('Unterschrift konnte im PDF nicht eingebettet werden.', leftX, signatureTop + 18, {
-        width: columnWidth
-      });
+      doc.font('Helvetica').fontSize(8).fillColor('#DC2626')
+        .text('Unterschriftsbild konnte nicht eingebettet werden.', LEFT, doc.y, { width: W });
+      doc.y += 14;
     }
+    rule();
+    doc.y += 4;
+
+    // footer page 1
+    doc.font('Helvetica').fontSize(6.5).fillColor(DIM)
+      .text(
+        `Text-Hash: ${payload.payload.contract.textHash}  ·  Session: ${payload.sessionId}`,
+        LEFT, doc.y, { width: W }
+      );
+
+    // ════════════════════════════════════════════════════════════════════════
+    // PAGE 2 — full waiver text
+    // ════════════════════════════════════════════════════════════════════════
+    doc.addPage();
+    doc.y = TOP;
+
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(BLUE)
+      .text(payload.payload.contract.title, LEFT, doc.y, { width: W });
+    doc.y += 2;
+    doc.save().lineWidth(1).strokeColor(YELLOW)
+      .moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 10;
+
+    doc.font('Helvetica').fontSize(9.4).fillColor(BODY)
+      .text(payload.payload.contract.fullText, LEFT, doc.y, { width: W, lineGap: 1.5 });
+    doc.y += 14;
+
+    rule(RULE);
+    doc.y += 4;
+    const signerDisplay = signer
+      ? `${signer.firstName} ${signer.lastName}`
+      : `${driver.firstName} ${driver.lastName}`;
+    doc.font('Helvetica').fontSize(7).fillColor(DIM)
+      .text(
+        `Diese Erklärung wurde am ${payload.signedAt} durch ${signerDisplay} digital unterzeichnet.  ` +
+        `Text-Hash: ${payload.payload.contract.textHash}  ·  Version: ${payload.payload.contract.version}  ·  Audit-JSON: privat in S3 gespeichert.`,
+        LEFT, doc.y, { width: W, lineGap: 0.5 }
+      );
 
     doc.end();
   });

@@ -96,6 +96,7 @@ export class ApiStack extends Stack {
       functionName: `${props.config.prefix}-api-handler`,
       memorySize: 256,
       timeout: cdk.Duration.seconds(10),
+      depsLockFilePath: path.join(__dirname, '../../../package-lock.json'),
       environment: {
         STAGE: props.config.stage,
         DB_SECRET_ARN: dbSecretArn,
@@ -122,7 +123,8 @@ export class ApiStack extends Stack {
       bundling: {
         target: 'node20',
         sourceMap: true,
-        minify: false
+        minify: false,
+        nodeModules: ['pdfkit']
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
       ...lambdaVpcConfig
@@ -331,7 +333,9 @@ export class ApiStack extends Stack {
                 'x-requested-with',
                 'x-amz-date',
                 'x-amz-security-token',
-                'x-api-key'
+                'x-api-key',
+                'x-signing-device-token',
+                'x-msc-admin-email'
               ],
               maxAge: cdk.Duration.seconds(600)
             }
@@ -414,6 +418,24 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/public/entries/{id}/verification-resend',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/signing/device/claim',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/signing/device/current-session',
+      methods: [apigwv2.HttpMethod.GET],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/signing/sessions/{id}/complete',
       methods: [apigwv2.HttpMethod.POST],
       integration
     });
@@ -641,6 +663,55 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/admin/entries/{id}/checkin/id-verify',
       methods: [apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/devices/pairing-code',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/devices',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/devices/{id}',
+      methods: [apigwv2.HttpMethod.DELETE],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/entries/{id}/requirements',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/sessions',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/sessions/{id}',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/signing/sessions/{id}/cancel',
+      methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
     });

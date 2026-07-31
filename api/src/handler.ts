@@ -160,6 +160,22 @@ import {
 } from './routes/adminDocs';
 import { setCheckinIdVerified, validateIdVerifyInput } from './routes/adminCheckin';
 import {
+  claimSigningDevice,
+  cancelSigningSession,
+  completeDeviceSigningSession,
+  createSigningPairingCode,
+  createSigningSession,
+  extractSigningDeviceToken,
+  getCurrentDeviceSigningSession,
+  getSigningSession,
+  getSigningRequirements,
+  listSigningDevices,
+  revokeSigningDevice,
+  validateCompleteSigningSessionInput,
+  validateCreateSigningSessionInput,
+  validatePairingClaimInput
+} from './routes/adminSigning';
+import {
   getPublicLegalCurrent,
   validatePublicLegalCurrentQuery
 } from './routes/publicLegal';
@@ -193,6 +209,12 @@ const getClientIp = (event: APIGatewayProxyEventV2): string => {
     }
   }
   return event.requestContext.http.sourceIp?.trim() || 'unknown';
+};
+
+const getAdminDisplayEmail = (event: APIGatewayProxyEventV2, fallback: string | null): string | null => {
+  const raw = event.headers['x-msc-admin-email'] ?? event.headers['X-MSC-Admin-Email'];
+  const email = typeof raw === 'string' ? raw.trim() : '';
+  return email.includes('@') && email.length <= 254 ? email : fallback;
 };
 
 const publicRateLimitedScopes = {
@@ -299,6 +321,80 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
       return errorJson(500, 'Get public legal metadata failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/signing/device/claim') {
+    try {
+      const payload = parseJsonBody(event);
+      const input = validatePairingClaimInput(payload);
+      const result = await claimSigningDevice(input);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'SIGNING_PAIRING_CODE_INVALID') {
+        return errorJson(404, 'Pairing code invalid or expired', undefined, 'SIGNING_PAIRING_CODE_INVALID');
+      }
+      return errorJson(500, 'Claim signing device failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/signing/device/current-session') {
+    try {
+      const deviceToken = extractSigningDeviceToken(event.headers);
+      if (!deviceToken) {
+        return errorJson(401, 'Signing device token required', undefined, 'SIGNING_DEVICE_TOKEN_REQUIRED');
+      }
+      const session = await getCurrentDeviceSigningSession(deviceToken);
+      return json(200, { ok: true, session });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'SIGNING_DEVICE_UNAUTHORIZED') {
+        return errorJson(401, 'Signing device unauthorized', undefined, 'SIGNING_DEVICE_UNAUTHORIZED');
+      }
+      return errorJson(500, 'Get signing device session failed');
+    }
+  }
+
+  const signingCompleteMatch = path.match(/^\/signing\/sessions\/([^/]+)\/complete$/);
+  if (method === 'POST' && signingCompleteMatch) {
+    try {
+      const deviceToken = extractSigningDeviceToken(event.headers);
+      if (!deviceToken) {
+        return errorJson(401, 'Signing device token required', undefined, 'SIGNING_DEVICE_TOKEN_REQUIRED');
+      }
+      const payload = parseJsonBody(event);
+      const input = validateCompleteSigningSessionInput(payload);
+      const session = await completeDeviceSigningSession(signingCompleteMatch[1], input, deviceToken);
+      if (!session) {
+        return errorJson(404, 'Signing session not found');
+      }
+      return json(200, { ok: true, session });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'SIGNING_DEVICE_UNAUTHORIZED') {
+        return errorJson(401, 'Signing device unauthorized', undefined, 'SIGNING_DEVICE_UNAUTHORIZED');
+      }
+      if (error instanceof Error && error.message === 'SIGNING_SESSION_NOT_ACTIVE') {
+        return errorJson(409, 'Signing session is not active', undefined, 'SIGNING_SESSION_NOT_ACTIVE');
+      }
+      if (error instanceof Error && error.message === 'SIGNING_SESSION_EXPIRED') {
+        return errorJson(409, 'Signing session expired', undefined, 'SIGNING_SESSION_EXPIRED');
+      }
+      if (error instanceof Error && (error.message === 'SIGNING_PRECHECK_INCOMPLETE' || error.message === 'SIGNING_GUARDIAN_REQUIRED')) {
+        return errorJson(400, error.message, undefined, error.message);
+      }
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Complete signing session failed', details);
     }
   }
 
@@ -915,6 +1011,136 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, ...result });
     } catch {
       return errorJson(500, 'Get entry confirmation defaults failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/signing/devices/pairing-code') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const result = await createSigningPairingCode(auth.sub);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      return errorJson(500, 'Create signing pairing code failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/signing/devices') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const devices = await listSigningDevices();
+      return json(200, { ok: true, devices });
+    } catch (error) {
+      return errorJson(500, 'List signing devices failed');
+    }
+  }
+
+  const adminSigningDeviceMatch = path.match(/^\/admin\/signing\/devices\/([^/]+)$/);
+  if (method === 'DELETE' && adminSigningDeviceMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const device = await revokeSigningDevice(adminSigningDeviceMatch[1], auth.sub);
+      if (!device) {
+        return errorJson(404, 'Signing device not found');
+      }
+      return json(200, { ok: true, device });
+    } catch (error) {
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Revoke signing device failed', details);
+    }
+  }
+
+  const adminSigningRequirementsMatch = path.match(/^\/admin\/signing\/entries\/([^/]+)\/requirements$/);
+  if (method === 'GET' && adminSigningRequirementsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const requirements = await getSigningRequirements(adminSigningRequirementsMatch[1]);
+      if (!requirements) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, requirements });
+    } catch (error) {
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Load signing requirements failed', details);
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/signing/sessions') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateCreateSigningSessionInput(payload);
+      const created = await createSigningSession(input, auth.sub, getAdminDisplayEmail(event, auth.email ?? auth.sub));
+      if (!created) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, session: created.session, signingCase: created.signingCase });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'SIGNING_DEVICE_NOT_CONNECTED') {
+        return errorJson(409, 'Signing device is not connected', undefined, 'SIGNING_DEVICE_NOT_CONNECTED');
+      }
+      if (error instanceof Error && error.message === 'SIGNING_SIGNER_NOT_FOUND') {
+        return errorJson(400, 'Signing signer not found', undefined, 'SIGNING_SIGNER_NOT_FOUND');
+      }
+      if (error instanceof Error && (error.message === 'SIGNING_PRECHECK_INCOMPLETE' || error.message === 'SIGNING_GUARDIAN_REQUIRED')) {
+        return errorJson(400, error.message, undefined, error.message);
+      }
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Create signing session failed', details);
+    }
+  }
+
+  const adminSigningSessionMatch = path.match(/^\/admin\/signing\/sessions\/([^/]+)$/);
+  if (method === 'GET' && adminSigningSessionMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const session = await getSigningSession(adminSigningSessionMatch[1]);
+      if (!session) {
+        return errorJson(404, 'Signing session not found');
+      }
+      return json(200, { ok: true, session });
+    } catch (error) {
+      return errorJson(500, 'Get signing session failed');
+    }
+  }
+
+  const adminSigningCancelMatch = path.match(/^\/admin\/signing\/sessions\/([^/]+)\/cancel$/);
+  if (method === 'POST' && adminSigningCancelMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const session = await cancelSigningSession(adminSigningCancelMatch[1], auth.sub);
+      if (!session) {
+        return errorJson(404, 'Active signing session not found');
+      }
+      return json(200, { ok: true, session });
+    } catch (error) {
+      return errorJson(500, 'Cancel signing session failed');
     }
   }
 
@@ -1887,8 +2113,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     try {
       const eventId = event.queryStringParameters?.eventId;
       const type = event.queryStringParameters?.type;
-      if (!eventId || (type !== 'waiver' && type !== 'tech_check' && type !== 'entry_confirmation')) {
-        return errorJson(400, 'eventId and type(waiver|tech_check|entry_confirmation) are required');
+      if (!eventId || (type !== 'waiver' && type !== 'signed_waiver' && type !== 'tech_check' && type !== 'entry_confirmation')) {
+        return errorJson(400, 'eventId and type(waiver|signed_waiver|tech_check|entry_confirmation) are required');
       }
       const result = await getOrCreateEntryDocumentDownload(
         {

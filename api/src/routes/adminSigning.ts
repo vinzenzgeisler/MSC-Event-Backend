@@ -6,6 +6,10 @@ import { getDb } from '../db/client';
 import {
   consentEvidence,
   document,
+  emailOutbox,
+  emailOutboxAttachment,
+  emailTemplate,
+  emailTemplateVersion,
   entry,
   event,
   eventClass,
@@ -957,7 +961,89 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     }
   });
 
+  // Queue system mail to the signer — best-effort, must not fail the session
+  try {
+    const signerEmail = payload.signer.email ?? payload.driver.email;
+    if (signerEmail && documentS3Key) {
+      await queueWaiverSignedMail(db, {
+        toEmail: signerEmail,
+        signerName: `${payload.signer.firstName ?? payload.driver.firstName} ${payload.signer.lastName ?? payload.driver.lastName}`,
+        eventId: payload.event.id,
+        eventName: payload.event.name,
+        eventDates: `${payload.event.startsAt} – ${payload.event.endsAt}`,
+        signedAt: input.signedAt,
+        documentS3Key,
+        sessionId: current.id
+      });
+    }
+  } catch {
+    // Mail failure must never abort the signing session
+  }
+
   return updated;
+};
+
+const queueWaiverSignedMail = async (
+  db: Awaited<ReturnType<typeof getDb>>,
+  input: {
+    toEmail: string;
+    signerName: string;
+    eventId: string;
+    eventName: string;
+    eventDates: string;
+    signedAt: string;
+    documentS3Key: string;
+    sessionId: string;
+  }
+): Promise<void> => {
+  // Resolve template
+  const templateRows = await db
+    .select({ templateId: emailTemplate.id, version: emailTemplateVersion.version })
+    .from(emailTemplate)
+    .innerJoin(emailTemplateVersion, eq(emailTemplateVersion.templateId, emailTemplate.id))
+    .where(
+      and(
+        eq(emailTemplate.templateKey, 'waiver_signed'),
+        eq(emailTemplate.isActive, true),
+        eq(emailTemplateVersion.status, 'published')
+      )
+    )
+    .orderBy(desc(emailTemplateVersion.version))
+    .limit(1);
+  if (templateRows.length === 0) {
+    return; // Template not yet migrated — skip silently
+  }
+  const { templateId, version } = templateRows[0];
+
+  const idempotencyKey = `waiver_signed:${input.sessionId}`;
+  const [outboxRow] = await db
+    .insert(emailOutbox)
+    .values({
+      eventId: input.eventId,
+      toEmail: input.toEmail,
+      subject: `Ihre persönliche Haftverzichtserklärung – ${input.eventName}`,
+      templateId,
+      templateVersion: version,
+      templateData: {
+        signerName: input.signerName,
+        eventName: input.eventName,
+        eventDates: input.eventDates,
+        signedAt: input.signedAt
+      },
+      idempotencyKey
+    })
+    .onConflictDoNothing({ target: emailOutbox.idempotencyKey })
+    .returning({ id: emailOutbox.id });
+
+  if (outboxRow?.id) {
+    await db.insert(emailOutboxAttachment).values({
+      outboxId: outboxRow.id,
+      fileName: 'Haftverzichtserklärung.pdf',
+      contentType: 'application/pdf',
+      s3Key: input.documentS3Key,
+      source: 'document'
+    });
+  }
 };
 
 export const validatePairingClaimInput = (payload: unknown) => pairingClaimSchema.parse(payload);

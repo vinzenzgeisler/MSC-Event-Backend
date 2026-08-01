@@ -780,6 +780,209 @@ export const signingSession = pgTable(
   })
 );
 
+export const marshalPerson = pgTable(
+  'marshal_person',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    helperNumber: integer('helper_number').notNull(),
+    firstName: text('first_name').notNull(),
+    lastName: text('last_name').notNull(),
+    street: text('street'),
+    zip: text('zip'),
+    city: text('city'),
+    birthdate: date('birthdate'),
+    phone: text('phone'),
+    email: text('email'),
+    shirtSize: text('shirt_size'),
+    clubMember: boolean('club_member').notNull().default(false),
+    licenseNumber: text('license_number'),
+    vehicleRegistration: text('vehicle_registration'),
+    activityAreas: jsonb('activity_areas').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    note: text('note'),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    helperNumberUnique: uniqueIndex('marshal_person_helper_number_unique').on(table.helperNumber),
+    nameIndex: index('marshal_person_name_idx').on(table.lastName, table.firstName)
+  })
+);
+
+export const marshalEventParticipation = pgTable(
+  'marshal_event_participation',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    personId: uuid('person_id').notNull().references(() => marshalPerson.id, { onDelete: 'cascade' }),
+    contactOwner: text('contact_owner'),
+    wish: text('wish'),
+    note: text('note'),
+    shirtSizeSnapshot: text('shirt_size_snapshot'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    eventPersonUnique: uniqueIndex('marshal_event_participation_event_person_unique').on(table.eventId, table.personId),
+    eventIndex: index('marshal_event_participation_event_idx').on(table.eventId)
+  })
+);
+
+export const marshalEventDay = pgTable(
+  'marshal_event_day',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    dayKey: text('day_key').notNull(),
+    label: text('label').notNull(),
+    eventDate: date('event_date').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    eventDayUnique: uniqueIndex('marshal_event_day_event_key_unique').on(table.eventId, table.dayKey),
+    dayKeyCheck: check('marshal_event_day_key_check', sql`${table.dayKey} in ('saturday', 'sunday')`)
+  })
+);
+
+export const marshalSection = pgTable(
+  'marshal_section',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    code: text('code').notNull(),
+    name: text('name').notNull(),
+    leaderCode: text('leader_code').notNull(),
+    sortOrder: integer('sort_order').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    eventCodeUnique: uniqueIndex('marshal_section_event_code_unique').on(table.eventId, table.code),
+    eventSortIndex: index('marshal_section_event_sort_idx').on(table.eventId, table.sortOrder)
+  })
+);
+
+export const marshalPost = pgTable(
+  'marshal_post',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    sectionId: uuid('section_id').notNull().references(() => marshalSection.id, { onDelete: 'cascade' }),
+    code: text('code').notNull(),
+    description: text('description'),
+    targetStaff: integer('target_staff').notNull().default(2),
+    isActive: boolean('is_active').notNull().default(true),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    eventCodeUnique: uniqueIndex('marshal_post_event_code_unique').on(table.eventId, table.code),
+    sectionSortIndex: index('marshal_post_section_sort_idx').on(table.sectionId, table.sortOrder),
+    targetStaffCheck: check('marshal_post_target_staff_check', sql`${table.targetStaff} > 0`)
+  })
+);
+
+export const marshalDayAssignment = pgTable(
+  'marshal_day_assignment',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    participationId: uuid('participation_id').notNull().references(() => marshalEventParticipation.id, { onDelete: 'cascade' }),
+    dayId: uuid('day_id').notNull().references(() => marshalEventDay.id, { onDelete: 'cascade' }),
+    commitmentStatus: text('commitment_status').notNull().default('not_asked'),
+    role: text('role'),
+    sectionId: uuid('section_id').references(() => marshalSection.id, { onDelete: 'set null' }),
+    postId: uuid('post_id').references(() => marshalPost.id, { onDelete: 'set null' }),
+    functionCode: text('function_code'),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    participationDayUnique: uniqueIndex('marshal_day_assignment_participation_day_unique').on(table.participationId, table.dayId),
+    daySectionIndex: index('marshal_day_assignment_day_section_idx').on(table.dayId, table.sectionId),
+    commitmentCheck: check('marshal_day_assignment_commitment_check', sql`${table.commitmentStatus} in ('not_asked', 'pending', 'accepted', 'declined', 'tentative')`),
+    roleCheck: check('marshal_day_assignment_role_check', sql`${table.role} is null or ${table.role} in ('marshal', 'section_leader', 'special')`)
+  })
+);
+
+export const marshalQualification = pgTable(
+  'marshal_qualification',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    personId: uuid('person_id').notNull().references(() => marshalPerson.id, { onDelete: 'cascade' }),
+    qualificationType: text('qualification_type').notNull().default('dmsb_license'),
+    number: text('number'),
+    validFrom: date('valid_from'),
+    validUntil: date('valid_until'),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    personTypeUnique: uniqueIndex('marshal_qualification_person_type_unique').on(table.personId, table.qualificationType)
+  })
+);
+
+export const marshalTrainingSession = pgTable(
+  'marshal_training_session',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    sessionType: text('session_type').notNull(),
+    title: text('title').notNull(),
+    sessionDate: date('session_date').notNull(),
+    location: text('location'),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    eventDateIndex: index('marshal_training_session_event_date_idx').on(table.eventId, table.sessionDate),
+    typeCheck: check('marshal_training_session_type_check', sql`${table.sessionType} in ('training', 'briefing')`)
+  })
+);
+
+export const marshalTrainingParticipant = pgTable(
+  'marshal_training_participant',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    sessionId: uuid('session_id').notNull().references(() => marshalTrainingSession.id, { onDelete: 'cascade' }),
+    personId: uuid('person_id').notNull().references(() => marshalPerson.id, { onDelete: 'cascade' }),
+    attendanceStatus: text('attendance_status').notNull().default('registered'),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    sessionPersonUnique: uniqueIndex('marshal_training_participant_session_person_unique').on(table.sessionId, table.personId),
+    attendanceCheck: check('marshal_training_participant_attendance_check', sql`${table.attendanceStatus} in ('registered', 'attended', 'absent', 'excused')`)
+  })
+);
+
+export const marshalImportRun = pgTable(
+  'marshal_import_run',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    workbookSha256: text('workbook_sha256').notNull(),
+    filename: text('filename').notNull(),
+    status: text('status').notNull(),
+    summary: jsonb('summary').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    conflicts: jsonb('conflicts').$type<Array<Record<string, unknown>>>().notNull().default(sql`'[]'::jsonb`),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true })
+  },
+  (table) => ({
+    completedWorkbookUnique: uniqueIndex('marshal_import_run_completed_workbook_unique')
+      .on(table.eventId, table.workbookSha256)
+      .where(sql`${table.status} = 'completed'`),
+    statusCheck: check('marshal_import_run_status_check', sql`${table.status} in ('preview', 'completed', 'failed')`)
+  })
+);
+
 export const exportJob = pgTable(
   'export_job',
   {

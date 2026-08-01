@@ -170,6 +170,7 @@ import {
   getSigningSession,
   getSigningRequirements,
   listSigningDevices,
+  getSignedWaiverDocument,
   listSigningSessions,
   revokeSigningDevice,
   validateCompleteSigningSessionInput,
@@ -1159,6 +1160,31 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, session });
     } catch (error) {
       return errorJson(500, 'Cancel signing session failed');
+    }
+  }
+
+  const signingWaiverEntryMatch = path.match(/^\/admin\/signing\/entries\/([^/]+)\/signed-waiver$/);
+  if (method === 'GET' && signingWaiverEntryMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const result = await getSignedWaiverDocument(signingWaiverEntryMatch[1]);
+      if (!result) {
+        return errorJson(404, 'Signed waiver not found');
+      }
+      return {
+        statusCode: 200,
+        body: result.buffer.toString('base64'),
+        isBase64Encoded: true,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `inline; filename="${result.filename}"`,
+        },
+      };
+    } catch {
+      return errorJson(500, 'Download signed waiver failed');
     }
   }
 

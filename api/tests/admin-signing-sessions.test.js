@@ -43,12 +43,27 @@ for (const name of [
   'validateCompleteSigningSessionInput',
   'extractSigningDeviceToken',
   'listSigningSessions',
+  'getSignedWaiverDocument',
 ]) {
   assert.equal(
     typeof adminSigning[name],
     'function',
     `${name} must still be exported as a function`
   );
+}
+
+// ── getSignedWaiverDocument export ──────────────────────────────────────────
+assert.equal(
+  typeof adminSigning.getSignedWaiverDocument,
+  'function',
+  'getSignedWaiverDocument must be exported as a function'
+);
+
+// ── getSignedWaiverDocument returns a Promise ────────────────────────────────
+{
+  const r = adminSigning.getSignedWaiverDocument('00000000-0000-0000-0000-000000000000');
+  assert.ok(r instanceof Promise, 'getSignedWaiverDocument must return a Promise');
+  r.catch(() => {});
 }
 
 console.log('admin-signing-sessions tests passed');

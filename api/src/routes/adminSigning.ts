@@ -19,7 +19,7 @@ import {
   vehicle
 } from '../db/schema';
 import { renderSignedWaiverEvidencePdf } from '../docs/pdf';
-import { uploadFile, uploadPdf } from '../docs/storage';
+import { getDocumentObjectBuffer, uploadFile, uploadPdf } from '../docs/storage';
 import { computeConsentTextHash, getLegalTexts, type LegalUiLocale } from './publicLegalTextsSource';
 
 const pairingClaimSchema = z.object({
@@ -1118,6 +1118,38 @@ export const listSigningSessions = async (opts: {
   });
 
   return { sessions, total: countRow?.count ?? 0 };
+};
+
+export const getSignedWaiverDocument = async (
+  entryId: string
+): Promise<{ buffer: Buffer; filename: string } | null> => {
+  const db = await getDb();
+  const [row] = await db
+    .select({
+      s3Key: document.s3Key,
+    })
+    .from(signingSession)
+    .innerJoin(document, eq(signingSession.documentId, document.id))
+    .where(
+      and(
+        eq(signingSession.sourceEntryId, entryId),
+        sql`${signingSession.status} = 'completed'`,
+        sql`${signingSession.documentId} IS NOT NULL`
+      )
+    )
+    .orderBy(desc(signingSession.signedAt))
+    .limit(1);
+
+  if (!row) {
+    return null;
+  }
+
+  const buffer = await getDocumentObjectBuffer(row.s3Key);
+  if (!buffer) {
+    return null;
+  }
+
+  return { buffer, filename: 'Haftverzicht.pdf' };
 };
 
 export const validatePairingClaimInput = (payload: unknown) => pairingClaimSchema.parse(payload);

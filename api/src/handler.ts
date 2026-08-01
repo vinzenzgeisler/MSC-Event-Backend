@@ -2,7 +2,14 @@ import { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-l
 import { ZodError } from 'zod';
 import { sql } from 'drizzle-orm';
 import { getDb } from './db/client';
-import { getAuthContext, hasAnyGroup, hasGroup, hasPermission, hasSupportRegistrationRead } from './http/auth';
+import {
+  getAuthContext,
+  hasAnyGroup,
+  hasGroup,
+  hasPermission,
+  hasPermissionOrAutomation,
+  hasSupportRegistrationRead
+} from './http/auth';
 import { buildPublicRateLimitKey, enforcePublicRateLimit } from './http/publicRateLimit';
 import { errorJson, json } from './http/response';
 import { parseJsonBody } from './http/parse';
@@ -881,7 +888,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/dashboard/summary') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'dashboard.read')) {
+    if (!hasPermissionOrAutomation(auth, 'dashboard.read')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -902,7 +909,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/dashboard/driver-locations') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'dashboard.read')) {
+    if (!hasPermissionOrAutomation(auth, 'dashboard.read')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -1111,7 +1118,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/events') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'settings.read')) {
+    if (!hasPermissionOrAutomation(auth, 'settings.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1149,7 +1156,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && eventPatchMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'settings.read')) {
+    if (!hasPermissionOrAutomation(auth, 'settings.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1164,7 +1171,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   if (method === 'GET' && path === '/admin/config/entry-confirmation-defaults') {
-    if (!adminAuth || !hasPermission(adminAuth, 'settings.read')) {
+    if (!adminAuth || !hasPermissionOrAutomation(adminAuth, 'settings.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1418,7 +1425,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const eventClassesMatch = path.match(/^\/admin\/events\/([^/]+)\/classes$/);
   if (method === 'GET' && eventClassesMatch) {
     const auth = getAuthContext(event);
-    if (!hasAnyGroup(auth, ['admin', 'editor', 'viewer'])) {
+    if (!hasPermissionOrAutomation(auth, 'settings.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1657,7 +1664,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/mail/templates') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'communication.read')) {
+    if (!hasPermissionOrAutomation(auth, 'communication.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -1723,7 +1730,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const mailTemplateVersionsMatch = path.match(/^\/admin\/mail\/templates\/([^/]+)\/versions$/);
   if (method === 'GET' && mailTemplateVersionsMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'communication.read')) {
+    if (!hasPermissionOrAutomation(auth, 'communication.read')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -1764,7 +1771,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const mailTemplatePlaceholdersMatch = path.match(/^\/admin\/mail\/templates\/([^/]+)\/placeholders$/);
   if (method === 'GET' && mailTemplatePlaceholdersMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'communication.read')) {
+    if (!hasPermissionOrAutomation(auth, 'communication.read')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -1904,7 +1911,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/mail/recipients/search') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'communication.write')) {
+    if (!hasPermissionOrAutomation(auth, 'communication.read')) {
       return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
     }
     try {
@@ -2285,7 +2292,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const docDownloadMatch = path.match(/^\/admin\/documents\/([^/]+)\/download$/);
   if (method === 'GET' && docDownloadMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'entries.read')) {
+    if (!hasPermissionOrAutomation(auth, 'entries.read')) {
       return errorJson(403, 'Forbidden');
     }
 
@@ -2367,7 +2374,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/entries/deleted') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'entries.delete')) {
+    if (!hasPermissionOrAutomation(auth, 'entries.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2387,7 +2394,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/checkin/entries') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'entries.checkin.write')) {
+    if (!hasPermissionOrAutomation(auth, 'entries.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2777,7 +2784,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const eventPricingMatch = path.match(/^\/admin\/events\/([^/]+)\/pricing-rules$/);
   if (method === 'GET' && eventPricingMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'settings.read')) {
+    if (!hasPermissionOrAutomation(auth, 'settings.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2857,7 +2864,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/invoices') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'entries.payment.write')) {
+    if (!hasPermissionOrAutomation(auth, 'entries.payment.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2906,7 +2913,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && invoicePaymentsMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'entries.payment.write')) {
+    if (!hasPermissionOrAutomation(auth, 'entries.payment.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2948,7 +2955,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/exports') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'exports.read')) {
+    if (!hasPermissionOrAutomation(auth, 'exports.read')) {
       return errorJson(403, 'Forbidden');
     }
     const eventId = event.queryStringParameters?.eventId;
@@ -2974,7 +2981,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const exportMatch = path.match(/^\/admin\/exports\/([^/]+)$/);
   if (method === 'GET' && exportMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'exports.read')) {
+    if (!hasPermissionOrAutomation(auth, 'exports.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -2991,7 +2998,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const exportDownloadMatch = path.match(/^\/admin\/exports\/([^/]+)\/download$/);
   if (method === 'GET' && exportDownloadMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'exports.read')) {
+    if (!hasPermissionOrAutomation(auth, 'exports.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -3010,7 +3017,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/mail/outbox') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'communication.read')) {
+    if (!hasPermissionOrAutomation(auth, 'communication.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -3050,7 +3057,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/iam/roles') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'iam.read')) {
+    if (!hasPermissionOrAutomation(auth, 'iam.read')) {
       return errorJson(403, 'Forbidden');
     }
     return json(200, { ok: true, ...listIamRoles() });
@@ -3058,7 +3065,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/iam/technical-inspector-assignments') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'iam.read')) {
+    if (!hasPermissionOrAutomation(auth, 'iam.read')) {
       return errorJson(403, 'Forbidden');
     }
     const assignments = await listInspectorAssignments(event.queryStringParameters?.eventId);
@@ -3225,7 +3232,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const inspectionQrMatch = path.match(/^\/admin\/entries\/([^/]+)\/inspection-qr$/);
   if (method === 'GET' && inspectionQrMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'entries.read')) {
+    if (!hasPermissionOrAutomation(auth, 'entries.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {
@@ -3273,7 +3280,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/admin/iam/users') {
     const auth = getAuthContext(event);
-    if (!hasPermission(auth, 'iam.read')) {
+    if (!hasPermissionOrAutomation(auth, 'iam.read')) {
       return errorJson(403, 'Forbidden');
     }
     try {

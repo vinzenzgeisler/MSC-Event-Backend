@@ -105,6 +105,26 @@ import {
   validateQrExportInput
 } from './routes/technicalInspection';
 import {
+  commitMarshalImport,
+  createMarshalPerson,
+  createMarshalPrintPdf,
+  createMarshalTraining,
+  getMarshalWorkspace,
+  listMarshalEvents,
+  patchMarshalPerson,
+  previewMarshalImport,
+  replaceMarshalConfig,
+  upsertMarshalAssignment,
+  upsertMarshalTrainingParticipant,
+  validateMarshalAssignmentInput,
+  validateMarshalConfigInput,
+  validateMarshalImportInput,
+  validateMarshalPersonInput,
+  validateMarshalPersonPatch,
+  validateMarshalTrainingInput,
+  validateMarshalTrainingParticipantInput
+} from './routes/adminMarshals';
+import {
   DuplicateRequestError,
   LifecycleMailError,
   MissingRequiredPlaceholdersError,
@@ -898,6 +918,145 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(404, 'Event not found');
       }
       return errorJson(500, 'Get dashboard driver locations failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/marshals/events') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.read')) return errorJson(403, 'Forbidden');
+    try {
+      return json(200, { ok: true, events: await listMarshalEvents() });
+    } catch {
+      return errorJson(500, 'List marshal events failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/marshals/workspace') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.read')) return errorJson(403, 'Forbidden');
+    const eventId = event.queryStringParameters?.eventId;
+    if (!eventId) return errorJson(400, 'eventId is required');
+    try {
+      const workspace = await getMarshalWorkspace(eventId, event.queryStringParameters?.search, event.queryStringParameters?.area);
+      return json(200, { ok: true, ...workspace });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') return errorJson(404, 'Event not found');
+      return errorJson(500, 'Load marshal workspace failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/marshals/persons') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      const created = await createMarshalPerson(validateMarshalPersonInput(parseJsonBody(event)), auth.sub);
+      return json(200, { ok: true, person: created });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'UNIQUE_VIOLATION') return errorJson(409, 'Helper number already exists');
+      return errorJson(500, 'Create marshal failed');
+    }
+  }
+
+  const marshalPersonMatch = path.match(/^\/admin\/marshals\/persons\/([^/]+)$/);
+  if (method === 'PATCH' && marshalPersonMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      const updated = await patchMarshalPerson(marshalPersonMatch[1], validateMarshalPersonPatch(parseJsonBody(event)), auth.sub);
+      return updated ? json(200, { ok: true, person: updated }) : errorJson(404, 'Marshal not found');
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      return errorJson(500, 'Update marshal failed');
+    }
+  }
+
+  const marshalAssignmentMatch = path.match(/^\/admin\/marshals\/assignments\/([^/]+)$/);
+  if (method === 'PUT' && marshalAssignmentMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      const updated = await upsertMarshalAssignment(marshalAssignmentMatch[1], validateMarshalAssignmentInput(parseJsonBody(event)), auth.sub);
+      return updated ? json(200, { ok: true, participation: updated }) : errorJson(404, 'Marshal not found');
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      return errorJson(500, 'Update marshal assignment failed');
+    }
+  }
+
+  if (method === 'PUT' && path === '/admin/marshals/config') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      await replaceMarshalConfig(validateMarshalConfigInput(parseJsonBody(event)), auth.sub);
+      return json(200, { ok: true });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'MARSHAL_SECTION_NOT_FOUND') return errorJson(400, 'Unknown section');
+      return errorJson(500, 'Update marshal configuration failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/marshals/trainings') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      const created = await createMarshalTraining(validateMarshalTrainingInput(parseJsonBody(event)), auth.sub);
+      return json(200, { ok: true, training: created });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      return errorJson(500, 'Create marshal training failed');
+    }
+  }
+
+  const marshalTrainingParticipantMatch = path.match(/^\/admin\/marshals\/trainings\/([^/]+)\/participants\/([^/]+)$/);
+  if (method === 'PUT' && marshalTrainingParticipantMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      const participant = await upsertMarshalTrainingParticipant(marshalTrainingParticipantMatch[1], marshalTrainingParticipantMatch[2], validateMarshalTrainingParticipantInput(parseJsonBody(event)), auth.sub);
+      return json(200, { ok: true, participant });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      return errorJson(500, 'Update training participant failed');
+    }
+  }
+
+  if (method === 'POST' && (path === '/admin/marshals/import/preview' || path === '/admin/marshals/import/commit')) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      const input = validateMarshalImportInput(parseJsonBody(event));
+      const result = path.endsWith('/preview') ? await previewMarshalImport(input) : await commitMarshalImport(input, auth.sub);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && ['MARSHAL_IMPORT_SIZE_INVALID', 'MARSHAL_IMPORT_CHECKSUM_MISMATCH', 'MARSHAL_IMPORT_CONFIRMATION_REQUIRED', 'MARSHAL_IMPORT_EVENT_YEAR_MISMATCH'].includes(error.message)) return errorJson(400, error.message, undefined, error.message);
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') return errorJson(404, 'Event not found');
+      return errorJson(500, 'Marshal import failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/marshals/print') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.export')) return errorJson(403, 'Forbidden');
+    const eventId = event.queryStringParameters?.eventId;
+    const type = event.queryStringParameters?.type;
+    if (!eventId || !type || !['attendance', 'section', 'training'].includes(type)) return errorJson(400, 'eventId and valid type are required');
+    try {
+      const result = await createMarshalPrintPdf({ eventId, type: type as 'attendance' | 'section' | 'training', dayId: event.queryStringParameters?.dayId, sectionId: event.queryStringParameters?.sectionId, trainingId: event.queryStringParameters?.trainingId });
+      if (!result) return errorJson(404, 'Print list not found');
+      return { statusCode: 200, headers: { 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="${result.filename}"`, 'cache-control': 'no-store' }, isBase64Encoded: true, body: result.buffer.toString('base64') };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'MARSHAL_DAY_REQUIRED') return errorJson(400, 'dayId is required');
+      return errorJson(500, 'Create marshal print list failed');
     }
   }
 

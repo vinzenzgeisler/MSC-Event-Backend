@@ -937,6 +937,83 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/marshals/workspace',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/events',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/persons',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/persons/{id}',
+      methods: [apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/assignments/{id}',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/config',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/trainings',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/trainings/{sessionId}/participants/{personId}',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/import/preview',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/import/commit',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/print',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/iam/users/{id}/roles',
       methods: [apigwv2.HttpMethod.PATCH],
       integration,

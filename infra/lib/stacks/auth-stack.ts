@@ -127,7 +127,7 @@ export class AuthStack extends Stack {
       }
     });
 
-    ['admin', 'editor', 'viewer', 'technical_inspector'].forEach((groupName) => {
+    ['admin', 'editor', 'viewer', 'technical_inspector', 'marshal_manager'].forEach((groupName) => {
       new cognito.CfnUserPoolGroup(this, `${groupName}Group`, {
         groupName,
         userPoolId: this.userPool.userPoolId

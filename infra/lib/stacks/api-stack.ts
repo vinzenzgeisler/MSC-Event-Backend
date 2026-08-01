@@ -88,6 +88,7 @@ export class ApiStack extends Stack {
           securityGroups: [props.dataStack.apiLambdaSecurityGroup!]
         }
       : {};
+    const depsLockFilePath = path.join(__dirname, '../../../package-lock.json');
 
     const apiHandler = new NodejsFunction(this, 'ApiHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -96,7 +97,7 @@ export class ApiStack extends Stack {
       functionName: `${props.config.prefix}-api-handler`,
       memorySize: 256,
       timeout: cdk.Duration.seconds(10),
-      depsLockFilePath: path.join(__dirname, '../../../package-lock.json'),
+      depsLockFilePath,
       environment: {
         STAGE: props.config.stage,
         DB_SECRET_ARN: dbSecretArn,
@@ -137,6 +138,7 @@ export class ApiStack extends Stack {
       functionName: `${props.config.prefix}-email-worker`,
       memorySize: 256,
       timeout: cdk.Duration.seconds(30),
+      depsLockFilePath,
       environment: {
         STAGE: props.config.stage,
         DB_SECRET_ARN: dbSecretArn,
@@ -177,6 +179,7 @@ export class ApiStack extends Stack {
       functionName: `${props.config.prefix}-privacy-retention-worker`,
       memorySize: 256,
       timeout: cdk.Duration.seconds(60),
+      depsLockFilePath,
       environment: {
         STAGE: props.config.stage,
         DB_SECRET_ARN: dbSecretArn,

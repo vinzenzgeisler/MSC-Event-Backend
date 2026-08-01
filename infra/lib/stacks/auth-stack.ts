@@ -11,6 +11,7 @@ export class AuthStack extends Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
   public readonly supportUserPoolClient: cognito.UserPoolClient;
+  public readonly automationUserPoolClient: cognito.UserPoolClient;
   public readonly userPoolIssuerUrl: string;
 
   constructor(scope: Construct, id: string, props: AuthStackProps) {
@@ -138,7 +139,10 @@ export class AuthStack extends Stack {
       ['iam.read', 'Read roles and users'],
       ['iam.write', 'Change users, roles and account status'],
       ['inspection.read', 'Read technical inspection data'],
-      ['inspection.write', 'Change technical inspection data']
+      ['inspection.write', 'Change technical inspection data'],
+      ['marshals.read', 'Read marshal management data'],
+      ['marshals.write', 'Change marshal management data'],
+      ['marshals.export', 'Create marshal exports']
     ] as const;
     const automationScopes = automationScopeDefinitions.map(
       ([scopeName, scopeDescription]) => new cognito.ResourceServerScope({
@@ -154,28 +158,20 @@ export class AuthStack extends Stack {
         scopes: automationScopes
       }
     );
-    this.supportUserPoolClient = new cognito.UserPoolClient(
+    this.automationUserPoolClient = new cognito.UserPoolClient(
       this,
-      'SupportUserPoolClient',
+      'AutomationUserPoolClient',
       {
         userPool: this.userPool,
-        userPoolClientName: `${props.config.prefix}-support-machine-client`,
+        userPoolClientName: `${props.config.prefix}-automation-machine-client`,
         generateSecret: true,
         oAuth: {
           flows: {
             clientCredentials: true
           },
-          scopes: [
-            cognito.OAuthScope.resourceServer(
-              supportResourceServer,
-              supportReadScope
-            ),
-            ...automationScopes.map((scope) =>
-              cognito.OAuthScope.resourceServer(
-                automationResourceServer,
-                scope
-              ))
-          ]
+          scopes: automationScopes.map((scope) =>
+            cognito.OAuthScope.resourceServer(automationResourceServer, scope)
+          )
         },
         accessTokenValidity: Duration.minutes(5),
         enableTokenRevocation: true
@@ -211,6 +207,11 @@ export class AuthStack extends Stack {
     new CfnOutput(this, 'SupportUserPoolClientId', {
       value: this.supportUserPoolClient.userPoolClientId,
       exportName: `${props.config.prefix}-support-user-pool-client-id`
+    });
+
+    new CfnOutput(this, 'AutomationUserPoolClientId', {
+      value: this.automationUserPoolClient.userPoolClientId,
+      exportName: `${props.config.prefix}-automation-user-pool-client-id`
     });
 
     new CfnOutput(this, 'UserPoolIssuerUrl', {

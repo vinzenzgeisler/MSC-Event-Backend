@@ -78,6 +78,7 @@ export class AuthStack extends Stack {
     const supportScopeDefinitions: Array<{ name: string; description: string }> = [
       { name: 'dashboard.read',        description: 'Read dashboard data' },
       { name: 'entries.read',          description: 'Read registration entries' },
+      { name: 'entries.payment.read',  description: 'Read invoices and payment history' },
       { name: 'entries.status.write',  description: 'Update entry acceptance status' },
       { name: 'entries.checkin.write', description: 'Update entry check-in status' },
       { name: 'entries.payment.write', description: 'Update entry payment status' },

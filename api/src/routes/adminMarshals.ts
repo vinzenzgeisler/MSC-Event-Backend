@@ -435,7 +435,6 @@ export const previewMarshalImport = async (input: z.infer<typeof importInputSche
   const db = await getDb();
   const [selectedEvent] = await db.select({ startsAt: event.startsAt }).from(event).where(eq(event.id, input.eventId)).limit(1);
   if (!selectedEvent) throw new Error('EVENT_NOT_FOUND');
-  if (String(selectedEvent.startsAt).slice(0, 4) !== '2025') throw new Error('MARSHAL_IMPORT_EVENT_YEAR_MISMATCH');
   const existing = await db.select({ helperNumber: marshalPerson.helperNumber }).from(marshalPerson);
   const existingNumbers = new Set(existing.map((row) => row.helperNumber));
   return {
@@ -462,7 +461,6 @@ export const commitMarshalImport = async (input: z.infer<typeof importInputSchem
   if (alreadyImported) return { importRun: alreadyImported, alreadyImported: true };
   const [selectedEvent] = await db.select({ startsAt: event.startsAt }).from(event).where(eq(event.id, input.eventId)).limit(1);
   if (!selectedEvent) throw new Error('EVENT_NOT_FOUND');
-  if (String(selectedEvent.startsAt).slice(0, 4) !== '2025') throw new Error('MARSHAL_IMPORT_EVENT_YEAR_MISMATCH');
   await ensureMarshalEventStructure(input.eventId);
   const parsed = await parseWorkbook(buffer);
   const personValues = parsed.people.map(({ source: _source, ...values }) => values);

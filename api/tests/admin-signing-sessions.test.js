@@ -1,5 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const adminSigning = require('../dist/routes/adminSigning');
 
@@ -64,6 +66,28 @@ assert.equal(
   const r = adminSigning.getSignedWaiverDocument('00000000-0000-0000-0000-000000000000');
   assert.ok(r instanceof Promise, 'getSignedWaiverDocument must return a Promise');
   r.catch(() => {});
+}
+
+// ── API Gateway route contract ──────────────────────────────────────────────
+// A handler branch alone is not reachable through the HTTP API. Keep the CDK
+// routes for the session overview and signed PDF download covered as part of
+// the same integration contract.
+{
+  const apiStackSource = fs.readFileSync(
+    path.resolve(__dirname, '../../infra/lib/stacks/api-stack.ts'),
+    'utf8'
+  );
+
+  assert.match(
+    apiStackSource,
+    /path: '\/admin\/signing\/sessions',[\s\S]*?methods: \[apigwv2\.HttpMethod\.GET, apigwv2\.HttpMethod\.POST\]/,
+    'API Gateway must expose GET and POST /admin/signing/sessions'
+  );
+  assert.match(
+    apiStackSource,
+    /path: '\/admin\/signing\/entries\/\{id\}\/signed-waiver',[\s\S]*?methods: \[apigwv2\.HttpMethod\.GET\]/,
+    'API Gateway must expose GET /admin/signing/entries/{id}/signed-waiver'
+  );
 }
 
 console.log('admin-signing-sessions tests passed');

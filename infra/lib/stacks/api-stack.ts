@@ -699,8 +699,15 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/signing/entries/{id}/signed-waiver',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/signing/sessions',
-      methods: [apigwv2.HttpMethod.POST],
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
     });

@@ -1046,6 +1046,80 @@ const queueWaiverSignedMail = async (
   }
 };
 
+export const listSigningSessions = async (opts: {
+  limit?: number;
+  offset?: number;
+  status?: string;
+  eventId?: string;
+}) => {
+  const db = await getDb();
+  const limit = Math.min(opts.limit ?? 50, 100);
+  const offset = opts.offset ?? 0;
+
+  const conditions = [];
+  if (opts.status) {
+    conditions.push(sql`${signingSession.status} = ${opts.status}`);
+  }
+  if (opts.eventId) {
+    conditions.push(eq(signingSession.eventId, opts.eventId));
+  }
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const rows = await db
+    .select({
+      id: signingSession.id,
+      status: signingSession.status,
+      eventId: signingSession.eventId,
+      sourceEntryId: signingSession.sourceEntryId,
+      driverPersonId: signingSession.driverPersonId,
+      deviceSessionId: signingSession.deviceSessionId,
+      deviceName: signingDeviceSession.deviceName,
+      operatorDisplay: signingSession.operatorDisplay,
+      signedAt: signingSession.signedAt,
+      createdAt: signingSession.createdAt,
+      documentId: signingSession.documentId,
+      sessionPayload: signingSession.sessionPayload,
+      signerPayload: signingSession.signerPayload,
+      errorLast: signingSession.errorLast,
+    })
+    .from(signingSession)
+    .leftJoin(signingDeviceSession, eq(signingSession.deviceSessionId, signingDeviceSession.id))
+    .where(where)
+    .orderBy(desc(signingSession.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  const [countRow] = await db
+    .select({ count: sql<number>`cast(count(*) as int)` })
+    .from(signingSession)
+    .where(where);
+
+  const sessions = rows.map((row) => {
+    const payload = row.sessionPayload as SigningCasePayload;
+    const signer = payload?.signer;
+    return {
+      id: row.id,
+      status: row.status,
+      eventId: row.eventId,
+      eventName: payload?.event?.name ?? null,
+      sourceEntryId: row.sourceEntryId,
+      driverPersonId: row.driverPersonId,
+      deviceSessionId: row.deviceSessionId,
+      deviceName: row.deviceName ?? null,
+      operatorDisplay: row.operatorDisplay ?? null,
+      signerName: signer ? `${signer.firstName} ${signer.lastName}`.trim() : null,
+      signerRole: signer?.role ?? null,
+      signedAt: row.signedAt?.toISOString() ?? null,
+      createdAt: row.createdAt.toISOString(),
+      documentId: row.documentId ?? null,
+      errorLast: row.errorLast ?? null,
+    };
+  });
+
+  return { sessions, total: countRow?.count ?? 0 };
+};
+
 export const validatePairingClaimInput = (payload: unknown) => pairingClaimSchema.parse(payload);
 export const validateCreateSigningSessionInput = (payload: unknown) => createSigningSessionSchema.parse(payload);
 export const validateCompleteSigningSessionInput = (payload: unknown) => completeSigningSessionSchema.parse(payload);

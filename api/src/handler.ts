@@ -170,6 +170,7 @@ import {
   getSigningSession,
   getSigningRequirements,
   listSigningDevices,
+  listSigningSessions,
   revokeSigningDevice,
   validateCompleteSigningSessionInput,
   validateCreateSigningSessionInput,
@@ -1107,6 +1108,23 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
       return errorJson(500, 'Create signing session failed', details);
+    }
+  }
+
+  if (method === 'GET' && path === '/admin/signing/sessions') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const limit = parseInt((event.queryStringParameters?.limit as string) ?? '50', 10);
+      const offset = parseInt((event.queryStringParameters?.offset as string) ?? '0', 10);
+      const status = (event.queryStringParameters?.status as string) || undefined;
+      const eventId = (event.queryStringParameters?.eventId as string) || undefined;
+      const result = await listSigningSessions({ limit, offset, status, eventId });
+      return json(200, result);
+    } catch {
+      return errorJson(500, 'List signing sessions failed');
     }
   }
 

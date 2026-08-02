@@ -1523,6 +1523,7 @@ export const deleteEntry = async (
         eventId: entry.eventId,
         driverPersonId: entry.driverPersonId,
         registrationGroupId: entry.registrationGroupId,
+        driverEmailNorm: entry.driverEmailNorm,
         classId: entry.classId,
         startNumberNorm: entry.startNumberNorm,
         registrationStatus: entry.registrationStatus,
@@ -1609,6 +1610,34 @@ export const deleteEntry = async (
             updatedAt: new Date()
           })
           .where(eq(registrationGroup.id, existing.registrationGroupId));
+      }
+    } else if (existing.driverEmailNorm) {
+      // Fallback: entry has no registrationGroupId (e.g. legacy or admin-created entry).
+      // Check for orphaned groups matching event + email and soft-delete them if they
+      // have no remaining active entries.
+      const orphanedGroupRows = await tx
+        .select({ id: registrationGroup.id })
+        .from(registrationGroup)
+        .where(
+          and(
+            eq(registrationGroup.eventId, existing.eventId),
+            eq(registrationGroup.driverEmailNorm, existing.driverEmailNorm),
+            sql`${registrationGroup.deletedAt} is null`
+          )
+        )
+        .limit(1);
+      if (orphanedGroupRows[0]) {
+        const orphanedGroupActiveCountRows = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(entry)
+          .where(and(eq(entry.registrationGroupId, orphanedGroupRows[0].id), sql`${entry.deletedAt} is null`))
+          .limit(1);
+        if (Number(orphanedGroupActiveCountRows[0]?.count ?? 0) === 0) {
+          await tx
+            .update(registrationGroup)
+            .set({ deletedAt: new Date(), updatedAt: new Date() })
+            .where(eq(registrationGroup.id, orphanedGroupRows[0].id));
+        }
       }
     }
 

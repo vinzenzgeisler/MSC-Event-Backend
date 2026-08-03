@@ -25,7 +25,7 @@ export const resolveProdConfig = (): StageConfig => {
     cognitoRefreshTokenDays: 90,
     sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
     publicVerifyBaseUrl: `${prodPublicBaseUrl}/anmeldung/verify`,
-    assetsCorsAllowedOrigins: [prodPublicBaseUrl],
+    assetsCorsAllowedOrigins: [prodPublicBaseUrl, 'https://signing.event.msc-oberlausitz.de'],
     devCleanupEnabled: false,
     env: {
       account: process.env.CDK_DEFAULT_ACCOUNT,

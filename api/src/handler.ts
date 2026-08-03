@@ -58,12 +58,14 @@ import {
   patchEntryClass,
   patchEntryTechStatus,
   patchEntryNotes,
+  patchEntryDriverEmail,
   patchEntryPaymentStatus,
   patchEntryPaymentAmounts,
   validateEntryStatusPatchInput,
   validateEntryClassPatchInput,
   validateEntryTechStatusPatchInput,
   validateEntryNotesPatchInput,
+  validateDriverEmailPatchInput,
   validateEntryPaymentStatusPatchInput,
   validateEntryPaymentAmountsPatchInput,
   validateEntryDeleteInput,
@@ -2687,6 +2689,40 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Invalid JSON body');
       }
       return errorJson(500, 'Entry notes update failed');
+    }
+  }
+
+  const entryDriverEmailMatch = path.match(/^\/admin\/entries\/([^/]+)\/driver-email$/);
+  if (method === 'PATCH' && entryDriverEmailMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.status.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateDriverEmailPatchInput(payload);
+      const result = await patchEntryDriverEmail(entryDriverEmailMatch[1], input.email, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EMAIL_IN_USE') {
+        return errorJson(
+          409,
+          'Email is in use by another active registration',
+          undefined,
+          'EMAIL_IN_USE'
+        );
+      }
+      return errorJson(500, 'Driver email update failed');
     }
   }
 

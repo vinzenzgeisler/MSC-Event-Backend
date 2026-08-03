@@ -877,6 +877,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/entries/{id}/driver-email',
+      methods: [apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/entries/{id}/notes',
       methods: [apigwv2.HttpMethod.PATCH],
       integration,

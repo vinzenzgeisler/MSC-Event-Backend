@@ -95,11 +95,13 @@ void (async () => {
       oldEmail: 'old@example.org',
       newEmail: 'new@example.org'
     });
-    assert.equal(unusedDb.updates.length, 2);
+    assert.equal(unusedDb.updates.length, 3);
     assert.equal(unusedDb.updates[0].table, schema.person);
     assert.equal(unusedDb.updates[0].values.email, 'new@example.org');
-    assert.equal(unusedDb.updates[1].table, schema.registrationGroup);
+    assert.equal(unusedDb.updates[1].table, schema.entry);
     assert.equal(unusedDb.updates[1].values.driverEmailNorm, 'new@example.org');
+    assert.equal(unusedDb.updates[2].table, schema.registrationGroup);
+    assert.equal(unusedDb.updates[2].values.driverEmailNorm, 'new@example.org');
     assert.deepEqual(unusedDb.deletes, [schema.registrationGroupEmailVerification]);
     assert.equal(auditCalls[0].action, 'driver_email_updated');
     assert.deepEqual(auditCalls[0].payload, {
@@ -119,10 +121,15 @@ void (async () => {
   await runWithDb(orphanDb, async () => {
     const result = await patchEntryDriverEmail('entry-1', 'reused@example.org', 'admin-1');
     assert.equal(result.newEmail, 'reused@example.org');
-    assert.equal(orphanDb.updates.length, 3);
+    assert.equal(orphanDb.updates.length, 4);
     assert.equal(orphanDb.updates[0].table, schema.person);
     assert.equal(orphanDb.updates[0].values.email, null);
+    assert.equal(orphanDb.updates[1].table, schema.person);
     assert.equal(orphanDb.updates[1].values.email, 'reused@example.org');
+    assert.equal(orphanDb.updates[2].table, schema.entry);
+    assert.equal(orphanDb.updates[2].values.driverEmailNorm, 'reused@example.org');
+    assert.equal(orphanDb.updates[3].table, schema.registrationGroup);
+    assert.equal(orphanDb.updates[3].values.driverEmailNorm, 'reused@example.org');
   });
 
   // An address belonging to a person with an active entry maps to EMAIL_IN_USE (HTTP 409).

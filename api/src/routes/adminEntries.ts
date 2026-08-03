@@ -1274,6 +1274,10 @@ export const patchEntryDriverEmail = async (
         .set({ email: newEmail, updatedAt: now })
         .where(eq(person.id, group.driverPersonId));
       await tx
+        .update(entry)
+        .set({ driverEmailNorm: normalizedEmail, updatedAt: now })
+        .where(eq(entry.id, entryId));
+      await tx
         .update(registrationGroup)
         .set({ driverEmailNorm: normalizedEmail, updatedAt: now })
         .where(eq(registrationGroup.id, group.id));

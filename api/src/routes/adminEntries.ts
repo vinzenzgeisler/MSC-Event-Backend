@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, inArray, or, sql, SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, ne, or, sql, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
@@ -14,6 +14,7 @@ import {
   invoicePayment,
   person,
   registrationGroup,
+  registrationGroupEmailVerification,
   vehicle
 } from '../db/schema';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
@@ -85,6 +86,10 @@ const entryNotesPatchSchema = z
     }
   );
 
+const driverEmailPatchSchema = z.object({
+  email: z.string().email().max(320).toLowerCase()
+});
+
 const entryPaymentStatusPatchSchema = z.object({
   paymentStatus: z.literal('paid'),
   paidAt: z.string().datetime().optional(),
@@ -121,6 +126,7 @@ type EntryStatusPatch = z.infer<typeof entryStatusPatchSchema>;
 type TechStatusPatch = z.infer<typeof techStatusPatchSchema>;
 type EntryClassPatch = z.infer<typeof entryClassPatchSchema>;
 type EntryNotesPatch = z.infer<typeof entryNotesPatchSchema>;
+type DriverEmailPatch = z.infer<typeof driverEmailPatchSchema>;
 type EntryPaymentStatusPatch = z.infer<typeof entryPaymentStatusPatchSchema>;
 type EntryPaymentAmountsPatch = z.infer<typeof entryPaymentAmountsPatchSchema>;
 type EntryDeleteInput = z.infer<typeof entryDeleteSchema>;
@@ -1182,6 +1188,126 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
   return updated ?? null;
 };
 
+export const patchEntryDriverEmail = async (
+  entryId: string,
+  newEmail: string,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const normalizedEmail = newEmail.toLowerCase();
+
+  try {
+    return await db.transaction(async (tx) => {
+      const entryRows = await tx
+        .select({
+          id: entry.id,
+          eventId: entry.eventId,
+          registrationGroupId: entry.registrationGroupId
+        })
+        .from(entry)
+        .where(and(eq(entry.id, entryId), sql`${entry.deletedAt} is null`))
+        .limit(1);
+      const existingEntry = entryRows[0];
+      if (!existingEntry?.registrationGroupId) {
+        return null;
+      }
+
+      const groupRows = await tx
+        .select({
+          id: registrationGroup.id,
+          driverPersonId: registrationGroup.driverPersonId
+        })
+        .from(registrationGroup)
+        .where(eq(registrationGroup.id, existingEntry.registrationGroupId))
+        .limit(1);
+      const group = groupRows[0];
+      if (!group) {
+        return null;
+      }
+
+      const currentPersonRows = await tx
+        .select({ email: person.email })
+        .from(person)
+        .where(eq(person.id, group.driverPersonId))
+        .limit(1);
+      const currentPerson = currentPersonRows[0];
+      if (!currentPerson) {
+        return null;
+      }
+
+      const blockingPersonRows = await tx
+        .select({ id: person.id })
+        .from(person)
+        .where(
+          and(
+            sql`lower(${person.email}) = ${normalizedEmail}`,
+            ne(person.id, group.driverPersonId)
+          )
+        )
+        .limit(1);
+      const blockingPerson = blockingPersonRows[0];
+
+      if (blockingPerson) {
+        const activeEntryRows = await tx
+          .select({ id: entry.id })
+          .from(entry)
+          .where(
+            and(
+              eq(entry.driverPersonId, blockingPerson.id),
+              sql`${entry.deletedAt} is null`
+            )
+          )
+          .limit(1);
+        if (activeEntryRows.length > 0) {
+          throw new Error('EMAIL_IN_USE');
+        }
+
+        await tx
+          .update(person)
+          .set({ email: null, updatedAt: new Date() })
+          .where(eq(person.id, blockingPerson.id));
+      }
+
+      const now = new Date();
+      await tx
+        .update(person)
+        .set({ email: newEmail, updatedAt: now })
+        .where(eq(person.id, group.driverPersonId));
+      await tx
+        .update(registrationGroup)
+        .set({ driverEmailNorm: normalizedEmail, updatedAt: now })
+        .where(eq(registrationGroup.id, group.id));
+      await tx
+        .delete(registrationGroupEmailVerification)
+        .where(eq(registrationGroupEmailVerification.registrationGroupId, group.id));
+
+      await writeAuditLog(tx as never, {
+        eventId: existingEntry.eventId,
+        actorUserId,
+        action: 'driver_email_updated',
+        entityType: 'entry',
+        entityId: entryId,
+        payload: {
+          oldEmail: currentPerson.email,
+          newEmail
+        }
+      });
+
+      return {
+        entryId,
+        personId: group.driverPersonId,
+        oldEmail: currentPerson.email,
+        newEmail
+      };
+    });
+  } catch (error) {
+    if (isPgUniqueViolation(error)) {
+      throw new Error('EMAIL_IN_USE');
+    }
+    throw error;
+  }
+};
+
 export const patchEntryPaymentStatus = async (
   entryId: string,
   input: EntryPaymentStatusPatch,
@@ -1751,6 +1877,7 @@ export const validateEntryStatusPatchInput = (payload: unknown) => entryStatusPa
 export const validateEntryTechStatusPatchInput = (payload: unknown) => techStatusPatchSchema.parse(payload);
 export const validateEntryClassPatchInput = (payload: unknown) => entryClassPatchSchema.parse(payload);
 export const validateEntryNotesPatchInput = (payload: unknown) => entryNotesPatchSchema.parse(payload);
+export const validateDriverEmailPatchInput = (payload: unknown): DriverEmailPatch => driverEmailPatchSchema.parse(payload);
 export const validateEntryPaymentStatusPatchInput = (payload: unknown) => entryPaymentStatusPatchSchema.parse(payload);
 export const validateEntryPaymentAmountsPatchInput = (payload: unknown) => entryPaymentAmountsPatchSchema.parse(payload);
 export const validateEntryDeleteInput = (payload: unknown) => entryDeleteSchema.parse(payload);

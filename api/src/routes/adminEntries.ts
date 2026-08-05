@@ -7,7 +7,9 @@ import {
   classPricingRule,
   consentEvidence,
   document,
+  emailOutbox,
   entry,
+  event,
   eventClass,
   eventPricingRule,
   invoice,
@@ -23,7 +25,7 @@ import { deriveEntryPaymentStatus, deriveInvoicePaymentStatus, resolveEntryTotal
 import { getEntryLineTotalCents, getForecastEntryLineTotalCents, getManualEntryTotalOverrideCents } from '../domain/pricingSnapshot';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { decodeCursor, encodeCursor, parseListQuery } from '../http/pagination';
-import { recalculateInvoices } from './adminFinance';
+import { recalculateInvoices, recalculateInvoicesInTransaction } from './adminFinance';
 import { resolveIamUserDisplayNames } from './adminIam';
 import { queueLifecycleMail } from './adminMail';
 
@@ -68,6 +70,15 @@ const entryClassPatchSchema = z.object({
   classId: z.string().uuid(),
   applyToBackupVehicle: z.boolean().optional().default(false),
   allowVehicleTypeChange: z.boolean().optional().default(true)
+});
+
+const entryAssignmentPatchSchema = z.object({
+  classId: z.string().uuid(),
+  startNumber: z.string().trim().min(1).max(6).regex(/^[a-z0-9]+$/i).transform((value) => value.toUpperCase()),
+  applyToBackupVehicle: z.boolean().optional().default(false),
+  allowVehicleTypeChange: z.boolean().optional().default(true),
+  sendSystemMail: z.literal(true),
+  requestCodriverData: z.boolean().optional().default(false)
 });
 
 const entryNotesPatchSchema = z
@@ -125,6 +136,7 @@ type ListEntriesQuery = z.infer<typeof listEntriesQuerySchema>;
 type EntryStatusPatch = z.infer<typeof entryStatusPatchSchema>;
 type TechStatusPatch = z.infer<typeof techStatusPatchSchema>;
 type EntryClassPatch = z.infer<typeof entryClassPatchSchema>;
+type EntryAssignmentPatch = z.infer<typeof entryAssignmentPatchSchema>;
 type EntryNotesPatch = z.infer<typeof entryNotesPatchSchema>;
 type DriverEmailPatch = z.infer<typeof driverEmailPatchSchema>;
 type EntryPaymentStatusPatch = z.infer<typeof entryPaymentStatusPatchSchema>;
@@ -1126,6 +1138,332 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
   });
 };
 
+const CODRIVER_FIELD_LIST = [
+  'Vorname',
+  'Nachname',
+  'Geburtsdatum',
+  'Land',
+  'Straße',
+  'PLZ',
+  'Ort',
+  'E-Mail-Adresse',
+  'Telefonnummer'
+] as const;
+
+export const buildAssignmentMailBody = (requestCodriverData: boolean) => {
+  const assignmentText =
+    'Ihre Nennung für {{eventName}} wurde neu zugeordnet.\n\n' +
+    'Neue Klasse: {{className}}\n' +
+    'Neue Startnummer: {{startNumber}}';
+  const codriverText = requestCodriverData
+    ? '\n\nBitte senden Sie uns für die manuelle Ergänzung Ihres Beifahrers folgende Angaben:\n' +
+      CODRIVER_FIELD_LIST.map((field) => `- ${field}`).join('\n')
+    : '';
+  const closing =
+    '\n\nBei Fragen wenden Sie sich bitte an nennung@msc-oberlausitzer-dreilaendereck.eu.' +
+    '\n\nMit freundlichen Grüßen\nMSC Oberlausitzer Dreiländereck e.V.';
+  const text = `Hallo {{driverName}},\n\n${assignmentText}${codriverText}${closing}`;
+  const htmlFields = requestCodriverData
+    ? `<p>Bitte senden Sie uns für die manuelle Ergänzung Ihres Beifahrers folgende Angaben:</p><ul>${CODRIVER_FIELD_LIST.map((field) => `<li>${field}</li>`).join('')}</ul>`
+    : '';
+  const html =
+    '<p>Hallo {{driverName}},</p>' +
+    '<p>Ihre Nennung für <strong>{{eventName}}</strong> wurde neu zugeordnet.</p>' +
+    '<p><strong>Neue Klasse:</strong> {{className}}<br><strong>Neue Startnummer:</strong> {{startNumber}}</p>' +
+    htmlFields +
+    '<p>Bei Fragen wenden Sie sich bitte an <a href="mailto:nennung@msc-oberlausitzer-dreilaendereck.eu">nennung@msc-oberlausitzer-dreilaendereck.eu</a>.</p>' +
+    '<p>Mit freundlichen Grüßen<br>MSC Oberlausitzer Dreiländereck e.V.</p>';
+  return { text, html };
+};
+
+export const buildEntryAssignmentIdempotencyKey = (
+  entryId: string,
+  classId: string,
+  startNumber: string,
+  requestCodriverData: boolean,
+  applyToBackupVehicle = false,
+  allowVehicleTypeChange = true
+) => [
+  'entry-assignment',
+  entryId,
+  classId,
+  startNumber,
+  requestCodriverData ? 'codriver' : 'standard',
+  applyToBackupVehicle ? 'backup' : 'primary',
+  allowVehicleTypeChange ? 'align-vehicle' : 'preserve-vehicle'
+].join(':');
+
+export const patchEntryAssignment = async (
+  entryId: string,
+  input: EntryAssignmentPatch,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const now = new Date();
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        id: entry.id,
+        eventId: entry.eventId,
+        eventName: event.name,
+        classId: entry.classId,
+        driverPersonId: entry.driverPersonId,
+        codriverPersonId: entry.codriverPersonId,
+        isBackupVehicle: entry.isBackupVehicle,
+        backupOfEntryId: entry.backupOfEntryId,
+        startNumberNorm: entry.startNumberNorm,
+        vehicleType: vehicle.vehicleType,
+        driverEmail: person.email,
+        driverFirstName: person.firstName,
+        driverLastName: person.lastName,
+        processingRestricted: person.processingRestricted,
+        objectionFlag: person.objectionFlag,
+        deletedAt: entry.deletedAt
+      })
+      .from(entry)
+      .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+      .innerJoin(person, eq(entry.driverPersonId, person.id))
+      .innerJoin(event, eq(entry.eventId, event.id))
+      .where(eq(entry.id, entryId))
+      .limit(1)
+      .for('update');
+
+    const existing = rows[0];
+    if (!existing) {
+      return null;
+    }
+    if (existing.deletedAt) {
+      throw new Error('INVALID_STATE');
+    }
+    const statusRows = await tx.select({ status: event.status }).from(event).where(eq(event.id, existing.eventId)).limit(1);
+    if (!statusRows[0] || !['open', 'closed'].includes(statusRows[0].status)) {
+      throw new Error(statusRows[0] ? 'EVENT_STATUS_FORBIDDEN' : 'EVENT_NOT_FOUND');
+    }
+
+    const targetClassRows = await tx
+      .select({
+        id: eventClass.id,
+        eventId: eventClass.eventId,
+        name: eventClass.name,
+        vehicleType: eventClass.vehicleType,
+        allowsCodriver: eventClass.allowsCodriver
+      })
+      .from(eventClass)
+      .where(eq(eventClass.id, input.classId))
+      .limit(1);
+    const targetClass = targetClassRows[0];
+    if (!targetClass || targetClass.eventId !== existing.eventId) {
+      throw new Error('CLASS_NOT_FOUND');
+    }
+    if (input.requestCodriverData && !targetClass.allowsCodriver) {
+      throw new Error('CODRIVER_NOT_ALLOWED');
+    }
+    if (input.requestCodriverData && existing.codriverPersonId) {
+      throw new Error('CODRIVER_ALREADY_ASSIGNED');
+    }
+    if (!existing.driverEmail || existing.processingRestricted || existing.objectionFlag) {
+      throw new Error('DRIVER_MAIL_UNAVAILABLE');
+    }
+
+    const idempotencyKey = buildEntryAssignmentIdempotencyKey(
+      entryId,
+      input.classId,
+      input.startNumber,
+      input.requestCodriverData,
+      input.applyToBackupVehicle,
+      input.allowVehicleTypeChange
+    );
+    const duplicateRows = await tx
+      .select({ id: emailOutbox.id })
+      .from(emailOutbox)
+      .where(eq(emailOutbox.idempotencyKey, idempotencyKey))
+      .limit(1);
+    if (duplicateRows[0]) {
+      if (existing.classId !== input.classId || existing.startNumberNorm !== input.startNumber) {
+        throw new Error('ASSIGNMENT_NOTIFICATION_ALREADY_QUEUED');
+      }
+      return {
+        id: entryId,
+        classId: input.classId,
+        startNumber: input.startNumber,
+        vehicleTypeBefore: existing.vehicleType,
+        vehicleTypeAfter: input.allowVehicleTypeChange ? targetClass.vehicleType : existing.vehicleType,
+        backupVehicleUpdated: false,
+        warnings: [] as string[],
+        outboxId: duplicateRows[0].id,
+        mailQueued: false,
+        idempotent: true
+      };
+    }
+
+    const warnings: string[] = [];
+    const updateEntryIds = new Set<string>([entryId]);
+    let backupEntryId: string | null = null;
+    if (input.applyToBackupVehicle) {
+      if (existing.isBackupVehicle && existing.backupOfEntryId) {
+        backupEntryId = existing.backupOfEntryId;
+      } else {
+        const linkedRows = await tx
+          .select({ id: entry.id })
+          .from(entry)
+          .where(and(eq(entry.backupOfEntryId, entryId), sql`${entry.deletedAt} is null`))
+          .limit(1);
+        backupEntryId = linkedRows[0]?.id ?? null;
+      }
+      if (backupEntryId) {
+        updateEntryIds.add(backupEntryId);
+      } else {
+        warnings.push('No linked backup entry found to update.');
+      }
+    }
+
+    const targetRows = await tx
+      .select({
+        id: entry.id,
+        eventId: entry.eventId,
+        vehicleId: entry.vehicleId,
+        startNumberNorm: entry.startNumberNorm,
+        deletedAt: entry.deletedAt
+      })
+      .from(entry)
+      .where(inArray(entry.id, Array.from(updateEntryIds)));
+    const activeTargetRows = targetRows.filter((row) => {
+      if (!row.deletedAt && row.eventId === existing.eventId) {
+        return true;
+      }
+      if (row.id !== entryId) {
+        warnings.push('Linked backup entry was skipped because it is not active.');
+        updateEntryIds.delete(row.id);
+      }
+      return false;
+    });
+    if (!activeTargetRows.some((row) => row.id === entryId)) {
+      throw new Error('INVALID_STATE');
+    }
+
+    const nextStartNumberById = new Map(
+      activeTargetRows.map((row) => [row.id, row.id === entryId ? input.startNumber : row.startNumberNorm])
+    );
+    for (const targetRow of activeTargetRows) {
+      const nextStartNumber = nextStartNumberById.get(targetRow.id);
+      if (!nextStartNumber) {
+        continue;
+      }
+      const conflicts = await tx
+        .select({ id: entry.id })
+        .from(entry)
+        .where(and(
+          eq(entry.eventId, existing.eventId),
+          eq(entry.classId, input.classId),
+          eq(entry.startNumberNorm, nextStartNumber),
+          sql`${entry.deletedAt} is null`
+        ))
+        .limit(1);
+      if (conflicts[0] && conflicts[0].id !== targetRow.id) {
+        const conflictingNextNumber = nextStartNumberById.get(conflicts[0].id);
+        if (!updateEntryIds.has(conflicts[0].id) || conflictingNextNumber === nextStartNumber) {
+          throw new Error('START_NUMBER_CONFLICT');
+        }
+      }
+    }
+
+    await tx
+      .update(entry)
+      .set({
+        classId: input.classId,
+        startNumberNorm: sql`case when ${entry.id} = ${entryId} then ${input.startNumber} else ${entry.startNumberNorm} end`,
+        updatedAt: now
+      })
+      .where(inArray(entry.id, activeTargetRows.map((row) => row.id)));
+
+    let vehicleTypeAfter = existing.vehicleType;
+    if (input.allowVehicleTypeChange) {
+      await tx
+        .update(vehicle)
+        .set({ vehicleType: targetClass.vehicleType, updatedAt: now })
+        .where(inArray(vehicle.id, activeTargetRows.map((row) => row.vehicleId)));
+      vehicleTypeAfter = targetClass.vehicleType;
+    } else if (existing.vehicleType !== targetClass.vehicleType) {
+      warnings.push('Vehicle type change skipped by request; class and vehicle type now differ.');
+    }
+
+    const affectedPricingRows = existing.classId === input.classId
+      ? []
+      : await tx
+          .select({ classId: classPricingRule.classId, baseFeeCents: classPricingRule.baseFeeCents })
+          .from(classPricingRule)
+          .where(and(
+            eq(classPricingRule.eventId, existing.eventId),
+            inArray(classPricingRule.classId, [existing.classId, input.classId])
+          ));
+    const feeByClass = new Map(affectedPricingRows.map((row) => [row.classId, row.baseFeeCents]));
+    if ((feeByClass.get(existing.classId) ?? 0) !== (feeByClass.get(input.classId) ?? 0)) {
+      await recalculateInvoicesInTransaction(tx, existing.eventId, { driverPersonId: existing.driverPersonId }, actorUserId);
+    }
+
+    const body = buildAssignmentMailBody(input.requestCodriverData);
+    const [outbox] = await tx
+      .insert(emailOutbox)
+      .values({
+        eventId: existing.eventId,
+        toEmail: existing.driverEmail,
+        subject: 'Neue Klasseneinteilung und Startnummer – {{eventName}}',
+        templateId: 'entry_assignment_changed',
+        templateVersion: 1,
+        templateData: {
+          entryId,
+          driverPersonId: existing.driverPersonId,
+          driverName: `${existing.driverFirstName} ${existing.driverLastName}`.trim(),
+          eventName: existing.eventName,
+          className: targetClass.name,
+          startNumber: input.startNumber,
+          requestCodriverData: input.requestCodriverData,
+          requestedCodriverFields: input.requestCodriverData ? [...CODRIVER_FIELD_LIST] : [],
+          bodyTextOverride: body.text,
+          bodyHtmlOverride: body.html,
+          renderOptions: { showBadge: false, mailLabel: 'Systemnachricht', includeEntryContext: true }
+        },
+        status: 'queued',
+        sendAfter: now,
+        idempotencyKey,
+        maxAttempts: 5
+      })
+      .returning({ id: emailOutbox.id });
+    if (!outbox) {
+      throw new Error('OUTBOX_INSERT_FAILED');
+    }
+
+    await writeAuditLog(tx as never, {
+      eventId: existing.eventId,
+      actorUserId,
+      action: 'entry_assignment_updated',
+      entityType: 'entry',
+      entityId: entryId,
+      payload: {
+        previousClassId: existing.classId,
+        classId: input.classId,
+        previousStartNumber: existing.startNumberNorm,
+        startNumber: input.startNumber,
+        requestCodriverData: input.requestCodriverData,
+        outboxId: outbox.id
+      }
+    });
+
+    return {
+      id: entryId,
+      classId: input.classId,
+      startNumber: input.startNumber,
+      vehicleTypeBefore: existing.vehicleType,
+      vehicleTypeAfter,
+      backupVehicleUpdated: Boolean(backupEntryId && updateEntryIds.has(backupEntryId)),
+      warnings,
+      outboxId: outbox.id,
+      mailQueued: true,
+      idempotent: false
+    };
+  });
+};
+
 export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, actorUserId: string | null) => {
   const db = await getDb();
   const rows = await db
@@ -1919,6 +2257,7 @@ export const validateListEntriesQuery = (query: Record<string, string | undefine
 export const validateEntryStatusPatchInput = (payload: unknown) => entryStatusPatchSchema.parse(payload);
 export const validateEntryTechStatusPatchInput = (payload: unknown) => techStatusPatchSchema.parse(payload);
 export const validateEntryClassPatchInput = (payload: unknown) => entryClassPatchSchema.parse(payload);
+export const validateEntryAssignmentPatchInput = (payload: unknown) => entryAssignmentPatchSchema.parse(payload);
 export const validateEntryNotesPatchInput = (payload: unknown) => entryNotesPatchSchema.parse(payload);
 export const validateDriverEmailPatchInput = (payload: unknown): DriverEmailPatch => driverEmailPatchSchema.parse(payload);
 export const validateEntryPaymentStatusPatchInput = (payload: unknown) => entryPaymentStatusPatchSchema.parse(payload);

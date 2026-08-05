@@ -7175,6 +7175,43 @@
         }
       }
     },
+    "/admin/entries/{id}/assignment": {
+      "patch": {
+        "operationId": "patch_admin_entries_id_assignment",
+        "tags": ["admin"],
+        "description": "Atomically changes class and start number, recalculates affected invoices, audits the exact transition, and durably queues one driver system mail. Requires entries.status.write and communication.write.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EntryAssignmentPatchRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Assignment changed and mail queued, or an idempotent retry resolved",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EntryAssignmentPatchResponse" } } }
+          },
+          "400": { "description": "Invalid request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "403": { "description": "Missing entries.status.write or communication.write", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "404": { "description": "Entry, event, or class not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "409": { "description": "Assignment conflict or incompatible current state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "422": { "description": "Co-driver request or mail recipient is invalid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "500": { "description": "Internal Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+        }
+      }
+    },
     "/admin/mail/templates": {
       "get": {
         "operationId": "get_admin_mail_templates",
@@ -9826,6 +9863,43 @@
               "type": "string"
             }
           }
+        }
+      },
+      "EntryAssignmentPatchRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["classId", "startNumber", "sendSystemMail"],
+        "properties": {
+          "classId": { "type": "string", "format": "uuid" },
+          "startNumber": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{1,6}$",
+            "description": "Normalized to uppercase by the backend."
+          },
+          "applyToBackupVehicle": { "type": "boolean", "default": false },
+          "allowVehicleTypeChange": { "type": "boolean", "default": true },
+          "sendSystemMail": { "type": "boolean", "const": true },
+          "requestCodriverData": { "type": "boolean", "default": false }
+        }
+      },
+      "EntryAssignmentPatchResponse": {
+        "type": "object",
+        "required": [
+          "ok", "entryId", "classId", "startNumber", "vehicleTypeBefore", "vehicleTypeAfter",
+          "backupVehicleUpdated", "warnings", "outboxId", "mailQueued", "idempotent"
+        ],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "entryId": { "type": "string", "format": "uuid" },
+          "classId": { "type": "string", "format": "uuid" },
+          "startNumber": { "type": "string", "pattern": "^[A-Z0-9]{1,6}$" },
+          "vehicleTypeBefore": { "type": "string", "enum": ["auto", "moto"] },
+          "vehicleTypeAfter": { "type": "string", "enum": ["auto", "moto"] },
+          "backupVehicleUpdated": { "type": "boolean" },
+          "warnings": { "type": "array", "items": { "type": "string" } },
+          "outboxId": { "type": "string", "format": "uuid" },
+          "mailQueued": { "type": "boolean" },
+          "idempotent": { "type": "boolean" }
         }
       },
       "MailTemplateModel": {

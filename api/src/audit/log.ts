@@ -11,7 +11,7 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   document_generated: ['type', 'templateVariant', 'templateVersion', 'sha256', 's3Key'],
   batch_document_generated: ['type', 'templateVersion', 'count', 's3Key'],
   document_download_url_issued: ['expiresInSeconds'],
-  entry_status_updated: ['from', 'to'],
+  entry_status_updated: ['from', 'to', 'withdrawalReason', 'withdrawnAt'],
   entry_class_updated: ['previousClassId', 'classId', 'isBackupVehicle', 'backupOfEntryId', 'backupVehicleId'],
   entry_assignment_updated: [
     'previousClassId',

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
@@ -732,7 +732,8 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
               eq(entry.eventId, input.eventId),
               eq(entry.classId, item.classId),
               eq(entry.startNumberNorm, normalizedStartNumber),
-              sql`${entry.deletedAt} is null`
+              sql`${entry.deletedAt} is null`,
+              ne(entry.acceptanceStatus, 'withdrawn')
             )
           )
           .limit(1);
@@ -1409,7 +1410,8 @@ export const validatePublicStartNumber = async (input: ValidateStartNumberInput)
         eq(entry.eventId, input.eventId),
         eq(entry.classId, input.classId),
         eq(entry.startNumberNorm, normalizedStartNumber),
-        sql`${entry.deletedAt} is null`
+        sql`${entry.deletedAt} is null`,
+        ne(entry.acceptanceStatus, 'withdrawn')
       )
     )
     .limit(1);

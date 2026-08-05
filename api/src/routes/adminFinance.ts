@@ -220,7 +220,9 @@ export const buildPricingSnapshot = (
         .map((current) => [current.entryId, driverManualOverrides.get(current.entryId)] as const)
         .filter((item): item is readonly [string, number] => typeof item[1] === 'number')
     );
-    const activeEntries = entries.filter((current) => current.acceptanceStatus !== 'rejected');
+    const activeEntries = entries.filter(
+      (current) => current.acceptanceStatus !== 'rejected' && current.acceptanceStatus !== 'withdrawn'
+    );
     const forecastLines = activeEntries.map((current, idx) => {
       const baseFee = classFeeByClassId.get(current.classId) ?? 0;
       const lateFee = current.createdAt > earlyDeadline ? lateFeeCents : 0;

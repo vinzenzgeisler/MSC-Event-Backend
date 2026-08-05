@@ -41,7 +41,7 @@ import { getEntryLineTotalCents, sumEntryLineTotalCents } from '../domain/pricin
 import { getEntryConfirmationDefaults } from './adminConfig';
 
 type RecipientFilter = {
-  acceptanceStatus?: 'pending' | 'shortlist' | 'accepted' | 'rejected';
+  acceptanceStatus?: 'pending' | 'shortlist' | 'accepted' | 'rejected' | 'withdrawn';
   registrationStatus?: 'submitted_unverified' | 'submitted_verified';
   paymentStatus?: 'due' | 'paid';
   classId?: string;
@@ -93,7 +93,7 @@ const queueMailSchema = z
     filters: z
       .object({
         allEntries: z.boolean().optional(),
-        acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+        acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
         registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
         paymentStatus: z.enum(['due', 'paid']).optional(),
         classId: z.string().uuid().optional()
@@ -146,7 +146,7 @@ const broadcastSchema = z.object({
   templateVersion: z.number().int().positive().optional(),
   sendAfter: z.string().datetime().optional(),
   classId: z.string().uuid().optional(),
-  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
   registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
   paymentStatus: z.enum(['due', 'paid']).optional(),
   subjectOverride: z.string().min(1).optional()
@@ -233,7 +233,7 @@ const communicationSendSchema = z
     filters: z
       .object({
         allEntries: z.boolean().optional(),
-        acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+        acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
         registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
         paymentStatus: z.enum(['due', 'paid']).optional(),
         classId: z.string().uuid().optional()
@@ -258,7 +258,7 @@ const resolveRecipientsSchema = z.object({
   eventId: z.string().uuid().optional(),
   allEntries: z.boolean().optional(),
   classId: z.string().uuid().optional(),
-  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
   registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
   paymentStatus: z.enum(['due', 'paid']).optional(),
   driverPersonIds: z.array(z.string().uuid()).optional(),
@@ -270,7 +270,7 @@ const searchRecipientsSchema = z.object({
   eventId: z.string().uuid(),
   q: z.string().trim().optional(),
   classId: z.string().uuid().optional(),
-  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
   paymentStatus: z.enum(['due', 'paid']).optional(),
   limit: z.number().int().min(1).max(100).optional().default(20)
 });

@@ -32,7 +32,7 @@ import { queueLifecycleMail } from './adminMail';
 const listEntriesQuerySchema = z.object({
   eventId: z.string().uuid(),
   classId: z.string().uuid().optional(),
-  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
   registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
   paymentStatus: z.enum(['due', 'paid']).optional(),
   q: z.string().min(1).optional(),
@@ -46,21 +46,39 @@ const listEntriesQuerySchema = z.object({
   sortDir: z.enum(['asc', 'desc']).optional()
 });
 
-const entryStatusPatchSchema = z.object({
-  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']),
-  sendLifecycleMail: z.boolean().optional().default(false),
-  includeDriverNoteInLifecycleMail: z.boolean().optional().default(false),
-  lifecycleEventType: z
-    .enum([
-      'registration_received',
-      'preselection',
-      'accepted_open_payment',
-      'accepted_paid_completed',
-      'rejected',
-      'waitlist'
-    ])
-    .optional()
-});
+const entryStatusPatchSchema = z
+  .object({
+    acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']),
+    withdrawalReason: z.string().trim().min(1).max(2000).optional(),
+    sendLifecycleMail: z.boolean().optional().default(false),
+    includeDriverNoteInLifecycleMail: z.boolean().optional().default(false),
+    lifecycleEventType: z
+      .enum([
+        'registration_received',
+        'preselection',
+        'accepted_open_payment',
+        'accepted_paid_completed',
+        'rejected',
+        'waitlist'
+      ])
+      .optional()
+  })
+  .superRefine((value, context) => {
+    if (value.acceptanceStatus === 'withdrawn' && !value.withdrawalReason) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['withdrawalReason'],
+        message: 'withdrawalReason is required when acceptanceStatus=withdrawn'
+      });
+    }
+    if (value.acceptanceStatus === 'withdrawn' && value.sendLifecycleMail) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sendLifecycleMail'],
+        message: 'Withdrawal does not have a lifecycle mail template'
+      });
+    }
+  });
 
 const techStatusPatchSchema = z.object({
   techStatus: z.enum(['pending', 'passed', 'failed'])
@@ -151,12 +169,13 @@ const toVehicleLabel = (make: string | null, model: string | null, startNumberNo
   return startNumberNorm ? `#${startNumberNorm}` : 'Unknown vehicle';
 };
 
-const assertAcceptanceTransitionAllowed = (from: EntryStatusPatch['acceptanceStatus'], to: EntryStatusPatch['acceptanceStatus']) => {
+export const assertAcceptanceTransitionAllowed = (from: EntryStatusPatch['acceptanceStatus'], to: EntryStatusPatch['acceptanceStatus']) => {
   const allowed: Record<EntryStatusPatch['acceptanceStatus'], EntryStatusPatch['acceptanceStatus'][]> = {
-    pending: ['shortlist', 'accepted', 'rejected'],
-    shortlist: ['pending', 'accepted', 'rejected'],
-    accepted: ['shortlist', 'rejected'],
-    rejected: ['shortlist', 'accepted']
+    pending: ['shortlist', 'accepted', 'rejected', 'withdrawn'],
+    shortlist: ['pending', 'accepted', 'rejected', 'withdrawn'],
+    accepted: ['pending', 'shortlist', 'rejected', 'withdrawn'],
+    rejected: ['pending', 'shortlist', 'accepted', 'withdrawn'],
+    withdrawn: ['pending', 'shortlist', 'accepted', 'rejected']
   };
   if (!allowed[from].includes(to)) {
     throw new Error('INVALID_STATUS_TRANSITION');
@@ -290,6 +309,9 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       deletedBy: entry.deletedBy,
       deletedByDisplay: entry.deletedByDisplay,
       deleteReason: entry.deleteReason,
+      withdrawnReason: entry.withdrawnReason,
+      withdrawnAt: entry.withdrawnAt,
+      withdrawnBy: entry.withdrawnBy,
       internalNote: entry.internalNote,
       driverNote: entry.driverNote,
       driverPersonId: entry.driverPersonId,
@@ -364,12 +386,14 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
 
   const rowsWithPaymentStatus = rows.map((row) => {
     const driverEntries = driverEntriesByPersonId.get(row.driverPersonId) ?? [];
-    const activeDriverEntries = driverEntries.filter((item) => item.acceptanceStatus !== 'rejected');
+    const activeDriverEntries = driverEntries.filter(
+      (item) => item.acceptanceStatus !== 'rejected' && item.acceptanceStatus !== 'withdrawn'
+    );
     const acceptedDriverEntryCount = driverEntries.filter((item) => item.acceptanceStatus === 'accepted').length;
     const entryOrderIndex = activeDriverEntries.findIndex((item) => item.id === row.id);
     const classBaseFeeCents = classFeeByClassId.get(row.classId);
     const provisionalTotalCents =
-      classBaseFeeCents === undefined || row.acceptanceStatus === 'rejected'
+      classBaseFeeCents === undefined || row.acceptanceStatus === 'rejected' || row.acceptanceStatus === 'withdrawn'
         ? null
         : Math.max(
             0,
@@ -439,7 +463,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
 };
 
 export const listCheckinEntries = async (query: ListEntriesQuery, redactSensitiveFields: boolean) =>
-  listEntries(query, redactSensitiveFields);
+  listEntries({ ...query, acceptanceStatus: 'accepted' }, redactSensitiveFields);
 
 export const getEntryDetail = async (entryId: string, redactSensitiveFields: boolean) => {
   const db = await getDb();
@@ -453,6 +477,9 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       className: eventClass.name,
       registrationStatus: entry.registrationStatus,
       acceptanceStatus: entry.acceptanceStatus,
+      withdrawnReason: entry.withdrawnReason,
+      withdrawnAt: entry.withdrawnAt,
+      withdrawnBy: entry.withdrawnBy,
       checkinIdVerified: entry.checkinIdVerified,
       checkinIdVerifiedAt: entry.checkinIdVerifiedAt,
       checkinIdVerifiedBy: entry.checkinIdVerifiedBy,
@@ -613,7 +640,9 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .orderBy(asc(entry.createdAt), asc(entry.id));
 
   const relatedEntryIds = driverEntryRows.map((row) => row.id).filter((id) => id !== entryId);
-  const activeDriverEntryRows = driverEntryRows.filter((row) => row.acceptanceStatus !== 'rejected');
+  const activeDriverEntryRows = driverEntryRows.filter(
+    (row) => row.acceptanceStatus !== 'rejected' && row.acceptanceStatus !== 'withdrawn'
+  );
   const acceptedDriverEntryCount = driverEntryRows.filter((row) => row.acceptanceStatus === 'accepted').length;
 
   const [eventPricingRuleRows, classPricingRuleRows] = await Promise.all([
@@ -639,7 +668,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
 
   const entryOrderIndex = activeDriverEntryRows.findIndex((row) => row.id === entryId);
   const provisionalTotalCents = (() => {
-    if (!classPricing || current.acceptanceStatus === 'rejected') {
+    if (!classPricing || current.acceptanceStatus === 'rejected' || current.acceptanceStatus === 'withdrawn') {
       return null;
     }
     const baseFeeCents = classPricing.baseFeeCents ?? 0;
@@ -661,16 +690,19 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     invoiceTotalCents: current.invoiceTotalCents,
     provisionalTotalCents
   });
-  const totalCents = resolvedTotalCents ?? 0;
+  const isPaymentApplicable = current.acceptanceStatus !== 'rejected' && current.acceptanceStatus !== 'withdrawn';
+  const totalCents = isPaymentApplicable ? (resolvedTotalCents ?? 0) : null;
   const paidAmountCents =
-    current.acceptanceStatus !== 'accepted'
+    !isPaymentApplicable
+      ? null
+      : current.acceptanceStatus !== 'accepted'
       ? 0
       : current.invoicePaymentStatus === 'paid'
       ? totalCents
       : acceptedDriverEntryCount === 1
-        ? Math.min(current.invoicePaidAmountCents ?? 0, totalCents)
+        ? Math.min(current.invoicePaidAmountCents ?? 0, totalCents ?? 0)
         : 0;
-  const amountOpenCents = Math.max(0, totalCents - paidAmountCents);
+  const amountOpenCents = totalCents === null || paidAmountCents === null ? null : Math.max(0, totalCents - paidAmountCents);
   const paymentStatus = deriveEntryPaymentStatus(
     resolvedTotalCents,
     current.acceptanceStatus,
@@ -715,6 +747,9 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       className: current.className,
       registrationStatus: current.registrationStatus,
       acceptanceStatus: current.acceptanceStatus,
+      withdrawnReason: current.withdrawnReason,
+      withdrawnAt: current.withdrawnAt,
+      withdrawnBy: current.withdrawnBy,
       startNumberNorm: current.startNumberNorm,
       orgaCode: current.orgaCode,
       isBackupVehicle: current.isBackupVehicle,
@@ -855,7 +890,10 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
       id: entry.id,
       eventId: entry.eventId,
       acceptanceStatus: entry.acceptanceStatus,
-      driverPersonId: entry.driverPersonId
+      driverPersonId: entry.driverPersonId,
+      classId: entry.classId,
+      startNumberNorm: entry.startNumberNorm,
+      deletedAt: entry.deletedAt
     })
     .from(entry)
     .where(eq(entry.id, entryId))
@@ -864,14 +902,46 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
   if (!existing) {
     return null;
   }
+  if (existing.deletedAt) {
+    throw new Error('INVALID_STATE');
+  }
   await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
   assertAcceptanceTransitionAllowed(existing.acceptanceStatus as EntryStatusPatch['acceptanceStatus'], input.acceptanceStatus);
+
+  if (existing.acceptanceStatus === 'withdrawn' && input.acceptanceStatus !== 'withdrawn' && existing.startNumberNorm) {
+    const conflictRows = await db
+      .select({ id: entry.id })
+      .from(entry)
+      .where(
+        and(
+          eq(entry.eventId, existing.eventId),
+          eq(entry.classId, existing.classId),
+          eq(entry.startNumberNorm, existing.startNumberNorm),
+          ne(entry.id, entryId),
+          sql`${entry.deletedAt} is null`,
+          ne(entry.acceptanceStatus, 'withdrawn')
+        )
+      )
+      .limit(1);
+    if (conflictRows[0]) {
+      throw new Error('START_NUMBER_CONFLICT');
+    }
+  }
+
+  const now = new Date();
 
   const [updated] = await db
     .update(entry)
     .set({
       acceptanceStatus: input.acceptanceStatus,
-      updatedAt: new Date()
+      ...(input.acceptanceStatus === 'withdrawn'
+        ? {
+            withdrawnReason: input.withdrawalReason,
+            withdrawnAt: now,
+            withdrawnBy: actorUserId
+          }
+        : {}),
+      updatedAt: now
     })
     .where(eq(entry.id, entryId))
     .returning();
@@ -884,7 +954,9 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
     entityId: entryId,
     payload: {
       from: existing.acceptanceStatus,
-      to: input.acceptanceStatus
+      to: input.acceptanceStatus,
+      withdrawalReason: input.acceptanceStatus === 'withdrawn' ? input.withdrawalReason : undefined,
+      withdrawnAt: input.acceptanceStatus === 'withdrawn' ? now.toISOString() : undefined
     }
   });
 
@@ -1072,7 +1144,8 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
             eq(entry.eventId, existing.eventId),
             eq(entry.classId, input.classId),
             eq(entry.startNumberNorm, targetRow.startNumberNorm),
-            sql`${entry.deletedAt} is null`
+            sql`${entry.deletedAt} is null`,
+            ne(entry.acceptanceStatus, 'withdrawn')
           )
         )
         .limit(1);
@@ -1356,7 +1429,8 @@ export const patchEntryAssignment = async (
           eq(entry.eventId, existing.eventId),
           eq(entry.classId, input.classId),
           eq(entry.startNumberNorm, nextStartNumber),
-          sql`${entry.deletedAt} is null`
+          sql`${entry.deletedAt} is null`,
+          ne(entry.acceptanceStatus, 'withdrawn')
         ))
         .limit(1);
       if (conflicts[0] && conflicts[0].id !== targetRow.id) {

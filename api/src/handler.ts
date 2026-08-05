@@ -14,6 +14,7 @@ import {
 import { buildPublicRateLimitKey, enforcePublicRateLimit } from './http/publicRateLimit';
 import { errorJson, json } from './http/response';
 import { parseJsonBody } from './http/parse';
+import { isPgUniqueViolation } from './http/dbErrors';
 import { getPresignedAssetsDownloadUrl } from './docs/storage';
 import {
   archiveEvent,
@@ -55,6 +56,7 @@ import {
   listEntries,
   restoreEntry,
   getEntryDetail,
+  patchEntryAssignment,
   patchEntryStatus,
   patchEntryClass,
   patchEntryTechStatus,
@@ -63,6 +65,7 @@ import {
   patchEntryPaymentStatus,
   patchEntryPaymentAmounts,
   validateEntryStatusPatchInput,
+  validateEntryAssignmentPatchInput,
   validateEntryClassPatchInput,
   validateEntryTechStatusPatchInput,
   validateEntryNotesPatchInput,
@@ -2679,6 +2682,73 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(409, 'Event is read-only', undefined, 'INVALID_STATE');
       }
       return errorJson(500, 'Patch entry class failed', undefined, 'INVALID_STATE');
+    }
+  }
+
+  const entryAssignmentMatch = path.match(/^\/admin\/entries\/([^/]+)\/assignment$/);
+  if (method === 'PATCH' && entryAssignmentMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.status.write') || !hasPermission(auth, 'communication.write')) {
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
+    }
+
+    try {
+      const input = validateEntryAssignmentPatchInput(parseJsonBody(event));
+      const result = await patchEntryAssignment(entryAssignmentMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found', undefined, 'ENTRY_NOT_FOUND');
+      }
+      return json(200, {
+        ok: true,
+        entryId: result.id,
+        classId: result.classId,
+        startNumber: result.startNumber,
+        vehicleTypeBefore: result.vehicleTypeBefore,
+        vehicleTypeAfter: result.vehicleTypeAfter,
+        backupVehicleUpdated: result.backupVehicleUpdated,
+        warnings: result.warnings,
+        outboxId: result.outboxId,
+        mailQueued: result.mailQueued,
+        idempotent: result.idempotent
+      });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues }, 'VALIDATION_ERROR');
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body', undefined, 'INVALID_JSON');
+      }
+      if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') {
+        return errorJson(404, 'Class not found', undefined, 'CLASS_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'START_NUMBER_CONFLICT') {
+        return errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');
+      }
+      if (error instanceof Error && error.message === 'CODRIVER_NOT_ALLOWED') {
+        return errorJson(422, 'Target class does not allow a co-driver', undefined, 'CODRIVER_NOT_ALLOWED');
+      }
+      if (error instanceof Error && error.message === 'CODRIVER_ALREADY_ASSIGNED') {
+        return errorJson(409, 'Entry already has a co-driver', undefined, 'CODRIVER_ALREADY_ASSIGNED');
+      }
+      if (error instanceof Error && error.message === 'DRIVER_MAIL_UNAVAILABLE') {
+        return errorJson(422, 'Driver cannot receive the required system mail', undefined, 'DRIVER_MAIL_UNAVAILABLE');
+      }
+      if (error instanceof Error && error.message === 'ASSIGNMENT_NOTIFICATION_ALREADY_QUEUED') {
+        return errorJson(409, 'This assignment notification was already used for a different current assignment', undefined, 'ASSIGNMENT_NOTIFICATION_ALREADY_QUEUED');
+      }
+      if (error instanceof Error && (error.message === 'INVALID_STATE' || error.message === 'EVENT_STATUS_FORBIDDEN')) {
+        return errorJson(409, 'Entry state does not allow assignment change', undefined, 'INVALID_STATE');
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found', undefined, 'EVENT_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'PRICING_RULES_NOT_FOUND') {
+        return errorJson(409, 'Pricing rules are required to change this class', undefined, 'PRICING_RULES_NOT_FOUND');
+      }
+      if (isPgUniqueViolation(error)) {
+        return errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');
+      }
+      return errorJson(500, 'Assignment update failed');
     }
   }
 

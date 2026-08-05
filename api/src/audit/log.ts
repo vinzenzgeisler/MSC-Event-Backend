@@ -13,6 +13,14 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   document_download_url_issued: ['expiresInSeconds'],
   entry_status_updated: ['from', 'to'],
   entry_class_updated: ['previousClassId', 'classId', 'isBackupVehicle', 'backupOfEntryId', 'backupVehicleId'],
+  entry_assignment_updated: [
+    'previousClassId',
+    'classId',
+    'previousStartNumber',
+    'startNumber',
+    'requestCodriverData',
+    'outboxId'
+  ],
   entry_tech_status_updated: ['techStatus', 'target'],
   entry_inspection_note_updated: ['target', 'noteUpdated'],
   entry_notes_updated: ['internalNoteUpdated', 'driverNoteUpdated', 'inspectionNoteUpdated'],

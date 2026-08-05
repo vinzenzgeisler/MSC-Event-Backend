@@ -10,7 +10,7 @@ const dashboardSummaryQuerySchema = z.object({
 
 const dashboardDriverLocationsQuerySchema = dashboardSummaryQuerySchema.extend({
   refresh: z.enum(['1', 'true']).optional(),
-  refreshLimit: z.coerce.number().int().min(1).max(10).optional()
+  refreshLimit: z.coerce.number().int().min(1).max(20).optional()
 });
 
 const dashboardWarningsQuerySchema = z.object({
@@ -30,7 +30,7 @@ const dashboardQueueMissingAcceptanceMailsSchema = z.object({
 
 const RECENT_ENTRIES_LIMIT = 10;
 const DRIVER_LOCATION_GEOCODE_DEFAULT_LIMIT = 10;
-const DRIVER_LOCATION_AUTO_GEOCODE_DEFAULT_LIMIT = 3;
+const DRIVER_LOCATION_AUTO_GEOCODE_DEFAULT_LIMIT = 10;
 const GEOCODE_REQUEST_DELAY_MS = 1100;
 
 type DriverLocationQuery = z.infer<typeof dashboardDriverLocationsQuerySchema>;
@@ -1182,6 +1182,7 @@ export const getDashboardDriverLocations = async (query: DriverLocationQuery) =>
         const lng = cached?.status === 'resolved' ? toFiniteNumber(cached.lng) : null;
         return lat === null || lng === null;
       })
+      .sort((left, right) => right.drivers.size - left.drivers.size)
       .slice(0, refreshLimit);
 
     geocodeAttemptedTotal = candidates.length;
@@ -1280,8 +1281,24 @@ export const getDashboardDriverLocations = async (query: DriverLocationQuery) =>
   };
 };
 
+const normalizeGeocodeCountry = (value: string): string => {
+  const normalized = value.trim().toUpperCase();
+  const labels: Record<string, string> = {
+    DE: 'Deutschland',
+    D: 'Deutschland',
+    GER: 'Deutschland',
+    CZ: 'Czechia',
+    CZE: 'Czechia',
+    PL: 'Poland',
+    POL: 'Poland',
+    AT: 'Austria',
+    AUT: 'Austria'
+  };
+  return labels[normalized] ?? value.trim();
+};
+
 const buildGeocodeQuery = (location: { country: string; zip: string; city: string }): string => {
-  const country = location.country || 'Deutschland';
+  const country = normalizeGeocodeCountry(location.country || 'Deutschland');
   return [location.zip, location.city, country].filter(Boolean).join(', ');
 };
 

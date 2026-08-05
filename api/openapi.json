@@ -1379,7 +1379,8 @@
                                     "pending",
                                     "shortlist",
                                     "accepted",
-                                    "rejected"
+                                    "rejected",
+                                    "withdrawn"
                                   ]
                                 },
                                 "registrationStatus": {
@@ -1850,7 +1851,8 @@
                           "pending",
                           "shortlist",
                           "accepted",
-                          "rejected"
+                          "rejected",
+                          "withdrawn"
                         ]
                       },
                       "registrationStatus": {
@@ -5287,8 +5289,15 @@
                       "pending",
                       "shortlist",
                       "accepted",
-                      "rejected"
+                      "rejected",
+                      "withdrawn"
                     ]
+                  },
+                  "withdrawalReason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000,
+                    "description": "Required when acceptanceStatus is withdrawn."
                   },
                   "sendLifecycleMail": {
                     "type": "boolean"
@@ -7996,7 +8005,8 @@
                 "pending",
                 "shortlist",
                 "accepted",
-                "rejected"
+                "rejected",
+                "withdrawn"
               ]
             }
           },
@@ -8474,7 +8484,8 @@
                           "pending",
                           "shortlist",
                           "accepted",
-                          "rejected"
+                          "rejected",
+                          "withdrawn"
                         ]
                       },
                       "registrationStatus": {
@@ -9667,6 +9678,24 @@
           "acceptanceStatus": {
             "type": "string"
           },
+          "withdrawnReason": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "withdrawnAt": {
+            "oneOf": [
+              { "type": "string", "format": "date-time" },
+              { "type": "null" }
+            ]
+          },
+          "withdrawnBy": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ]
+          },
           "paymentStatus": {
             "oneOf": [
               {
@@ -10525,7 +10554,8 @@
               "pending",
               "shortlist",
               "accepted",
-              "rejected"
+              "rejected",
+              "withdrawn"
             ]
           },
           "registrationStatus": {

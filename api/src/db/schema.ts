@@ -203,6 +203,9 @@ export const entry = pgTable(
     driverEmailNorm: text('driver_email_norm'),
     registrationStatus: text('registration_status').notNull(),
     acceptanceStatus: text('acceptance_status').notNull(),
+    withdrawnReason: text('withdrawn_reason'),
+    withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
+    withdrawnBy: text('withdrawn_by'),
     idVerified: boolean('id_verified').notNull().default(false),
     idVerifiedAt: timestamp('id_verified_at', { withTimezone: true }),
     idVerifiedBy: text('id_verified_by'),
@@ -247,7 +250,7 @@ export const entry = pgTable(
     ),
     acceptanceStatusCheck: check(
       'entry_acceptance_status_check',
-      sql`${table.acceptanceStatus} in ('pending', 'shortlist', 'accepted', 'rejected')`
+      sql`${table.acceptanceStatus} in ('pending', 'shortlist', 'accepted', 'rejected', 'withdrawn')`
     ),
     techStatusCheck: check('entry_tech_status_check', sql`${table.techStatus} in ('pending', 'passed', 'failed')`),
     backupTechStatusCheck: check(
@@ -261,7 +264,7 @@ export const entry = pgTable(
     ),
     startNumberUnique: uniqueIndex('entry_start_number_unique')
       .on(table.eventId, table.classId, table.startNumberNorm)
-      .where(sql`${table.startNumberNorm} is not null and ${table.deletedAt} is null`),
+      .where(sql`${table.startNumberNorm} is not null and ${table.deletedAt} is null and ${table.acceptanceStatus} != 'withdrawn'`),
     backupOfEntryIndex: index('entry_backup_of_entry_idx').on(table.backupOfEntryId),
     backupVehicleIndex: index('entry_backup_vehicle_idx').on(table.backupVehicleId),
     registrationGroupIndex: index('entry_registration_group_idx').on(table.registrationGroupId),

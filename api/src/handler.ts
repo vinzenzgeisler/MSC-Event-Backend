@@ -2647,6 +2647,21 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           [{ field: 'acceptanceStatus', code: 'invalid_transition', message: 'Transition is not allowed' }]
         );
       }
+      if (error instanceof Error && error.message === 'START_NUMBER_CONFLICT') {
+        return errorJson(
+          409,
+          'Start number is already assigned in this class',
+          undefined,
+          'START_NUMBER_CONFLICT',
+          [{ field: 'acceptanceStatus', code: 'start_number_conflict', message: 'The historical start number has been reassigned' }]
+        );
+      }
+      if (error instanceof Error && error.message === 'INVALID_STATE') {
+        return errorJson(409, 'Entry is not active');
+      }
+      if (isPgUniqueViolation(error)) {
+        return errorJson(409, 'Start number is already assigned in this class', undefined, 'START_NUMBER_CONFLICT');
+      }
       if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
         return errorJson(409, 'Event is read-only');
       }

@@ -483,7 +483,7 @@ export const getDashboardSummary = async (eventId: string) => {
     db
       .select({ value: sql<number>`count(*)::int` })
       .from(entry)
-      .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`)),
+      .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`, eq(entry.acceptanceStatus, 'accepted'))),
     db
       .select({
         eligibleTotal: sql<number>`count(${entry.id})::int`,
@@ -496,7 +496,14 @@ export const getDashboardSummary = async (eventId: string) => {
     db
       .select({ value: sql<number>`count(*)::int` })
       .from(entry)
-      .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`, eq(entry.checkinIdVerified, false))),
+      .where(
+        and(
+          eq(entry.eventId, eventId),
+          sql`${entry.deletedAt} is null`,
+          eq(entry.acceptanceStatus, 'accepted'),
+          eq(entry.checkinIdVerified, false)
+        )
+      ),
     db
       .select({ value: sql<number>`count(*)::int` })
       .from(emailOutbox)
@@ -520,7 +527,15 @@ export const getDashboardSummary = async (eventId: string) => {
         count: sql<number>`count(${entry.id})::int`
       })
       .from(eventClass)
-      .leftJoin(entry, and(eq(entry.classId, eventClass.id), eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`))
+      .leftJoin(
+        entry,
+        and(
+          eq(entry.classId, eventClass.id),
+          eq(entry.eventId, eventId),
+          sql`${entry.deletedAt} is null`,
+          eq(entry.acceptanceStatus, 'accepted')
+        )
+      )
       .where(eq(eventClass.eventId, eventId))
       .groupBy(eventClass.id, eventClass.name)
       .orderBy(asc(eventClass.name)),
@@ -683,6 +698,7 @@ export const getDashboardOverview = async (query: DashboardOverviewQuery) => {
           count(*) filter (where e.deleted_at is null and e.acceptance_status = 'shortlist')::int as "shortlistTotal",
           count(*) filter (where e.deleted_at is null and e.acceptance_status = 'accepted')::int as "acceptedTotal",
           count(*) filter (where e.deleted_at is null and e.acceptance_status = 'rejected')::int as "rejectedTotal",
+          count(*) filter (where e.deleted_at is null and e.acceptance_status = 'withdrawn')::int as "withdrawnTotal",
           count(*) filter (where e.deleted_at is null and e.registration_status = 'submitted_verified')::int as "verifiedTotal",
           count(*) filter (where e.deleted_at is null and e.registration_status = 'submitted_unverified')::int as "unverifiedTotal",
           count(distinct e.driver_person_id) filter (where e.deleted_at is null)::int as "driverTotal",

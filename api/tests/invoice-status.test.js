@@ -17,6 +17,10 @@ assert.equal(deriveInvoicePaymentStatus(null, 0), 'due');
 
 assert.equal(deriveEntryPaymentStatus(0, 'pending', 'due'), 'paid');
 assert.equal(deriveEntryPaymentStatus(0, 'accepted', 'due'), 'paid');
+assert.equal(deriveEntryPaymentStatus(0, 'rejected', 'paid'), null);
+assert.equal(deriveEntryPaymentStatus(15000, 'rejected', 'paid'), null);
+assert.equal(deriveEntryPaymentStatus(0, 'withdrawn', 'paid'), null);
+assert.equal(deriveEntryPaymentStatus(15000, 'withdrawn', 'paid'), null);
 assert.equal(deriveEntryPaymentStatus(null, 'pending', 'due'), 'due');
 assert.equal(deriveEntryPaymentStatus(undefined, 'accepted', 'paid'), 'due');
 assert.equal(deriveEntryPaymentStatus(7000, 'pending', 'paid'), 'due');
@@ -34,6 +38,30 @@ assert.equal(
     provisionalTotalCents: 15000
   }),
   15000
+);
+assert.equal(
+  resolveEntryTotalCents({
+    acceptanceStatus: 'rejected',
+    focusedBillableTotalCents: 15000,
+    focusedForecastTotalCents: 15000,
+    manualOverrideCents: null,
+    acceptedDriverEntryCount: 0,
+    invoiceTotalCents: 15000,
+    provisionalTotalCents: 15000
+  }),
+  null
+);
+assert.equal(
+  resolveEntryTotalCents({
+    acceptanceStatus: 'withdrawn',
+    focusedBillableTotalCents: 15000,
+    focusedForecastTotalCents: 15000,
+    manualOverrideCents: null,
+    acceptedDriverEntryCount: 0,
+    invoiceTotalCents: 15000,
+    provisionalTotalCents: 15000
+  }),
+  null
 );
 assert.equal(
   resolveEntryTotalCents({

@@ -12,12 +12,385 @@ const dashboardDriverLocationsQuerySchema = dashboardSummaryQuerySchema.extend({
   refreshLimit: z.coerce.number().int().min(1).max(10).optional()
 });
 
+const dashboardWarningsQuerySchema = z.object({
+  eventId: z.string().uuid().optional(),
+  sampleLimit: z.coerce.number().int().min(1).max(25).optional()
+});
 const RECENT_ENTRIES_LIMIT = 10;
 const DRIVER_LOCATION_GEOCODE_DEFAULT_LIMIT = 10;
 const GEOCODE_REQUEST_DELAY_MS = 1100;
 
 type DriverLocationQuery = z.infer<typeof dashboardDriverLocationsQuerySchema>;
+type DashboardWarningsQuery = z.infer<typeof dashboardWarningsQuerySchema>;
 
+type DashboardWarningSeverity = 'ok' | 'warning' | 'critical';
+
+type DashboardWarningCheck = {
+  code: string;
+  severity: DashboardWarningSeverity;
+  title: string;
+  description: string;
+  count: number;
+  status: 'ok' | 'active';
+  actionHint: string | null;
+  samples: Array<Record<string, unknown>>;
+};
+
+const DEFAULT_WARNING_SAMPLE_LIMIT = 10;
+
+const toNumber = (value: unknown): number => Number(value ?? 0) || 0;
+
+const severityRank: Record<DashboardWarningSeverity, number> = {
+  ok: 0,
+  warning: 1,
+  critical: 2
+};
+
+const maxSeverity = (checks: DashboardWarningCheck[]): DashboardWarningSeverity =>
+  checks.reduce<DashboardWarningSeverity>(
+    (current, check) => (severityRank[check.severity] > severityRank[current] ? check.severity : current),
+    'ok'
+  );
+
+const normalizeRows = (rows: unknown): Array<Record<string, unknown>> =>
+  Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+
+const withScope = (eventId: string | undefined) =>
+  eventId ? sql`and e.event_id = ${eventId}` : sql``;
+
+const withOutboxScope = (eventId: string | undefined) =>
+  eventId ? sql`and o.event_id = ${eventId}` : sql``;
+
+const buildWarningCheck = (input: {
+  code: string;
+  severityWhenActive: Exclude<DashboardWarningSeverity, 'ok'>;
+  title: string;
+  description: string;
+  count: number;
+  actionHint: string | null;
+  samples: Array<Record<string, unknown>>;
+}): DashboardWarningCheck => ({
+  code: input.code,
+  severity: input.count > 0 ? input.severityWhenActive : 'ok',
+  title: input.title,
+  description: input.description,
+  count: input.count,
+  status: input.count > 0 ? 'active' : 'ok',
+  actionHint: input.count > 0 ? input.actionHint : null,
+  samples: input.count > 0 ? input.samples : []
+});
+
+export const getDashboardWarnings = async (query: DashboardWarningsQuery) => {
+  const db = await getDb();
+  const sampleLimit = query.sampleLimit ?? DEFAULT_WARNING_SAMPLE_LIMIT;
+
+  if (query.eventId) {
+    const eventRows = await db.select({ id: event.id }).from(event).where(eq(event.id, query.eventId)).limit(1);
+    if (eventRows.length === 0) {
+      throw new Error('EVENT_NOT_FOUND');
+    }
+  }
+
+  const [
+    acceptedWithoutMailRows,
+    acceptedWithoutMailSamples,
+    acceptanceMailWithoutPdfRows,
+    acceptanceMailWithoutPdfSamples,
+    failedOutboxRows,
+    failedOutboxSamples,
+    staleQueuedRows,
+    staleQueuedSamples,
+    stuckSendingRows,
+    stuckSendingSamples,
+    sentWithoutDeliveryRows,
+    sentWithoutDeliverySamples,
+    recentDeliveryFailureRows,
+    recentDeliveryFailureSamples
+  ] = await Promise.all([
+    db.execute(sql`
+      select count(*)::int as count
+      from entry e
+      where e.deleted_at is null
+        and e.acceptance_status = 'accepted'
+        ${withScope(query.eventId)}
+        and not exists (
+          select 1
+          from email_outbox o
+          where o.event_id = e.event_id
+            and o.template_id = 'accepted_open_payment'
+            and o.template_data->>'entryId' = e.id::text
+        )
+    `),
+    db.execute(sql`
+      select ev.name as "eventName",
+             e.id::text as "entryId",
+             to_char(e.updated_at at time zone 'Europe/Berlin', 'YYYY-MM-DD HH24:MI:SS') as "updatedAtBerlin",
+             e.start_number_norm as "startNumber",
+             c.name as "className",
+             trim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '')) as "driverName",
+             left(coalesce(p.email, ''), 2) || '***@' || split_part(coalesce(p.email, ''), '@', 2) as "emailMasked"
+      from entry e
+      join event ev on ev.id = e.event_id
+      join class c on c.id = e.class_id
+      join person p on p.id = e.driver_person_id
+      where e.deleted_at is null
+        and e.acceptance_status = 'accepted'
+        ${withScope(query.eventId)}
+        and not exists (
+          select 1
+          from email_outbox o
+          where o.event_id = e.event_id
+            and o.template_id = 'accepted_open_payment'
+            and o.template_data->>'entryId' = e.id::text
+        )
+      order by e.updated_at desc
+      limit ${sampleLimit}
+    `),
+    db.execute(sql`
+      select count(*)::int as count
+      from entry e
+      join email_outbox o
+        on o.event_id = e.event_id
+       and o.template_id = 'accepted_open_payment'
+       and o.template_data->>'entryId' = e.id::text
+      where e.deleted_at is null
+        and e.acceptance_status = 'accepted'
+        ${withScope(query.eventId)}
+        and not exists (
+          select 1
+          from email_outbox_attachment att
+          where att.outbox_id = o.id
+            and att.source = 'document'
+            and att.content_type = 'application/pdf'
+        )
+    `),
+    db.execute(sql`
+      select ev.name as "eventName",
+             e.id::text as "entryId",
+             o.id::text as "outboxId",
+             to_char(o.created_at at time zone 'Europe/Berlin', 'YYYY-MM-DD HH24:MI:SS') as "outboxCreatedAtBerlin",
+             e.start_number_norm as "startNumber",
+             c.name as "className"
+      from entry e
+      join event ev on ev.id = e.event_id
+      join class c on c.id = e.class_id
+      join email_outbox o
+        on o.event_id = e.event_id
+       and o.template_id = 'accepted_open_payment'
+       and o.template_data->>'entryId' = e.id::text
+      where e.deleted_at is null
+        and e.acceptance_status = 'accepted'
+        ${withScope(query.eventId)}
+        and not exists (
+          select 1
+          from email_outbox_attachment att
+          where att.outbox_id = o.id
+            and att.source = 'document'
+            and att.content_type = 'application/pdf'
+        )
+      order by o.created_at desc
+      limit ${sampleLimit}
+    `),
+    db.execute(sql`
+      select count(*)::int as count
+      from email_outbox o
+      where o.status = 'failed'
+        ${withOutboxScope(query.eventId)}
+    `),
+    db.execute(sql`
+      select o.id::text as "outboxId",
+             ev.name as "eventName",
+             o.template_id as "templateId",
+             left(coalesce(o.to_email, ''), 2) || '***@' || split_part(coalesce(o.to_email, ''), '@', 2) as "emailMasked",
+             o.error_last as "errorLast",
+             o.attempt_count as "attemptCount",
+             to_char(o.updated_at at time zone 'Europe/Berlin', 'YYYY-MM-DD HH24:MI:SS') as "updatedAtBerlin"
+      from email_outbox o
+      left join event ev on ev.id = o.event_id
+      where o.status = 'failed'
+        ${withOutboxScope(query.eventId)}
+      order by o.updated_at desc
+      limit ${sampleLimit}
+    `),
+    db.execute(sql`
+      select count(*)::int as count
+      from email_outbox o
+      where o.status = 'queued'
+        and o.send_after <= now() - interval '15 minutes'
+        ${withOutboxScope(query.eventId)}
+    `),
+    db.execute(sql`
+      select o.id::text as "outboxId",
+             ev.name as "eventName",
+             o.template_id as "templateId",
+             to_char(o.send_after at time zone 'Europe/Berlin', 'YYYY-MM-DD HH24:MI:SS') as "sendAfterBerlin",
+             to_char(o.created_at at time zone 'Europe/Berlin', 'YYYY-MM-DD HH24:MI:SS') as "createdAtBerlin"
+      from email_outbox o
+      left join event ev on ev.id = o.event_id
+      where o.status = 'queued'
+        and o.send_after <= now() - interval '15 minutes'
+        ${withOutboxScope(query.eventId)}
+      order by o.send_after asc
+      limit ${sampleLimit}
+    `),
+    db.execute(sql`
+      select count(*)::int as count
+      from email_outbox o
+      where o.status = 'sending'
+        and o.updated_at <= now() - interval '15 minutes'
+        ${withOutboxScope(query.eventId)}
+    `),
+    db.execute(sql`
+      select o.id::text as "outboxId",
+             ev.name as "eventName",
+             o.template_id as "templateId",
+             o.attempt_count as "attemptCount",
+             to_char(o.updated_at at time zone 'Europe/Berlin', 'YYYY-MM-DD HH24:MI:SS') as "updatedAtBerlin"
+      from email_outbox o
+      left join event ev on ev.id = o.event_id
+      where o.status = 'sending'
+        and o.updated_at <= now() - interval '15 minutes'
+        ${withOutboxScope(query.eventId)}
+      order by o.updated_at asc
+      limit ${sampleLimit}
+    `),
+    db.execute(sql`
+      select count(*)::int as count
+      from email_outbox o
+      where o.status = 'sent'
+        ${withOutboxScope(query.eventId)}
+        and not exists (
+          select 1
+          from email_delivery d
+          where d.outbox_id = o.id
+            and d.status = 'sent'
+        )
+    `),
+    db.execute(sql`
+      select o.id::text as "outboxId",
+             ev.name as "eventName",
+             o.template_id as "templateId",
+             to_char(o.updated_at at time zone 'Europe/Berlin', 'YYYY-MM-DD HH24:MI:SS') as "updatedAtBerlin"
+      from email_outbox o
+      left join event ev on ev.id = o.event_id
+      where o.status = 'sent'
+        ${withOutboxScope(query.eventId)}
+        and not exists (
+          select 1
+          from email_delivery d
+          where d.outbox_id = o.id
+            and d.status = 'sent'
+        )
+      order by o.updated_at desc
+      limit ${sampleLimit}
+    `),
+    db.execute(sql`
+      select count(*)::int as count
+      from email_delivery d
+      join email_outbox o on o.id = d.outbox_id
+      where d.status = 'failed'
+        and d.sent_at >= now() - interval '24 hours'
+        ${withOutboxScope(query.eventId)}
+    `),
+    db.execute(sql`
+      select d.outbox_id::text as "outboxId",
+             ev.name as "eventName",
+             o.template_id as "templateId",
+             d.provider_response as "providerResponse",
+             to_char(d.sent_at at time zone 'Europe/Berlin', 'YYYY-MM-DD HH24:MI:SS') as "failedAtBerlin"
+      from email_delivery d
+      join email_outbox o on o.id = d.outbox_id
+      left join event ev on ev.id = o.event_id
+      where d.status = 'failed'
+        and d.sent_at >= now() - interval '24 hours'
+        ${withOutboxScope(query.eventId)}
+      order by d.sent_at desc
+      limit ${sampleLimit}
+    `)
+  ]);
+
+  const checks: DashboardWarningCheck[] = [
+    buildWarningCheck({
+      code: 'accepted_entry_without_acceptance_mail',
+      severityWhenActive: 'critical',
+      title: 'Zugelassene Nennungen ohne Zulassungsmail',
+      description: 'Aktive zugelassene Nennungen muessen genau ueber eine accepted_open_payment-Outbox-Mail nachvollziehbar sein.',
+      count: toNumber(acceptedWithoutMailRows.rows[0]?.count),
+      actionHint: 'Betroffene Nennungen ueber den Lifecycle-Prozess accepted_open_payment nachqueueen und danach Delivery pruefen.',
+      samples: normalizeRows(acceptedWithoutMailSamples.rows)
+    }),
+    buildWarningCheck({
+      code: 'acceptance_mail_without_pdf_attachment',
+      severityWhenActive: 'critical',
+      title: 'Zulassungsmails ohne PDF-Anhang',
+      description: 'accepted_open_payment-Mails muessen eine generierte Nennbestaetigung als PDF-Anhang enthalten.',
+      count: toNumber(acceptanceMailWithoutPdfRows.rows[0]?.count),
+      actionHint: 'Outbox-Eintrag pruefen und Mail mit korrekt generierter Nennbestaetigung neu erzeugen.',
+      samples: normalizeRows(acceptanceMailWithoutPdfSamples.rows)
+    }),
+    buildWarningCheck({
+      code: 'failed_outbox_mail',
+      severityWhenActive: 'critical',
+      title: 'Fehlgeschlagene Outbox-Mails',
+      description: 'Outbox-Mails mit Status failed werden nicht mehr automatisch zugestellt.',
+      count: toNumber(failedOutboxRows.rows[0]?.count),
+      actionHint: 'Fehlerursache pruefen und passende Outbox-Mails ueber Retry erneut einplanen.',
+      samples: normalizeRows(failedOutboxSamples.rows)
+    }),
+    buildWarningCheck({
+      code: 'stale_queued_outbox_mail',
+      severityWhenActive: 'warning',
+      title: 'Queue-Stau bei E-Mails',
+      description: 'Queued-Outbox-Mails mit faelligem sendAfter sollten zeitnah vom Mail-Worker verarbeitet werden.',
+      count: toNumber(staleQueuedRows.rows[0]?.count),
+      actionHint: 'Mail-Worker/Scheduler pruefen und bei Bedarf Worker manuell starten.',
+      samples: normalizeRows(staleQueuedSamples.rows)
+    }),
+    buildWarningCheck({
+      code: 'stuck_sending_outbox_mail',
+      severityWhenActive: 'critical',
+      title: 'Mails haengen im Sending-Status',
+      description: 'Sending-Outbox-Mails, die laenger als 15 Minuten unveraendert sind, deuten auf einen abgebrochenen Worker-Lauf hin.',
+      count: toNumber(stuckSendingRows.rows[0]?.count),
+      actionHint: 'Outbox-Eintraege und Worker-Logs pruefen; Status korrigieren oder erneut einplanen.',
+      samples: normalizeRows(stuckSendingSamples.rows)
+    }),
+    buildWarningCheck({
+      code: 'sent_outbox_without_delivery',
+      severityWhenActive: 'warning',
+      title: 'Gesendete Mails ohne Delivery-Nachweis',
+      description: 'Sent-Outbox-Mails sollten einen email_delivery-Nachweis mit Status sent besitzen.',
+      count: toNumber(sentWithoutDeliveryRows.rows[0]?.count),
+      actionHint: 'Delivery-Audit pruefen; bei fehlendem Nachweis Provider-/Worker-Antwort kontrollieren.',
+      samples: normalizeRows(sentWithoutDeliverySamples.rows)
+    }),
+    buildWarningCheck({
+      code: 'recent_delivery_failure',
+      severityWhenActive: 'warning',
+      title: 'Neue Zustellfehler in den letzten 24 Stunden',
+      description: 'Aktuelle Delivery-Fehler koennen trotz Retry Hinweise auf Empfaenger- oder Providerprobleme geben.',
+      count: toNumber(recentDeliveryFailureRows.rows[0]?.count),
+      actionHint: 'Provider-Response auswerten und bei Bedarf betroffene Empfaenger kontaktieren oder Retry beobachten.',
+      samples: normalizeRows(recentDeliveryFailureSamples.rows)
+    })
+  ];
+
+  const activeChecks = checks.filter((check) => check.status === 'active');
+  return {
+    checkedAt: new Date().toISOString(),
+    scope: {
+      eventId: query.eventId ?? null
+    },
+    summary: {
+      severity: maxSeverity(checks),
+      activeCheckTotal: activeChecks.length,
+      criticalTotal: activeChecks.filter((check) => check.severity === 'critical').length,
+      warningTotal: activeChecks.filter((check) => check.severity === 'warning').length,
+      issueTotal: activeChecks.reduce((sum, check) => sum + check.count, 0)
+    },
+    checks
+  };
+};
 const toAgeYears = (birthdate: Date | string | null, referenceDate: Date): number | null => {
   if (!birthdate) {
     return null;
@@ -517,4 +890,10 @@ export const validateDashboardDriverLocationsQuery = (query: Record<string, stri
     eventId: query.eventId,
     refresh: query.refresh,
     refreshLimit: query.refreshLimit
+  });
+
+export const validateDashboardWarningsQuery = (query: Record<string, string | undefined>) =>
+  dashboardWarningsQuerySchema.parse({
+    eventId: query.eventId,
+    sampleLimit: query.sampleLimit
   });

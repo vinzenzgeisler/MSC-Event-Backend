@@ -175,8 +175,10 @@ import {
 import {
   getDashboardDriverLocations,
   getDashboardSummary,
+  getDashboardWarnings,
   validateDashboardDriverLocationsQuery,
-  validateDashboardSummaryQuery
+  validateDashboardSummaryQuery,
+  validateDashboardWarningsQuery
 } from './routes/adminDashboard';
 import {
   createTechCheckBatchDocument,
@@ -910,6 +912,26 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  if (method === 'GET' && path === '/admin/dashboard/warnings') {
+    const auth = getAuthContext(event);
+    if (!hasPermissionOrAutomation(auth, 'dashboard.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const query = validateDashboardWarningsQuery(event.queryStringParameters ?? {});
+      const result = await getDashboardWarnings(query);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      return errorJson(500, 'Get dashboard warnings failed');
+    }
+  }
   if (method === 'GET' && path === '/admin/dashboard/driver-locations') {
     const auth = getAuthContext(event);
     if (!hasPermissionOrAutomation(auth, 'dashboard.read')) {

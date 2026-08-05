@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import { sql } from 'drizzle-orm';
 import { getDb } from './db/client';
 import {
+  canReadEventClassOptions,
   getAuthContext,
   hasAnyGroup,
   hasGroup,
@@ -1427,7 +1428,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const eventClassesMatch = path.match(/^\/admin\/events\/([^/]+)\/classes$/);
   if (method === 'GET' && eventClassesMatch) {
     const auth = getAuthContext(event);
-    if (!hasPermissionOrAutomation(auth, 'settings.read')) {
+    if (!canReadEventClassOptions(auth)) {
       return errorJson(403, 'Forbidden');
     }
     try {

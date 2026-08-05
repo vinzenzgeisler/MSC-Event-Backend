@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const {
+  canReadEventClassOptions,
   getAuthContext,
   hasAutomationPermission,
   hasPermission,
@@ -146,6 +147,47 @@ assert.equal(hasPermission(admin, 'entries.delete'), true);
 assert.equal(hasPermission(admin, 'iam.write'), true);
 assert.equal(hasSupportRegistrationRead(admin), true);
 assert.equal(hasSupportEntryDelete(admin), true);
+
+// Event class options are settings metadata used by the entries class filter.
+const editor = getAuthContext(eventWithClaims({
+  sub: 'editor-id',
+  'cognito:groups': '["editor"]'
+}));
+assert.equal(canReadEventClassOptions(editor), true, 'editor can populate the entries class filter');
+assert.equal(hasPermission(editor, 'settings.read'), false, 'editor gains no settings permission');
+assert.equal(canReadEventClassOptions(admin), true, 'settings reader remains authorized');
+
+const classFilterViewer = getAuthContext(eventWithClaims({
+  sub: 'class-filter-viewer-id',
+  'cognito:groups': '["viewer"]'
+}));
+assert.equal(canReadEventClassOptions(classFilterViewer), true, 'viewer can populate the entries class filter');
+assert.equal(hasPermission(classFilterViewer, 'settings.read'), false, 'viewer gains no settings permission');
+assert.equal(hasPermission(classFilterViewer, 'settings.write'), false, 'viewer gains no settings write permission');
+
+const settingsReader = getAuthContext(eventWithClaims({
+  client_id: 'settings-reader',
+  scope: `${MSC_SUPPORT_SCOPE_PREFIX}settings.read`
+}));
+assert.equal(canReadEventClassOptions(settingsReader), true, 'settings-only reader remains authorized');
+assert.equal(hasPermission(settingsReader, 'entries.read'), false);
+
+const unrelatedRole = getAuthContext(eventWithClaims({
+  sub: 'inspector-id',
+  'cognito:groups': '["technical_inspector"]'
+}));
+assert.equal(canReadEventClassOptions(unrelatedRole), false, 'unrelated role remains denied');
+assert.equal(
+  canReadEventClassOptions(getAuthContext(eventWithClaims({}))),
+  false,
+  'anonymous caller remains denied'
+);
+
+const classOptionsAutomation = getAuthContext(eventWithClaims({
+  client_id: 'automation-client',
+  scope: automationScopeForPermission('settings.read')
+}));
+assert.equal(canReadEventClassOptions(classOptionsAutomation), true, 'existing read automation remains authorized');
 
 // Viewer: limited permissions
 const viewer = getAuthContext(eventWithClaims({

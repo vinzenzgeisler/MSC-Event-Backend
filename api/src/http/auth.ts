@@ -243,6 +243,11 @@ export const hasPermissionOrAutomation = (
 ): boolean => hasPermission(ctx, permission) ||
   (permission.endsWith('.read') && hasAutomationPermission(ctx, permission));
 
+export const canReadEventClassOptions = (ctx: AuthContext): boolean =>
+  (['settings.read', 'entries.read'] satisfies AdminReadPermission[]).some((permission) =>
+    hasPermissionOrAutomation(ctx, permission)
+  );
+
 const approvalActionIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const payloadHashPattern = /^[a-f0-9]{64}$/;

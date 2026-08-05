@@ -1,6 +1,11 @@
 const assert = require('node:assert/strict');
 const ExcelJS = require('exceljs');
-const { parseMarshalAssignmentCell, parseMarshalWorkbookBuffer } = require('../dist/routes/adminMarshals');
+const {
+  parseMarshalAssignmentCell,
+  parseMarshalWorkbookBuffer,
+  resolveMarshalEmergencyTargetStaff,
+  validateMarshalConfigInput
+} = require('../dist/routes/adminMarshals');
 const { getAuthContext, hasPermission } = require('../dist/http/auth');
 
 const eventWithClaims = (claims) => ({ requestContext: { authorizer: { jwt: { claims } } } });
@@ -23,6 +28,37 @@ async function run() {
   });
   assert.equal(parseMarshalAssignmentCell('evtl 2/3').commitmentStatus, 'tentative');
   assert.equal(parseMarshalAssignmentCell('nein').commitmentStatus, 'declined');
+
+  const config = {
+    eventId: '11111111-1111-4111-8111-111111111111',
+    sections: [{ code: '1', name: 'Abschnitt 1', leaderCode: 'AL1', sortOrder: 1 }],
+    posts: [{ sectionCode: '1', code: '1/1', targetStaff: 3, emergencyTargetStaff: 2, mapX: 0, mapY: 1000, isActive: true, sortOrder: 1 }]
+  };
+  assert.deepEqual(validateMarshalConfigInput(config), config);
+  assert.throws(() => validateMarshalConfigInput({
+    ...config, posts: [{ ...config.posts[0], targetStaff: 2, emergencyTargetStaff: 3 }]
+  }), /Emergency target staff must not exceed normal target staff/);
+  assert.throws(() => validateMarshalConfigInput({
+    ...config, posts: [{ ...config.posts[0], mapY: undefined }]
+  }), /Map coordinates must be provided together/);
+  assert.throws(() => validateMarshalConfigInput({
+    ...config, posts: [{ ...config.posts[0], mapX: null }]
+  }), /Map coordinates must be provided together/);
+  assert.throws(() => validateMarshalConfigInput({
+    ...config, posts: [{ ...config.posts[0], mapX: -1 }]
+  }));
+  assert.throws(() => validateMarshalConfigInput({
+    ...config, posts: [{ ...config.posts[0], mapY: 1001 }]
+  }));
+  const legacyConfig = {
+    ...config,
+    posts: [{ sectionCode: '1', code: '1/1', targetStaff: 3, isActive: true, sortOrder: 1 }]
+  };
+  assert.deepEqual(validateMarshalConfigInput(legacyConfig), legacyConfig);
+  assert.equal(resolveMarshalEmergencyTargetStaff(3, 2), 2);
+  assert.equal(resolveMarshalEmergencyTargetStaff(2, 2), 2);
+  assert.equal(resolveMarshalEmergencyTargetStaff(2, 4), 2);
+  assert.equal(resolveMarshalEmergencyTargetStaff(2, 4, 3), 3);
 
   const workbook = new ExcelJS.Workbook();
   const master = workbook.addWorksheet('Vorlage Lily 2022');

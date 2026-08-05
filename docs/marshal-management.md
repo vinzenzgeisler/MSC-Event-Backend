@@ -14,6 +14,10 @@ Das Admin-Modul verwaltet Helferstammdaten unabhängig von Nennungs-Personen sow
 
 Ein Event wird beim ersten Zugriff idempotent mit Samstag und Sonntag, den vier Abschnitten `1` bis `4`, den Abschnittsleitern `AL1` bis `AL4` sowie den Posten aus dem 2025er Postenplan angelegt. Die historischen Codes `5/1` bis `5/3` bleiben sichtbar, sind organisatorisch aber Abschnitt 4 zugeordnet.
 
+Jeder Posten besitzt zwei Planungsziele: `targetStaff` ist die reguläre Sollstärke, `emergencyTargetStaff` die positive Notbesetzung, die höchstens der regulären Sollstärke entsprechen darf. `mapX` und `mapY` positionieren den Posten optional auf der Planungskarte. Beide Koordinaten werden gemeinsam als ganze, auf `0` bis `1000` normalisierte Werte gespeichert oder sind gemeinsam `null`.
+
+Der im Frontend ausgewählte Plan (regulär oder Notbesetzung) bestimmt ausschließlich, welches Soll für die Besetzungsanzeige und Unterdeckungsberechnung verwendet wird. Die Auswahl erzeugt keine zweite Zuweisungsmenge und verändert weder Personen noch Tageszuweisungen. Sie wird nicht als Teil der Postenkonfiguration persistiert.
+
 ## API
 
 - `GET /admin/marshals/workspace?eventId=...`
@@ -28,6 +32,8 @@ Ein Event wird beim ersten Zugriff idempotent mit Samstag und Sonntag, den vier 
 - `GET /admin/marshals/print`
 
 Die serverseitige Autorisierung ist verbindlich; ausgeblendete UI-Elemente sind nur eine zusätzliche Bedienhilfe.
+
+`GET /admin/marshals/workspace` liefert für jeden Posten `emergencyTargetStaff`, `mapX` und `mapY`. Beim Konfigurations-Update sind diese Felder für die Kompatibilität mit älteren Clients optional. Für einen neuen Posten fällt ein fehlendes `emergencyTargetStaff` auf `targetStaff` zurück. Bei einem bestehenden Posten bleibt ein nicht übermitteltes `emergencyTargetStaff` unverändert, solange es die neue reguläre Sollstärke nicht überschreitet. Senkt ein älterer Client `targetStaff` unter die gespeicherte Notbesetzung, wird diese auf die neue reguläre Sollstärke begrenzt. Nicht übermittelte Kartenkoordinaten bleiben unverändert; ein explizites Koordinatenpaar `null`/`null` entfernt die Kartenposition.
 
 ## Excel-Import
 

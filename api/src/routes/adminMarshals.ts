@@ -56,17 +56,31 @@ const assignmentInputSchema = z.object({
   })).max(2)
 });
 
+const configPostInputSchema = z.object({
+  id: z.string().uuid().optional(), sectionCode: z.string().trim().min(1).max(20), code: z.string().trim().min(1).max(30),
+  description: z.string().trim().max(300).nullable().optional(), targetStaff: z.number().int().min(1).max(20),
+  emergencyTargetStaff: z.number().int().min(1).max(20).optional(),
+  mapX: z.number().int().min(0).max(1000).nullable().optional(),
+  mapY: z.number().int().min(0).max(1000).nullable().optional(),
+  isActive: z.boolean(), sortOrder: z.number().int().min(0).max(1000)
+}).superRefine((post, context) => {
+  if (post.emergencyTargetStaff !== undefined && post.emergencyTargetStaff > post.targetStaff) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['emergencyTargetStaff'], message: 'Emergency target staff must not exceed normal target staff' });
+  }
+  const hasMapX = post.mapX !== undefined;
+  const hasMapY = post.mapY !== undefined;
+  if (hasMapX !== hasMapY || (hasMapX && ((post.mapX === null) !== (post.mapY === null)))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['mapX'], message: 'Map coordinates must be provided together or both be null' });
+  }
+});
+
 const configInputSchema = z.object({
   eventId: z.string().uuid(),
   sections: z.array(z.object({
     id: z.string().uuid().optional(), code: z.string().trim().min(1).max(20), name: z.string().trim().min(1).max(100),
     leaderCode: z.string().trim().min(1).max(20), sortOrder: z.number().int().min(1).max(100)
   })).min(1).max(10),
-  posts: z.array(z.object({
-    id: z.string().uuid().optional(), sectionCode: z.string().trim().min(1).max(20), code: z.string().trim().min(1).max(30),
-    description: z.string().trim().max(300).nullable().optional(), targetStaff: z.number().int().min(1).max(20),
-    isActive: z.boolean(), sortOrder: z.number().int().min(0).max(1000)
-  })).max(200)
+  posts: z.array(configPostInputSchema).max(200)
 });
 
 const trainingInputSchema = z.object({
@@ -90,6 +104,9 @@ export const validateMarshalConfigInput = (value: unknown) => configInputSchema.
 export const validateMarshalTrainingInput = (value: unknown) => trainingInputSchema.parse(value);
 export const validateMarshalTrainingParticipantInput = (value: unknown) => trainingParticipantSchema.parse(value);
 export const validateMarshalImportInput = (value: unknown) => importInputSchema.parse(value);
+
+export const resolveMarshalEmergencyTargetStaff = (storedEmergencyTargetStaff: number, targetStaff: number, emergencyTargetStaff?: number) =>
+  emergencyTargetStaff ?? Math.min(storedEmergencyTargetStaff, targetStaff);
 
 const defaultPostCodes = [
   ...Array.from({ length: 6 }, (_, i) => `1/${i + 1}`),
@@ -320,7 +337,7 @@ export const ensureMarshalEventStructure = async (eventId: string) => {
   for (const [sortOrder, code] of defaultPostCodes.entries()) {
     const sectionCode = code.startsWith('5/') ? '4' : code.split('/')[0];
     const section = sectionByCode.get(sectionCode);
-    if (section) await db.insert(marshalPost).values({ eventId, sectionId: section.id, code, targetStaff: 2, sortOrder }).onConflictDoNothing();
+    if (section) await db.insert(marshalPost).values({ eventId, sectionId: section.id, code, targetStaff: 2, emergencyTargetStaff: 2, sortOrder }).onConflictDoNothing();
   }
 };
 
@@ -407,8 +424,16 @@ export const replaceMarshalConfig = async (input: z.infer<typeof configInputSche
   for (const post of input.posts) {
     const sectionId = sectionByCode.get(post.sectionCode);
     if (!sectionId) throw new Error('MARSHAL_SECTION_NOT_FOUND');
-    await db.insert(marshalPost).values({ eventId: input.eventId, sectionId, code: post.code, description: post.description, targetStaff: post.targetStaff, isActive: post.isActive, sortOrder: post.sortOrder })
-      .onConflictDoUpdate({ target: [marshalPost.eventId, marshalPost.code], set: { sectionId, description: post.description, targetStaff: post.targetStaff, isActive: post.isActive, sortOrder: post.sortOrder, updatedAt: new Date() } });
+    await db.insert(marshalPost).values({
+      eventId: input.eventId, sectionId, code: post.code, description: post.description, targetStaff: post.targetStaff,
+      emergencyTargetStaff: post.emergencyTargetStaff ?? post.targetStaff, mapX: post.mapX ?? null, mapY: post.mapY ?? null,
+      isActive: post.isActive, sortOrder: post.sortOrder
+    }).onConflictDoUpdate({ target: [marshalPost.eventId, marshalPost.code], set: {
+      sectionId, description: post.description, targetStaff: post.targetStaff,
+      emergencyTargetStaff: post.emergencyTargetStaff ?? sql`least(${marshalPost.emergencyTargetStaff}, ${post.targetStaff})`,
+      ...(post.mapX !== undefined ? { mapX: post.mapX, mapY: post.mapY! } : {}),
+      isActive: post.isActive, sortOrder: post.sortOrder, updatedAt: new Date()
+    } });
   }
   await writeAuditLog(db as never, { eventId: input.eventId, actorUserId, action: 'marshal_config_updated', entityType: 'event', entityId: input.eventId });
 };

@@ -875,6 +875,9 @@ export const marshalPost = pgTable(
     code: text('code').notNull(),
     description: text('description'),
     targetStaff: integer('target_staff').notNull().default(2),
+    emergencyTargetStaff: integer('emergency_target_staff').notNull().default(1),
+    mapX: integer('map_x'),
+    mapY: integer('map_y'),
     isActive: boolean('is_active').notNull().default(true),
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -883,7 +886,9 @@ export const marshalPost = pgTable(
   (table) => ({
     eventCodeUnique: uniqueIndex('marshal_post_event_code_unique').on(table.eventId, table.code),
     sectionSortIndex: index('marshal_post_section_sort_idx').on(table.sectionId, table.sortOrder),
-    targetStaffCheck: check('marshal_post_target_staff_check', sql`${table.targetStaff} > 0`)
+    targetStaffCheck: check('marshal_post_target_staff_check', sql`${table.targetStaff} > 0`),
+    emergencyTargetStaffCheck: check('marshal_post_emergency_target_staff_check', sql`${table.emergencyTargetStaff} > 0 and ${table.emergencyTargetStaff} <= ${table.targetStaff}`),
+    mapCoordinatesCheck: check('marshal_post_map_coordinates_check', sql`(${table.mapX} is null and ${table.mapY} is null) or (${table.mapX} is not null and ${table.mapY} is not null and ${table.mapX} between 0 and 1000 and ${table.mapY} between 0 and 1000)`)
   })
 );
 

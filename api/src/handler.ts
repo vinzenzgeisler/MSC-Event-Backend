@@ -177,9 +177,13 @@ import {
 } from './routes/adminMail';
 import {
   getDashboardDriverLocations,
+  getDashboardOverview,
+  queueMissingAcceptanceMailsFromDashboard,
   getDashboardSummary,
   getDashboardWarnings,
   validateDashboardDriverLocationsQuery,
+  validateDashboardOverviewQuery,
+  validateDashboardQueueMissingAcceptanceMailsInput,
   validateDashboardSummaryQuery,
   validateDashboardWarningsQuery
 } from './routes/adminDashboard';
@@ -894,6 +898,49 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     });
   }
 
+  if (method === 'GET' && path === '/admin/dashboard/overview') {
+    const auth = getAuthContext(event);
+    if (!hasPermissionOrAutomation(auth, 'dashboard.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const query = validateDashboardOverviewQuery(event.queryStringParameters ?? {});
+      const result = await getDashboardOverview(query);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      return errorJson(500, 'Get dashboard overview failed');
+    }
+  }
+  if (method === 'POST' && path === '/admin/dashboard/actions/queue-missing-lifecycle-mails') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'communication.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const input = validateDashboardQueueMissingAcceptanceMailsInput(parseJsonBody(event));
+      const result = await queueMissingAcceptanceMailsFromDashboard(input, auth.email ?? auth.sub ?? null);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      return errorJson(500, 'Queue missing lifecycle mails failed');
+    }
+  }
   if (method === 'GET' && path === '/admin/dashboard/summary') {
     const auth = getAuthContext(event);
     if (!hasPermissionOrAutomation(auth, 'dashboard.read')) {

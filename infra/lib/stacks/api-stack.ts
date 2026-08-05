@@ -471,6 +471,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/dashboard/overview',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/dashboard/summary',
       methods: [apigwv2.HttpMethod.GET],
       integration,
@@ -483,6 +490,13 @@ export class ApiStack extends Stack {
       integration,
       authorizer: jwtAuthorizer
     });
+    this.api.addRoutes({
+      path: '/admin/dashboard/actions/queue-missing-lifecycle-mails',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
     this.api.addRoutes({
       path: '/admin/dashboard/driver-locations',
       methods: [apigwv2.HttpMethod.GET],

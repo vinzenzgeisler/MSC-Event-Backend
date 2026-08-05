@@ -301,6 +301,8 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       techStatus: entry.techStatus,
       techCheckedAt: entry.techCheckedAt,
       techCheckedBy: entry.techCheckedBy,
+      waiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      waiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
       startNumberNorm: entry.startNumberNorm,
       orgaCode: entry.orgaCode,
       confirmationMailSentAt: entry.confirmationMailSentAt,
@@ -428,7 +430,13 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
     const vehicleLabel = toVehicleLabel(row.vehicleMake, row.vehicleModel, row.startNumberNorm);
     const vehicleThumbUrl = await getVehicleThumbUrl(row.vehicleImageS3Key);
     const shouldRedactSensitiveFields = redactSensitiveFields || row.driverProcessingRestricted || row.driverObjectionFlag;
-    const { invoicePricingSnapshot: _pricingSnapshot, invoicePaymentStatus: _invoicePaymentStatus, ...publicRow } = row;
+    const {
+      invoicePricingSnapshot: _pricingSnapshot,
+      invoicePaymentStatus: _invoicePaymentStatus,
+      waiverSignedDocumentId: _waiverSignedDocumentId,
+      waiverSignedAt: _waiverSignedAt,
+      ...publicRow
+    } = row;
     return {
       ...publicRow,
       paymentStatus,
@@ -437,6 +445,11 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       vehicleThumbUrl,
       confirmationMailSent: row.confirmationMailSentAt !== null,
       confirmationMailVerified: row.confirmationMailVerifiedAt !== null,
+      waiverSigned: {
+        signed: Boolean(row.waiverSignedDocumentId),
+        signedAt: row.waiverSignedAt,
+        documentId: row.waiverSignedDocumentId
+      },
       deletedAt: row.deletedAt,
       deletedBy: row.deletedBy,
       deletedByUserId: row.deletedBy,
@@ -486,6 +499,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       techStatus: entry.techStatus,
       techCheckedAt: entry.techCheckedAt,
       techCheckedBy: entry.techCheckedBy,
+      waiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      waiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
       startNumberNorm: entry.startNumberNorm,
       orgaCode: entry.orgaCode,
       isBackupVehicle: entry.isBackupVehicle,
@@ -629,6 +644,10 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .where(eq(document.entryId, entryId))
     .orderBy(sql`${document.createdAt} desc`, sql`${document.id} desc`);
 
+  const driverSignedWaiverDocument = documentRows.find(
+    (row) => row.type === 'waiver_signed' && row.status === 'generated' && row.driverPersonId === current.driverPersonId
+  ) ?? null;
+
   const driverEntryRows = await db
     .select({
       id: entry.id,
@@ -759,6 +778,11 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       backupVehicleThumbUrl,
       confirmationMailSent: current.confirmationMailSentAt !== null,
       confirmationMailVerified: current.confirmationMailVerifiedAt !== null,
+      waiverSigned: {
+        signed: Boolean(driverSignedWaiverDocument),
+        signedAt: driverSignedWaiverDocument?.createdAt ?? null,
+        documentId: driverSignedWaiverDocument?.id ?? null
+      },
       person: {
         driver: {
           firstName: driverRestricted ? null : current.driverFirstName,

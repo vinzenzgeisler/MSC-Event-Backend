@@ -860,11 +860,11 @@ export const getDashboardOverview = async (query: DashboardOverviewQuery) => {
           where e.event_id = ${query.eventId} and e.deleted_at is null
         )
         select
-          count(distinct driver_id)::int as "driverTotal",
-          count(distinct location_key) filter (where country <> '' or zip <> '' or city <> '')::int as "locationTotal",
-          count(distinct driver_id) filter (where country = '' and zip = '' and city = '')::int as "missingAddressDriverTotal",
-          count(distinct l.location_key) filter (where (country <> '' or zip <> '' or city <> '') and g.status = 'resolved')::int as "resolvedLocationTotal",
-          count(distinct l.location_key) filter (where (country <> '' or zip <> '' or city <> '') and (g.location_key is null or g.status <> 'resolved'))::int as "pendingLocationTotal"
+          count(distinct l.driver_id)::int as "driverTotal",
+          count(distinct l.location_key) filter (where l.country <> '' or l.zip <> '' or l.city <> '')::int as "locationTotal",
+          count(distinct l.driver_id) filter (where l.country = '' and l.zip = '' and l.city = '')::int as "missingAddressDriverTotal",
+          count(distinct l.location_key) filter (where (l.country <> '' or l.zip <> '' or l.city <> '') and g.status = 'resolved')::int as "resolvedLocationTotal",
+          count(distinct l.location_key) filter (where (l.country <> '' or l.zip <> '' or l.city <> '') and (g.location_key is null or g.status <> 'resolved'))::int as "pendingLocationTotal"
         from locations l
         left join geo_location_cache g on g.location_key = l.location_key
       `)

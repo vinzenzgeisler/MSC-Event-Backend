@@ -827,6 +827,17 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
 
 export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch, actorUserId: string | null) => {
   const db = await getDb();
+  const shouldQueueLifecycleMail = input.sendLifecycleMail && input.acceptanceStatus !== 'shortlist';
+  const lifecycleEventType =
+    input.lifecycleEventType ??
+    (input.acceptanceStatus === 'accepted'
+      ? 'accepted_open_payment'
+      : input.acceptanceStatus === 'rejected'
+        ? 'rejected'
+        : undefined);
+  if (shouldQueueLifecycleMail && !lifecycleEventType) {
+    throw new Error('LIFECYCLE_EVENT_TYPE_REQUIRED');
+  }
   const rows = await db
     .select({
       id: entry.id,
@@ -873,16 +884,15 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
     actorUserId
   );
 
-  const shouldQueueLifecycleMail = input.sendLifecycleMail && input.acceptanceStatus !== 'shortlist';
   if (shouldQueueLifecycleMail) {
-    if (!input.lifecycleEventType) {
+    if (!lifecycleEventType) {
       throw new Error('LIFECYCLE_EVENT_TYPE_REQUIRED');
     }
     await queueLifecycleMail(
       {
         eventId: existing.eventId,
         entryId,
-        eventType: input.lifecycleEventType,
+        eventType: lifecycleEventType,
         allowDuplicate: false,
         includeDriverNote: input.includeDriverNoteInLifecycleMail
       },

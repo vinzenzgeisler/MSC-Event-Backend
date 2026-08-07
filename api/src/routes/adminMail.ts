@@ -19,7 +19,7 @@ import {
 } from '../db/schema';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { writeAuditLog } from '../audit/log';
-import { getTemplateVersion } from '../mail/templateStore';
+import { getPublishedTemplateVersion, getTemplateVersion } from '../mail/templateStore';
 import { buildPublicVerificationUrl } from '../mail/verificationUrl';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
@@ -1160,7 +1160,10 @@ const resolveTemplate = async (
   requestedVersion: number | undefined,
   subjectOverride?: string
 ) => {
-  const template = await getTemplateVersion(templateKey, requestedVersion);
+  // No explicit version means "send whatever is currently live" — that must
+  // never resolve to an unpublished draft edit sitting on top of it.
+  const template =
+    requestedVersion === undefined ? await getPublishedTemplateVersion(templateKey) : await getTemplateVersion(templateKey, requestedVersion);
   if (!template) {
     throw new Error('TEMPLATE_NOT_FOUND');
   }
@@ -2866,7 +2869,20 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
 };
 
 export const previewMailTemplate = async (input: TemplatePreviewInput) => {
-  const template = await resolveTemplate(input.templateKey, undefined);
+  // Preview intentionally shows the latest stored version (including an
+  // unpublished draft an admin is iterating on), unlike a real send.
+  const storedTemplate = await getTemplateVersion(input.templateKey);
+  if (!storedTemplate) {
+    throw new Error('TEMPLATE_NOT_FOUND');
+  }
+  const template = {
+    templateKey: storedTemplate.templateKey,
+    templateVersion: storedTemplate.version,
+    subjectTemplate: storedTemplate.subjectTemplate,
+    bodyTemplate: storedTemplate.bodyTextTemplate,
+    bodyHtmlTemplate: storedTemplate.bodyHtmlTemplate,
+    bodyTextTemplate: storedTemplate.bodyTextTemplate
+  };
   const contract = getTemplateContract(input.templateKey);
   const previewEventId =
     (input.sampleData && isNonEmptyString(input.sampleData.eventId) ? input.sampleData.eventId : null) ??

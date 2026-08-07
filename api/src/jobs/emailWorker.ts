@@ -224,6 +224,7 @@ const queueEmailConfirmationReminders = async (limit: number, reminderDelayDays:
       if (error instanceof DuplicateRequestError) {
         continue;
       }
+      console.error(`queueEmailConfirmationReminders failed for entry ${row.entry_id}:`, error);
     }
   }
   return queued;
@@ -274,6 +275,7 @@ const queueAcceptedPaidCompletedMails = async (limit: number): Promise<number> =
       if (error instanceof DuplicateRequestError) {
         continue;
       }
+      console.error(`queueAcceptedPaidCompletedMails failed for entry ${row.entry_id}:`, error);
     }
   }
   return queued;

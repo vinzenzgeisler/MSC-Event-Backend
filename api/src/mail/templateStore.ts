@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { emailTemplate, emailTemplateVersion } from '../db/schema';
 
@@ -46,6 +46,46 @@ export const getTemplateVersion = async (
   }
 
   const selected = version === undefined ? rows[rows.length - 1] : rows[0];
+  return {
+    ...selected,
+    bodyHtmlTemplate: selected.bodyHtmlTemplate ?? selected.bodyTemplate,
+    bodyTextTemplate: selected.bodyTextTemplate ?? selected.bodyTemplate,
+    status: selected.status as 'draft' | 'published'
+  };
+};
+
+// Unlike getTemplateVersion(key) with no version, this ignores newer draft
+// versions so unattended sends never pick up an unpublished edit.
+export const getPublishedTemplateVersion = async (templateKey: string): Promise<StoredTemplateVersion | null> => {
+  const db = await getDb();
+
+  const rows = await db
+    .select({
+      templateKey: emailTemplate.templateKey,
+      version: emailTemplateVersion.version,
+      subjectTemplate: emailTemplateVersion.subjectTemplate,
+      bodyTemplate: emailTemplateVersion.bodyTemplate,
+      bodyHtmlTemplate: emailTemplateVersion.bodyHtmlTemplate,
+      bodyTextTemplate: emailTemplateVersion.bodyTextTemplate,
+      status: emailTemplateVersion.status
+    })
+    .from(emailTemplate)
+    .innerJoin(emailTemplateVersion, eq(emailTemplateVersion.templateId, emailTemplate.id))
+    .where(
+      and(
+        eq(emailTemplate.templateKey, templateKey),
+        eq(emailTemplate.isActive, true),
+        eq(emailTemplateVersion.status, 'published')
+      )
+    )
+    .orderBy(desc(emailTemplateVersion.version))
+    .limit(1);
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const selected = rows[0];
   return {
     ...selected,
     bodyHtmlTemplate: selected.bodyHtmlTemplate ?? selected.bodyTemplate,

@@ -978,8 +978,15 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
         sessionId: current.id
       });
     }
-  } catch {
-    // Mail failure must never abort the signing session
+  } catch (error) {
+    // Mail failure must never abort the signing session, but it must leave a trace.
+    await db
+      .update(signingSession)
+      .set({
+        errorLast: error instanceof Error ? `WAIVER_MAIL_QUEUE_FAILED:${error.message}` : 'WAIVER_MAIL_QUEUE_FAILED',
+        updatedAt: new Date()
+      })
+      .where(eq(signingSession.id, current.id));
   }
 
   return updated;
@@ -1019,7 +1026,8 @@ const queueWaiverSignedMail = async (
     .orderBy(desc(emailTemplateVersion.version))
     .limit(1);
   if (templateRows.length === 0) {
-    return; // Template not yet migrated — skip silently
+    // Surfaced by the caller onto signingSession.errorLast instead of vanishing.
+    throw new Error('WAIVER_SIGNED_TEMPLATE_NOT_PUBLISHED');
   }
   const { templateKey, version, subjectTemplate } = templateRows[0];
 

@@ -14,6 +14,7 @@ import {
   eventPricingRule,
   invoice,
   invoicePayment,
+  entryStartNumberReservation,
   person,
   registrationGroup,
   registrationGroupEmailVerification,
@@ -21,6 +22,12 @@ import {
 } from '../db/schema';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
+import {
+  assertBackupClassCompatible,
+  assertUniqueEffectiveRunGroups,
+  reservedStartNumberClassIds,
+  type RunGroupEntry
+} from '../domain/runGroups';
 import { deriveEntryPaymentStatus, deriveInvoicePaymentStatus, resolveEntryTotalCents } from '../domain/invoiceStatus';
 import { getEntryLineTotalCents, getForecastEntryLineTotalCents, getManualEntryTotalOverrideCents } from '../domain/pricingSnapshot';
 import { isPgUniqueViolation } from '../http/dbErrors';
@@ -90,6 +97,10 @@ const entryClassPatchSchema = z.object({
   allowVehicleTypeChange: z.boolean().optional().default(true)
 });
 
+const entryBackupClassPatchSchema = z.object({
+  backupClassId: z.string().uuid()
+});
+
 const entryAssignmentPatchSchema = z.object({
   classId: z.string().uuid(),
   startNumber: z.string().trim().min(1).max(6).regex(/^[a-z0-9]+$/i).transform((value) => value.toUpperCase()),
@@ -98,6 +109,71 @@ const entryAssignmentPatchSchema = z.object({
   sendSystemMail: z.literal(true),
   requestCodriverData: z.boolean().optional().default(false)
 });
+
+type EntryRuleOverride = RunGroupEntry;
+
+const assertActiveDriverEntryRules = async (
+  tx: any,
+  eventId: string,
+  driverPersonId: string,
+  overrides: EntryRuleOverride[] = []
+) => {
+  const [classes, activeEntries] = await Promise.all([
+    tx
+      .select({ id: eventClass.id, eventId: eventClass.eventId, runGroupId: eventClass.runGroupId })
+      .from(eventClass)
+      .where(eq(eventClass.eventId, eventId)),
+    tx
+      .select({
+        id: entry.id,
+        driverPersonId: entry.driverPersonId,
+        classId: entry.classId,
+        backupClassId: entry.backupClassId,
+        isBackupVehicle: entry.isBackupVehicle
+      })
+      .from(entry)
+      .where(
+        and(
+          eq(entry.eventId, eventId),
+          eq(entry.driverPersonId, driverPersonId),
+          sql`${entry.deletedAt} is null`,
+          ne(entry.acceptanceStatus, 'withdrawn')
+        )
+      )
+  ]);
+  const overridesById = new Map(overrides.map((item) => [item.id, item]));
+  const merged = activeEntries.map((item: RunGroupEntry) => overridesById.get(item.id) ?? item);
+  for (const override of overrides) {
+    if (!activeEntries.some((item: RunGroupEntry) => item.id === override.id)) merged.push(override);
+  }
+  assertUniqueEffectiveRunGroups(merged, new Map(classes.map((item: { id: string }) => [item.id, item])));
+};
+
+const assertStartNumberReservationsAvailable = async (
+  tx: any,
+  eventId: string,
+  entryId: string,
+  classId: string,
+  backupClassId: string | null,
+  startNumber: string | null,
+  ignoredEntryIds: ReadonlySet<string>
+) => {
+  if (!startNumber) return;
+  const classIds = reservedStartNumberClassIds(classId, backupClassId);
+  const conflicts = await tx
+    .select({ entryId: entryStartNumberReservation.entryId })
+    .from(entryStartNumberReservation)
+    .where(
+      and(
+        eq(entryStartNumberReservation.eventId, eventId),
+        inArray(entryStartNumberReservation.classId, classIds),
+        eq(entryStartNumberReservation.startNumberNorm, startNumber)
+      )
+    );
+  if (conflicts.some((item: { entryId: string }) => item.entryId !== entryId && !ignoredEntryIds.has(item.entryId))) {
+    throw new Error('START_NUMBER_CONFLICT');
+  }
+};
 
 const entryNotesPatchSchema = z
   .object({
@@ -289,6 +365,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       id: entry.id,
       eventId: entry.eventId,
       classId: entry.classId,
+      backupClassId: entry.backupClassId,
       groupId: entry.registrationGroupId,
       groupSize: sql<number>`coalesce((select count(*)::int from "entry" e2 where e2."registration_group_id" = ${entry.registrationGroupId} and e2."deleted_at" is null), 1)`,
       vehicleId: entry.vehicleId,
@@ -487,6 +564,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       classId: entry.classId,
       vehicleId: entry.vehicleId,
       backupVehicleId: entry.backupVehicleId,
+      backupClassId: entry.backupClassId,
       className: eventClass.name,
       registrationStatus: entry.registrationStatus,
       acceptanceStatus: entry.acceptanceStatus,
@@ -614,6 +692,14 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
           .where(eq(vehicle.id, current.backupVehicleId))
           .limit(1);
   const backupVehicle = backupVehicleRows[0] ?? null;
+  const backupClassRows = current.backupClassId
+    ? await db
+        .select({ id: eventClass.id, name: eventClass.name })
+        .from(eventClass)
+        .where(eq(eventClass.id, current.backupClassId))
+        .limit(1)
+    : [];
+  const backupClass = backupClassRows[0] ?? null;
   const consentEvidenceRows = await db
     .select({
       consentTextHash: consentEvidence.consentTextHash,
@@ -757,6 +843,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         entryId: current.id,
         eventId: current.eventId,
         classId: current.classId,
+        backupClassId: current.backupClassId,
         driverPersonId: current.driverPersonId,
         codriverPersonId: current.codriverPersonId,
         vehicleId: current.vehicleId,
@@ -764,6 +851,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         backupOfEntryId: current.backupOfEntryId
       },
       className: current.className,
+      backupClassName: backupClass?.name ?? null,
       registrationStatus: current.registrationStatus,
       acceptanceStatus: current.acceptanceStatus,
       withdrawnReason: current.withdrawnReason,
@@ -916,6 +1004,8 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
       acceptanceStatus: entry.acceptanceStatus,
       driverPersonId: entry.driverPersonId,
       classId: entry.classId,
+      backupClassId: entry.backupClassId,
+      isBackupVehicle: entry.isBackupVehicle,
       startNumberNorm: entry.startNumberNorm,
       deletedAt: entry.deletedAt
     })
@@ -933,23 +1023,24 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
   assertAcceptanceTransitionAllowed(existing.acceptanceStatus as EntryStatusPatch['acceptanceStatus'], input.acceptanceStatus);
 
   if (existing.acceptanceStatus === 'withdrawn' && input.acceptanceStatus !== 'withdrawn' && existing.startNumberNorm) {
-    const conflictRows = await db
-      .select({ id: entry.id })
-      .from(entry)
-      .where(
-        and(
-          eq(entry.eventId, existing.eventId),
-          eq(entry.classId, existing.classId),
-          eq(entry.startNumberNorm, existing.startNumberNorm),
-          ne(entry.id, entryId),
-          sql`${entry.deletedAt} is null`,
-          ne(entry.acceptanceStatus, 'withdrawn')
-        )
-      )
-      .limit(1);
-    if (conflictRows[0]) {
-      throw new Error('START_NUMBER_CONFLICT');
-    }
+    await assertStartNumberReservationsAvailable(
+      db,
+      existing.eventId,
+      entryId,
+      existing.classId,
+      existing.backupClassId,
+      existing.startNumberNorm,
+      new Set([entryId])
+    );
+  }
+  if (existing.acceptanceStatus === 'withdrawn' && input.acceptanceStatus !== 'withdrawn') {
+    await assertActiveDriverEntryRules(db, existing.eventId, existing.driverPersonId, [{
+      id: entryId,
+      driverPersonId: existing.driverPersonId,
+      classId: existing.classId,
+      backupClassId: existing.backupClassId,
+      isBackupVehicle: existing.isBackupVehicle
+    }]);
   }
 
   const now = new Date();
@@ -1062,6 +1153,8 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
         id: entry.id,
         eventId: entry.eventId,
         classId: entry.classId,
+        backupClassId: entry.backupClassId,
+        driverPersonId: entry.driverPersonId,
         isBackupVehicle: entry.isBackupVehicle,
         backupOfEntryId: entry.backupOfEntryId,
         startNumberNorm: entry.startNumberNorm,
@@ -1126,6 +1219,9 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
         id: entry.id,
         eventId: entry.eventId,
         classId: entry.classId,
+        backupClassId: entry.backupClassId,
+        driverPersonId: entry.driverPersonId,
+        isBackupVehicle: entry.isBackupVehicle,
         vehicleId: entry.vehicleId,
         startNumberNorm: entry.startNumberNorm,
         deletedAt: entry.deletedAt,
@@ -1152,6 +1248,19 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
     }
 
     const updateIds = updateRows.map((row) => row.id);
+    await assertActiveDriverEntryRules(
+      tx,
+      existing.eventId,
+      existing.driverPersonId,
+      updateRows.map((row) => ({
+        id: row.id,
+        driverPersonId: row.driverPersonId,
+        classId: input.classId,
+        backupClassId: row.backupClassId,
+        isBackupVehicle: row.isBackupVehicle
+      }))
+    );
+    const ignoredEntryIds = new Set(updateIds);
 
     for (const targetRow of targetRows) {
       if (!updateEntryIds.has(targetRow.id)) {
@@ -1160,23 +1269,15 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
       if (!targetRow.startNumberNorm) {
         continue;
       }
-      const conflictRows = await tx
-        .select({ id: entry.id })
-        .from(entry)
-        .where(
-          and(
-            eq(entry.eventId, existing.eventId),
-            eq(entry.classId, input.classId),
-            eq(entry.startNumberNorm, targetRow.startNumberNorm),
-            sql`${entry.deletedAt} is null`,
-            ne(entry.acceptanceStatus, 'withdrawn')
-          )
-        )
-        .limit(1);
-      const conflict = conflictRows[0];
-      if (conflict && !updateEntryIds.has(conflict.id)) {
-        throw new Error('START_NUMBER_CONFLICT');
-      }
+      await assertStartNumberReservationsAvailable(
+        tx,
+        existing.eventId,
+        targetRow.id,
+        input.classId,
+        targetRow.backupClassId,
+        targetRow.startNumberNorm,
+        ignoredEntryIds
+      );
     }
 
     const updatedRows = await tx
@@ -1232,6 +1333,75 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
       backupVehicleUpdated: Boolean(backupEntryId && updateEntryIds.has(backupEntryId)),
       warnings
     };
+  });
+};
+
+export const patchEntryBackupClass = async (
+  entryId: string,
+  input: z.infer<typeof entryBackupClassPatchSchema>,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({
+        id: entry.id,
+        eventId: entry.eventId,
+        classId: entry.classId,
+        backupClassId: entry.backupClassId,
+        backupVehicleId: entry.backupVehicleId,
+        startNumberNorm: entry.startNumberNorm,
+        deletedAt: entry.deletedAt
+      })
+      .from(entry)
+      .where(eq(entry.id, entryId))
+      .limit(1);
+    if (!existing) return null;
+    if (existing.deletedAt || !existing.backupVehicleId || !existing.backupClassId) {
+      throw new Error('INVALID_STATE');
+    }
+    await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${existing.eventId}))`);
+
+    const classes = await tx
+      .select({
+        id: eventClass.id,
+        eventId: eventClass.eventId,
+        runGroupId: eventClass.runGroupId,
+        registrationClosed: eventClass.registrationClosed,
+        vehicleType: eventClass.vehicleType
+      })
+      .from(eventClass)
+      .where(inArray(eventClass.id, [existing.classId, input.backupClassId]));
+    const primaryClass = classes.find((item: { id: string }) => item.id === existing.classId);
+    const backupClass = classes.find((item: { id: string }) => item.id === input.backupClassId);
+    if (!primaryClass || !backupClass) throw new Error('CLASS_NOT_FOUND');
+    assertBackupClassCompatible(primaryClass, backupClass, { requireOpen: true });
+
+    await assertStartNumberReservationsAvailable(
+      tx,
+      existing.eventId,
+      entryId,
+      existing.classId,
+      input.backupClassId,
+      existing.startNumberNorm,
+      new Set([entryId])
+    );
+    await tx.update(vehicle).set({ vehicleType: backupClass.vehicleType, updatedAt: new Date() }).where(eq(vehicle.id, existing.backupVehicleId));
+    const [updated] = await tx
+      .update(entry)
+      .set({ backupClassId: input.backupClassId, updatedAt: new Date() })
+      .where(eq(entry.id, entryId))
+      .returning({ id: entry.id, backupClassId: entry.backupClassId });
+    await writeAuditLog(tx as never, {
+      eventId: existing.eventId,
+      actorUserId,
+      action: 'entry_backup_class_updated',
+      entityType: 'entry',
+      entityId: entryId,
+      payload: { previousBackupClassId: existing.backupClassId, backupClassId: input.backupClassId }
+    });
+    return { ...updated, backupVehicleType: backupClass.vehicleType };
   });
 };
 
@@ -1304,6 +1474,7 @@ export const patchEntryAssignment = async (
         eventId: entry.eventId,
         eventName: event.name,
         classId: entry.classId,
+        backupClassId: entry.backupClassId,
         driverPersonId: entry.driverPersonId,
         codriverPersonId: entry.codriverPersonId,
         isBackupVehicle: entry.isBackupVehicle,
@@ -1418,6 +1589,9 @@ export const patchEntryAssignment = async (
       .select({
         id: entry.id,
         eventId: entry.eventId,
+        driverPersonId: entry.driverPersonId,
+        backupClassId: entry.backupClassId,
+        isBackupVehicle: entry.isBackupVehicle,
         vehicleId: entry.vehicleId,
         startNumberNorm: entry.startNumberNorm,
         deletedAt: entry.deletedAt
@@ -1438,6 +1612,19 @@ export const patchEntryAssignment = async (
       throw new Error('INVALID_STATE');
     }
 
+    await assertActiveDriverEntryRules(
+      tx,
+      existing.eventId,
+      existing.driverPersonId,
+      activeTargetRows.map((row) => ({
+        id: row.id,
+        driverPersonId: row.driverPersonId,
+        classId: input.classId,
+        backupClassId: row.backupClassId,
+        isBackupVehicle: row.isBackupVehicle
+      }))
+    );
+
     const nextStartNumberById = new Map(
       activeTargetRows.map((row) => [row.id, row.id === entryId ? input.startNumber : row.startNumberNorm])
     );
@@ -1446,23 +1633,15 @@ export const patchEntryAssignment = async (
       if (!nextStartNumber) {
         continue;
       }
-      const conflicts = await tx
-        .select({ id: entry.id })
-        .from(entry)
-        .where(and(
-          eq(entry.eventId, existing.eventId),
-          eq(entry.classId, input.classId),
-          eq(entry.startNumberNorm, nextStartNumber),
-          sql`${entry.deletedAt} is null`,
-          ne(entry.acceptanceStatus, 'withdrawn')
-        ))
-        .limit(1);
-      if (conflicts[0] && conflicts[0].id !== targetRow.id) {
-        const conflictingNextNumber = nextStartNumberById.get(conflicts[0].id);
-        if (!updateEntryIds.has(conflicts[0].id) || conflictingNextNumber === nextStartNumber) {
-          throw new Error('START_NUMBER_CONFLICT');
-        }
-      }
+      await assertStartNumberReservationsAvailable(
+        tx,
+        existing.eventId,
+        targetRow.id,
+        input.classId,
+        targetRow.backupClassId,
+        nextStartNumber,
+        updateEntryIds
+      );
     }
 
     await tx
@@ -2274,6 +2453,10 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
       eventId: entry.eventId,
       driverPersonId: entry.driverPersonId,
       registrationGroupId: entry.registrationGroupId,
+      classId: entry.classId,
+      backupClassId: entry.backupClassId,
+      isBackupVehicle: entry.isBackupVehicle,
+      startNumberNorm: entry.startNumberNorm,
       deletedAt: entry.deletedAt
     })
     .from(entry)
@@ -2291,6 +2474,23 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
 
   try {
     await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${existing.eventId}))`);
+      await assertActiveDriverEntryRules(tx, existing.eventId, existing.driverPersonId, [{
+        id: entryId,
+        driverPersonId: existing.driverPersonId,
+        classId: existing.classId,
+        backupClassId: existing.backupClassId,
+        isBackupVehicle: existing.isBackupVehicle
+      }]);
+      await assertStartNumberReservationsAvailable(
+        tx,
+        existing.eventId,
+        entryId,
+        existing.classId,
+        existing.backupClassId,
+        existing.startNumberNorm,
+        new Set([entryId])
+      );
       if (existing.registrationGroupId) {
         await tx
           .update(registrationGroup)
@@ -2312,7 +2512,10 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
         .where(eq(entry.id, entryId));
     });
   } catch (error) {
-    if (isPgUniqueViolation(error)) {
+    if (
+      isPgUniqueViolation(error) ||
+      (error instanceof Error && ['RUN_GROUP_CONFLICT', 'BACKUP_CLASS_INVALID', 'START_NUMBER_CONFLICT'].includes(error.message))
+    ) {
       throw new Error('RESTORE_CONFLICT');
     }
     throw error;
@@ -2355,6 +2558,7 @@ export const validateListEntriesQuery = (query: Record<string, string | undefine
 export const validateEntryStatusPatchInput = (payload: unknown) => entryStatusPatchSchema.parse(payload);
 export const validateEntryTechStatusPatchInput = (payload: unknown) => techStatusPatchSchema.parse(payload);
 export const validateEntryClassPatchInput = (payload: unknown) => entryClassPatchSchema.parse(payload);
+export const validateEntryBackupClassPatchInput = (payload: unknown) => entryBackupClassPatchSchema.parse(payload);
 export const validateEntryAssignmentPatchInput = (payload: unknown) => entryAssignmentPatchSchema.parse(payload);
 export const validateEntryNotesPatchInput = (payload: unknown) => entryNotesPatchSchema.parse(payload);
 export const validateDriverEmailPatchInput = (payload: unknown): DriverEmailPatch => driverEmailPatchSchema.parse(payload);

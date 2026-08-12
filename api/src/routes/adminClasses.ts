@@ -31,6 +31,7 @@ export const listClassesByEvent = async (eventId: string) => {
     .select({
       id: eventClass.id,
       eventId: eventClass.eventId,
+      runGroupId: eventClass.runGroupId,
       name: eventClass.name,
       vehicleType: eventClass.vehicleType,
       allowsCodriver: eventClass.allowsCodriver,
@@ -54,6 +55,7 @@ export const listClassesByEventWithQuery = async (
     .select({
       id: eventClass.id,
       eventId: eventClass.eventId,
+      runGroupId: eventClass.runGroupId,
       name: eventClass.name,
       vehicleType: eventClass.vehicleType,
       allowsCodriver: eventClass.allowsCodriver,

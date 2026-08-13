@@ -492,7 +492,20 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "classes": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/PublicEventClass" }
+                    }
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "Bad Request",
@@ -2217,6 +2230,40 @@
             "bearerAuth": []
           }
         ]
+      }
+    },
+    "/admin/events/{eventId}/run-groups": {
+      "get": {
+        "operationId": "get_admin_events_id_run_groups",
+        "tags": ["admin"],
+        "responses": { "200": { "description": "OK" }, "403": { "description": "Forbidden" } },
+        "parameters": [{ "name": "eventId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      },
+      "post": {
+        "operationId": "post_admin_events_id_run_groups",
+        "tags": ["admin"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunGroupWriteRequest" } } } },
+        "responses": { "200": { "description": "OK" }, "409": { "description": "Class assignment or existing-entry conflict" } },
+        "parameters": [{ "name": "eventId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      }
+    },
+    "/admin/run-groups/{id}": {
+      "patch": {
+        "operationId": "patch_admin_run_groups_id",
+        "tags": ["admin"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunGroupWriteRequest" } } } },
+        "responses": { "200": { "description": "OK" }, "409": { "description": "Class assignment or existing-entry conflict" } },
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      },
+      "delete": {
+        "operationId": "delete_admin_run_groups_id",
+        "tags": ["admin"],
+        "responses": { "200": { "description": "OK" }, "409": { "description": "Existing entries prevent deletion" } },
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
       }
     },
     "/admin/events/{id}/classes": {
@@ -7184,6 +7231,27 @@
         }
       }
     },
+    "/admin/entries/{id}/backup-class": {
+      "patch": {
+        "operationId": "patch_admin_entries_id_backup_class",
+        "tags": ["admin"],
+        "description": "Changes the class of an inline backup vehicle while preserving the entry and start number.",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EntryBackupClassPatchRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Backup class updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EntryBackupClassPatchResponse" } } } },
+          "400": { "description": "Bad Request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "403": { "description": "Forbidden", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "404": { "description": "Not Found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "409": { "description": "Conflict", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+        }
+      }
+    },
     "/admin/entries/{id}/assignment": {
       "patch": {
         "operationId": "patch_admin_entries_id_assignment",
@@ -9244,12 +9312,46 @@
           "motorsportHistory"
         ]
       },
+      "RunGroupWriteRequest": {
+        "type": "object",
+        "required": ["name", "classIds"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "classIds": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "format": "uuid" }
+          }
+        }
+      },
+      "PublicEventClass": {
+        "type": "object",
+        "required": ["id", "eventId", "name", "vehicleType", "allowsCodriver", "registrationClosed", "selectionGroupKey"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "eventId": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "vehicleType": { "type": "string", "enum": ["moto", "auto"] },
+          "allowsCodriver": { "type": "boolean" },
+          "registrationClosed": { "type": "boolean" },
+          "selectionGroupKey": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Opaque identifier used only to determine mutually exclusive entry choices."
+          }
+        }
+      },
       "PublicCreateEntryRequest": {
         "type": "object",
         "properties": {
           "classId": {
             "type": "string",
             "format": "uuid"
+          },
+          "backupClassId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Class of the inline backup vehicle; defaults to classId for legacy clients."
           },
           "driver": {
             "$ref": "#/components/schemas/PublicDriverInput"
@@ -9431,6 +9533,11 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "backupClassId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Class of the inline backup vehicle; defaults to classId."
+                },
                 "codriverEnabled": {
                   "type": "boolean"
                 },
@@ -9537,6 +9644,12 @@
                     "type": "string",
                     "format": "uuid"
                   },
+                  "backupClassId": {
+                    "oneOf": [
+                      { "type": "string", "format": "uuid" },
+                      { "type": "null" }
+                    ]
+                  },
                   "driverPersonId": {
                     "type": "string",
                     "format": "uuid"
@@ -9568,6 +9681,9 @@
                     ]
                   }
                 }
+              },
+              "backupClassName": {
+                "oneOf": [{ "type": "string" }, { "type": "null" }]
               },
               "person": {
                 "type": "object",
@@ -9843,6 +9959,22 @@
             "type": "boolean",
             "default": true
           }
+        }
+      },
+      "EntryBackupClassPatchRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["backupClassId"],
+        "properties": { "backupClassId": { "type": "string", "format": "uuid" } }
+      },
+      "EntryBackupClassPatchResponse": {
+        "type": "object",
+        "required": ["ok", "id", "backupClassId", "backupVehicleType"],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "id": { "type": "string", "format": "uuid" },
+          "backupClassId": { "type": "string", "format": "uuid" },
+          "backupVehicleType": { "type": "string", "enum": ["auto", "moto"] }
         }
       },
       "EntryClassPatchResponse": {

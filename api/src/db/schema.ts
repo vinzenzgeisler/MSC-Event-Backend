@@ -79,6 +79,23 @@ export const publicRateLimit = pgTable(
   })
 );
 
+export const runGroup = pgTable(
+  'run_group',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    uniqueName: uniqueIndex('run_group_event_name_unique').on(table.eventId, table.name),
+    nameNotBlank: check('run_group_name_not_blank_check', sql`btrim(${table.name}) <> ''`)
+  })
+);
+
 export const eventClass = pgTable(
   'class',
   {
@@ -86,6 +103,7 @@ export const eventClass = pgTable(
     eventId: uuid('event_id')
       .notNull()
       .references(() => event.id, { onDelete: 'cascade' }),
+    runGroupId: uuid('run_group_id').references(() => runGroup.id, { onDelete: 'set null' }),
     name: text('name').notNull(),
     vehicleType: text('vehicle_type').notNull(),
     allowsCodriver: boolean('allows_codriver').notNull().default(false),
@@ -95,6 +113,7 @@ export const eventClass = pgTable(
   },
   (table) => ({
     uniqueName: uniqueIndex('class_event_name_unique').on(table.eventId, table.name),
+    runGroupIndex: index('class_run_group_idx').on(table.runGroupId),
     vehicleTypeCheck: check('class_vehicle_type_check', sql`${table.vehicleType} in ('moto', 'auto')`)
   })
 );
@@ -188,6 +207,7 @@ export const entry = pgTable(
     classId: uuid('class_id')
       .notNull()
       .references(() => eventClass.id),
+    backupClassId: uuid('backup_class_id').references(() => eventClass.id),
     driverPersonId: uuid('driver_person_id')
       .notNull()
       .references(() => person.id),
@@ -262,13 +282,65 @@ export const entry = pgTable(
       'entry_backup_vehicle_not_primary_check',
       sql`${table.backupVehicleId} is null or ${table.backupVehicleId} != ${table.vehicleId}`
     ),
+    backupVehicleClassConsistencyCheck: check(
+      'entry_backup_vehicle_class_consistency_check',
+      sql`(${table.backupVehicleId} is null) = (${table.backupClassId} is null)`
+    ),
     startNumberUnique: uniqueIndex('entry_start_number_unique')
       .on(table.eventId, table.classId, table.startNumberNorm)
       .where(sql`${table.startNumberNorm} is not null and ${table.deletedAt} is null and ${table.acceptanceStatus} != 'withdrawn'`),
     backupOfEntryIndex: index('entry_backup_of_entry_idx').on(table.backupOfEntryId),
     backupVehicleIndex: index('entry_backup_vehicle_idx').on(table.backupVehicleId),
+    backupClassIndex: index('entry_backup_class_idx').on(table.backupClassId),
     registrationGroupIndex: index('entry_registration_group_idx').on(table.registrationGroupId),
     orgaCodeIndex: index('entry_orga_code_idx').on(table.orgaCode)
+  })
+);
+
+export const entryStartNumberReservation = pgTable(
+  'entry_start_number_reservation',
+  {
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => entry.id, { onDelete: 'cascade' }),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    classId: uuid('class_id')
+      .notNull()
+      .references(() => eventClass.id, { onDelete: 'cascade' }),
+    startNumberNorm: text('start_number_norm').notNull()
+  },
+  (table) => ({
+    entryClassUnique: uniqueIndex('entry_start_number_reservation_entry_class_unique').on(table.entryId, table.classId),
+    classNumberUnique: uniqueIndex('entry_start_number_reservation_class_number_unique').on(
+      table.eventId,
+      table.classId,
+      table.startNumberNorm
+    )
+  })
+);
+
+export const entryRunGroupReservation = pgTable(
+  'entry_run_group_reservation',
+  {
+    entryId: uuid('entry_id')
+      .primaryKey()
+      .references(() => entry.id, { onDelete: 'cascade' }),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    driverPersonId: uuid('driver_person_id')
+      .notNull()
+      .references(() => person.id),
+    effectiveGroupId: uuid('effective_group_id').notNull()
+  },
+  (table) => ({
+    driverGroupUnique: uniqueIndex('entry_run_group_reservation_driver_group_unique').on(
+      table.eventId,
+      table.driverPersonId,
+      table.effectiveGroupId
+    )
   })
 );
 

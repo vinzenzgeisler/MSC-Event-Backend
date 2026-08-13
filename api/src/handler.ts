@@ -50,6 +50,12 @@ import {
   validateRunGroupPayload
 } from './routes/adminRunGroups';
 import {
+  createRegistrationInvitation,
+  listRegistrationInvitations,
+  revokeRegistrationInvitation,
+  validateCreateRegistrationInvitationInput
+} from './routes/adminRegistrationInvitations';
+import {
   getExportDownload,
   getExportJob,
   listExportJobs,
@@ -249,6 +255,20 @@ import {
 
 const isInvalidJson = (error: unknown): boolean =>
   error instanceof Error && error.message === 'Invalid JSON body';
+
+const invitationErrorJson = (error: unknown): APIGatewayProxyStructuredResultV2 | null => {
+  if (!(error instanceof Error)) return null;
+  const statusByCode: Record<string, number> = {
+    INVITATION_INVALID: 404,
+    INVITATION_EXPIRED: 409,
+    INVITATION_REVOKED: 409,
+    INVITATION_USED: 409,
+    INVITATION_EMAIL_MISMATCH: 409,
+    INVITATION_CLASS_NOT_ALLOWED: 409
+  };
+  const status = statusByCode[error.message];
+  return status ? errorJson(status, error.message, undefined, error.message) : null;
+};
 
 const getClientIp = (event: APIGatewayProxyEventV2): string => {
   const forwardedFor = event.headers['x-forwarded-for'] ?? event.headers['X-Forwarded-For'];
@@ -463,6 +483,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const result = await createPublicEntry(input);
       return json(200, { ok: true, ...result });
     } catch (error) {
+      const invitationError = invitationErrorJson(error);
+      if (invitationError) return invitationError;
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
@@ -580,6 +602,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const result = await createPublicEntriesBatch(input);
       return json(200, { ok: true, ...result });
     } catch (error) {
+      const invitationError = invitationErrorJson(error);
+      if (invitationError) return invitationError;
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
@@ -687,12 +711,14 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/public/events/current') {
     try {
-      const current = await getPublicCurrentEventWithClasses();
+      const current = await getPublicCurrentEventWithClasses(event.queryStringParameters?.invite);
       if (!current) {
         return errorJson(404, 'Current event not found');
       }
       return json(200, { ok: true, ...current });
     } catch (error) {
+      const invitationError = invitationErrorJson(error);
+      if (invitationError) return invitationError;
       return errorJson(500, 'Get current public event failed');
     }
   }
@@ -712,6 +738,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const result = await validatePublicStartNumber(input);
       return json(200, { ok: true, ...result });
     } catch (error) {
+      const invitationError = invitationErrorJson(error);
+      if (invitationError) return invitationError;
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
@@ -739,6 +767,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const created = await initVehicleImageUpload(input);
       return json(200, { ok: true, ...created });
     } catch (error) {
+      const invitationError = invitationErrorJson(error);
+      if (invitationError) return invitationError;
       if (error instanceof ZodError) {
         if (hasZodTooLargeIssue(error, 'fileSizeBytes')) {
           return errorJson(
@@ -1541,6 +1571,50 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   const eventRunGroupsMatch = path.match(/^\/admin\/events\/([^/]+)\/run-groups$/);
+  const eventInvitationsMatch = path.match(/^\/admin\/events\/([^/]+)\/registration-invitations$/);
+  if (method === 'GET' && eventInvitationsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermissionOrAutomation(auth, 'settings.read')) return errorJson(403, 'Forbidden');
+    try {
+      return json(200, { ok: true, invitations: await listRegistrationInvitations(eventInvitationsMatch[1]) });
+    } catch {
+      return errorJson(500, 'List registration invitations failed');
+    }
+  }
+  if (method === 'POST' && eventInvitationsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'settings.write')) return errorJson(403, 'Forbidden');
+    try {
+      const result = await createRegistrationInvitation(
+        eventInvitationsMatch[1],
+        validateCreateRegistrationInvitationInput(parseJsonBody(event)),
+        auth.sub
+      );
+      return json(201, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') return errorJson(404, 'Event not found');
+      if (error instanceof Error && error.message === 'INVITATION_CLASS_INVALID') {
+        return errorJson(409, 'Allowed classes must belong to the event', undefined, 'INVITATION_CLASS_INVALID');
+      }
+      return errorJson(500, 'Create registration invitation failed');
+    }
+  }
+
+  const invitationRevokeMatch = path.match(/^\/admin\/registration-invitations\/([^/]+)\/revoke$/);
+  if (method === 'POST' && invitationRevokeMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'settings.write')) return errorJson(403, 'Forbidden');
+    try {
+      const revoked = await revokeRegistrationInvitation(invitationRevokeMatch[1], auth.sub);
+      if (!revoked) return errorJson(409, 'Invitation cannot be revoked', undefined, 'INVITATION_NOT_REVOCABLE');
+      return json(200, { ok: true, invitation: revoked });
+    } catch {
+      return errorJson(500, 'Revoke registration invitation failed');
+    }
+  }
+
   if (method === 'GET' && eventRunGroupsMatch) {
     const auth = getAuthContext(event);
     if (!hasPermission(auth, 'settings.write')) return errorJson(403, 'Forbidden');

@@ -45,6 +45,9 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   email_outbox_retry_requested: ['previousStatus'],
   public_entry_created: ['registrationStatus', 'registrationGroupId'],
   public_entry_verified: ['registrationStatus', 'registrationGroupId'],
+  registration_invitation_created: ['recipientBound', 'allowedClassIds', 'expiresAt'],
+  registration_invitation_revoked: [],
+  registration_invitation_consumed: ['registrationGroupId'],
   privacy_retention_run: ['windowStart', 'windowEnd', 'dryRun', 'deletedRows', 'errors']
   ,
   signing_session_started: ['entryIds', 'deviceSessionId'],

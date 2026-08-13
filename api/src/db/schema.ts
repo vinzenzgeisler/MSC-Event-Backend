@@ -404,6 +404,39 @@ export const publicEntrySubmission = pgTable(
   })
 );
 
+export const registrationInvitation = pgTable(
+  'registration_invitation',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    recipientName: text('recipient_name'),
+    recipientEmailNorm: text('recipient_email_norm'),
+    allowedClassIds: uuid('allowed_class_ids').array().notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedBy: text('revoked_by'),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    consumedRegistrationGroupId: uuid('consumed_registration_group_id').references(() => registrationGroup.id, {
+      onDelete: 'set null'
+    }),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex('registration_invitation_token_hash_unique').on(table.tokenHash),
+    eventIndex: index('registration_invitation_event_idx').on(table.eventId, table.createdAt),
+    expiryIndex: index('registration_invitation_expiry_idx').on(table.expiresAt),
+    allowedClassesNotEmpty: check(
+      'registration_invitation_allowed_classes_not_empty_check',
+      sql`cardinality(${table.allowedClassIds}) > 0`
+    )
+  })
+);
+
 export const consentEvidence = pgTable(
   'consent_evidence',
   {

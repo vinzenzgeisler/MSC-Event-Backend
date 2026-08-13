@@ -2232,6 +2232,38 @@
         ]
       }
     },
+    "/admin/events/{eventId}/registration-invitations": {
+      "get": {
+        "operationId": "get_admin_events_eventId_registration_invitations",
+        "tags": ["admin"],
+        "responses": { "200": { "description": "OK" }, "403": { "description": "Forbidden" } },
+        "parameters": [{ "name": "eventId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      },
+      "post": {
+        "operationId": "post_admin_events_eventId_registration_invitations",
+        "tags": ["admin"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "required": ["expiresAt", "allowedClassIds"], "properties": {
+            "recipientName": { "type": "string" }, "recipientEmail": { "type": "string", "format": "email" },
+            "expiresAt": { "type": "string", "format": "date-time" },
+            "allowedClassIds": { "type": "array", "minItems": 1, "items": { "type": "string", "format": "uuid" } }
+          }
+        } } } },
+        "responses": { "201": { "description": "Created; token is returned only in this response" }, "400": { "description": "Invalid input" }, "409": { "description": "Invalid class" } },
+        "parameters": [{ "name": "eventId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      }
+    },
+    "/admin/registration-invitations/{id}/revoke": {
+      "post": {
+        "operationId": "post_admin_registration_invitations_id_revoke",
+        "tags": ["admin"],
+        "responses": { "200": { "description": "OK" }, "409": { "description": "Already revoked or consumed" } },
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      }
+    },
     "/admin/events/{eventId}/run-groups": {
       "get": {
         "operationId": "get_admin_events_id_run_groups",
@@ -9334,6 +9366,7 @@
           "vehicleType": { "type": "string", "enum": ["moto", "auto"] },
           "allowsCodriver": { "type": "boolean" },
           "registrationClosed": { "type": "boolean" },
+          "inviteAllowed": { "type": "boolean", "description": "True only when the supplied invitation allows this class." },
           "selectionGroupKey": {
             "type": "string",
             "format": "uuid",
@@ -9344,6 +9377,7 @@
       "PublicCreateEntryRequest": {
         "type": "object",
         "properties": {
+          "inviteToken": { "type": "string", "minLength": 32, "writeOnly": true },
           "classId": {
             "type": "string",
             "format": "uuid"
@@ -9470,6 +9504,7 @@
       "PublicCreateEntriesBatchRequest": {
         "type": "object",
         "properties": {
+          "inviteToken": { "type": "string", "minLength": 32, "writeOnly": true },
           "clientSubmissionKey": {
             "type": "string"
           },

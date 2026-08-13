@@ -638,6 +638,20 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/events/{eventId}/registration-invitations',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/registration-invitations/{id}/revoke',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/run-groups/{id}',
       methods: [apigwv2.HttpMethod.PATCH, apigwv2.HttpMethod.DELETE],
       integration,

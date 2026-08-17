@@ -60,6 +60,7 @@ import {
   getExportJob,
   listExportJobs,
   createEntriesExport,
+  createProgrammheftExport,
   validateCreateExportInput
 } from './routes/adminExports';
 import {
@@ -3325,6 +3326,23 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, error.message);
       }
       return errorJson(500, 'List payments failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/exports/programmheft') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'exports.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = typeof event.body === 'string' ? JSON.parse(event.body) : (event.body ?? {});
+      const eventId = (payload as Record<string, unknown>).eventId as string | undefined;
+      if (!eventId) return errorJson(400, 'eventId required');
+      const job = await createProgrammheftExport({ eventId }, auth.sub);
+      return json(200, { ok: true, exportJobId: job!.id, status: job!.status });
+    } catch (err) {
+      console.error('Programmheft export error:', err);
+      return errorJson(500, 'Create export failed');
     }
   }
 

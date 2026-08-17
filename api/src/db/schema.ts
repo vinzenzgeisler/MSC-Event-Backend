@@ -1115,7 +1115,7 @@ export const exportJob = pgTable(
   (table) => ({
     typeCheck: check(
       'export_job_type_check',
-      sql`${table.type} in ('entries_csv', 'startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv')`
+      sql`${table.type} in ('entries_csv', 'startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv', 'programmheft_xlsx')`
     ),
     statusCheck: check('export_job_status_check', sql`${table.status} in ('queued', 'processing', 'succeeded', 'failed')`),
     statusIndex: index('export_job_status_idx').on(table.status, table.createdAt),

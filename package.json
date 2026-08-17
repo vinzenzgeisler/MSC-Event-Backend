@@ -25,5 +25,8 @@
     "api:db:migrate": "npm --workspace api run db:migrate",
     "api:seed:dev-current-event": "npm --workspace api run seed:dev-current-event",
     "api:start": "npm --workspace api run start"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
   }
 }

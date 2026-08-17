@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, sql, SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql, SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import ExcelJS from 'exceljs';
 import { z } from 'zod';
@@ -261,7 +261,7 @@ type ProgrammheftRow = {
   driverFirstName: string;
   driverLastName: string;
   driverCity: string | null;
-  driverNationality: string | null;
+  driverCountry: string | null;
   codriverFirstName: string | null;
   codriverLastName: string | null;
   vehicleMake: string | null;
@@ -329,7 +329,7 @@ const buildClassSheet = (
           r.vehicleModel ?? '',
           r.vehicleYear ?? '',
           r.vehicleDisplacement ?? '',
-          r.driverNationality ?? ''
+          r.driverCountry ?? ''
         ]
       : [
           r.startNumber ?? '',
@@ -340,7 +340,7 @@ const buildClassSheet = (
           r.vehicleModel ?? '',
           r.vehicleYear ?? '',
           r.vehicleDisplacement ?? '',
-          r.driverNationality ?? ''
+          r.driverCountry ?? ''
         ];
     values.forEach((v, i) => {
       dataRow.getCell(i + 1).value = v;
@@ -362,7 +362,7 @@ const buildClassSheet = (
 };
 
 export const createProgrammheftExport = async (
-  input: { eventId: string },
+  input: { eventId: string; classIds?: string[] },
   actorUserId: string | null
 ) => {
   const db = await getDb();
@@ -402,7 +402,7 @@ export const createProgrammheftExport = async (
         driverFirstName: driverPerson.firstName,
         driverLastName: driverPerson.lastName,
         driverCity: driverPerson.city,
-        driverNationality: driverPerson.nationality,
+        driverCountry: driverPerson.country,
         codriverFirstName: codriverPerson.firstName,
         codriverLastName: codriverPerson.lastName,
         vehicleMake: vehicle.make,
@@ -420,10 +420,14 @@ export const createProgrammheftExport = async (
           eq(entry.eventId, input.eventId),
           eq(entry.acceptanceStatus, 'accepted'),
           eq(driverPerson.processingRestricted, false),
-          eq(driverPerson.objectionFlag, false)
+          eq(driverPerson.objectionFlag, false),
+          ...(input.classIds && input.classIds.length > 0 ? [inArray(entry.classId, input.classIds)] : [])
         )
       )
-      .orderBy(asc(eventClass.name), asc(entry.startNumberNorm));
+      .orderBy(
+        asc(eventClass.name),
+        sql`CASE WHEN ${entry.startNumberNorm} ~ '^[0-9]+$' THEN ${entry.startNumberNorm}::integer ELSE 999999 END`
+      );
 
     // Group by class
     const byClass = new Map<string, { allowsCodriver: boolean; rows: typeof rows }>();
@@ -473,7 +477,7 @@ export const createProgrammheftExport = async (
           r.vehicleModel ?? '',
           r.vehicleYear ?? '',
           r.vehicleDisplacement ?? '',
-          r.driverNationality ?? '',
+          r.driverCountry ?? '',
           r.className
         ];
         vals.forEach((v, i) => {

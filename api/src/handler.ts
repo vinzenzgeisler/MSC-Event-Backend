@@ -3336,9 +3336,11 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
     try {
       const payload = typeof event.body === 'string' ? JSON.parse(event.body) : (event.body ?? {});
-      const eventId = (payload as Record<string, unknown>).eventId as string | undefined;
+      const p = payload as Record<string, unknown>;
+      const eventId = p.eventId as string | undefined;
       if (!eventId) return errorJson(400, 'eventId required');
-      const job = await createProgrammheftExport({ eventId }, auth.sub);
+      const classIds = Array.isArray(p.classIds) ? (p.classIds as string[]) : undefined;
+      const job = await createProgrammheftExport({ eventId, classIds }, auth.sub);
       return json(200, { ok: true, exportJobId: job!.id, status: job!.status });
     } catch (err) {
       console.error('Programmheft export error:', err);

@@ -1,20 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq, SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
+import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { entry, eventClass, exportJob, invoice, person } from '../db/schema';
+import { entry, event as eventTable, eventClass, exportJob, invoice, person, vehicle } from '../db/schema';
 import { getPresignedDownloadUrl, uploadFile } from '../docs/storage';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const createExportSchema = z.object({
   eventId: z.string().uuid(),
-  type: z.enum(['entries_csv', 'startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv']).default('participants_csv'),
+  type: z.enum(['entries_csv', 'startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv', 'programmheft_xlsx']).default('participants_csv'),
   classId: z.string().uuid().optional(),
   acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
   paymentOpenOnly: z.boolean().optional(),
   checkinIdVerified: z.boolean().optional(),
-  format: z.enum(['csv']).default('csv')
+  format: z.enum(['csv', 'xlsx']).default('csv')
 });
 
 type CreateExportInput = z.infer<typeof createExportSchema>;
@@ -239,3 +241,288 @@ export const getExportDownload = async (id: string, actorUserId: string | null) 
 };
 
 export const validateCreateExportInput = (payload: unknown) => createExportSchema.parse(payload);
+
+// ---------------------------------------------------------------------------
+// Programmheft XLSX Export
+// ---------------------------------------------------------------------------
+
+const TITLE_BG = 'FF1F4E79';
+const TITLE_FONT = 'FFFFFFFF';
+const HEADER_BG = 'FFD9E1F2';
+const ZEBRA_BG  = 'FFF2F2F2';
+
+type ProgrammheftRow = {
+  startNumber: string | null;
+  className: string;
+  classAllowsCodriver: boolean;
+  driverFirstName: string;
+  driverLastName: string;
+  driverCity: string | null;
+  driverNationality: string | null;
+  codriverFirstName: string | null;
+  codriverLastName: string | null;
+  vehicleMake: string | null;
+  vehicleModel: string | null;
+  vehicleYear: number | null;
+  vehicleDisplacement: number | null;
+};
+
+const buildClassSheet = (
+  ws: ExcelJS.Worksheet,
+  eventName: string,
+  className: string,
+  classRows: ProgrammheftRow[],
+  withCodriver: boolean
+) => {
+  const cols = withCodriver
+    ? ['Start-Nr.', 'Vorname', 'Nachname', 'Beifahrer Vorname', 'Beifahrer Nachname', 'Ort', 'Fahrzeug', 'Modell', 'Baujahr', 'Hubraum', 'Land']
+    : ['Start-Nr.', 'Vorname', 'Nachname', 'Ort', 'Fahrzeug', 'Modell', 'Baujahr', 'Hubraum', 'Land'];
+  const colWidths = withCodriver
+    ? [10, 14, 16, 14, 16, 22, 16, 18, 10, 10, 8]
+    : [10, 14, 16, 22, 16, 18, 10, 10, 8];
+  const n = cols.length;
+
+  // Row 1: Event title
+  ws.mergeCells(1, 1, 1, n);
+  const titleCell = ws.getCell(1, 1);
+  titleCell.value = eventName;
+  titleCell.font = { bold: true, size: 14, color: { argb: TITLE_FONT } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLE_BG } };
+  titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws.getRow(1).height = 22;
+
+  // Row 2: Class name
+  ws.mergeCells(2, 1, 2, n);
+  const classCell = ws.getCell(2, 1);
+  classCell.value = className;
+  classCell.font = { bold: true, size: 12 };
+  classCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BG } };
+  classCell.alignment = { horizontal: 'left', vertical: 'middle' };
+  ws.getRow(2).height = 18;
+
+  // Row 3: Column headers
+  const headerRow = ws.getRow(3);
+  cols.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = h;
+    cell.font = { bold: true };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BG } };
+    cell.border = { bottom: { style: 'thin' } };
+  });
+  headerRow.height = 16;
+
+  // Data rows
+  classRows.forEach((r, idx) => {
+    const dataRow = ws.getRow(4 + idx);
+    const values: (string | number)[] = withCodriver
+      ? [
+          r.startNumber ?? '',
+          r.driverFirstName,
+          r.driverLastName,
+          r.codriverFirstName ?? '',
+          r.codriverLastName ?? '',
+          r.driverCity ?? '',
+          r.vehicleMake ?? '',
+          r.vehicleModel ?? '',
+          r.vehicleYear ?? '',
+          r.vehicleDisplacement ?? '',
+          r.driverNationality ?? ''
+        ]
+      : [
+          r.startNumber ?? '',
+          r.driverFirstName,
+          r.driverLastName,
+          r.driverCity ?? '',
+          r.vehicleMake ?? '',
+          r.vehicleModel ?? '',
+          r.vehicleYear ?? '',
+          r.vehicleDisplacement ?? '',
+          r.driverNationality ?? ''
+        ];
+    values.forEach((v, i) => {
+      dataRow.getCell(i + 1).value = v;
+      if (idx % 2 === 1) {
+        dataRow.getCell(i + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ZEBRA_BG } };
+      }
+    });
+  });
+
+  // Footer: starter count
+  const countRowNum = 4 + classRows.length;
+  ws.getCell(countRowNum, 1).value = classRows.length;
+  ws.getCell(countRowNum, 2).value = 'Starter';
+  ws.getCell(countRowNum, 1).font = { bold: true };
+  ws.getCell(countRowNum, 2).font = { bold: true };
+
+  // Column widths
+  colWidths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+};
+
+export const createProgrammheftExport = async (
+  input: { eventId: string },
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const now = new Date();
+
+  const [job] = await db
+    .insert(exportJob)
+    .values({
+      eventId: input.eventId,
+      type: 'programmheft_xlsx',
+      filters: input,
+      status: 'processing',
+      createdBy: actorUserId,
+      createdAt: now
+    })
+    .returning();
+
+  if (!job) throw new Error('EXPORT_JOB_CREATE_FAILED');
+
+  try {
+    // Fetch event name
+    const eventRows = await db
+      .select({ name: eventTable.name })
+      .from(eventTable)
+      .where(eq(eventTable.id, input.eventId));
+    const eventName = eventRows[0]?.name ?? 'MSC Event';
+
+    // Aliases for driver and codriver person tables
+    const driverPerson = alias(person, 'driver');
+    const codriverPerson = alias(person, 'codriver');
+
+    const rows = await db
+      .select({
+        startNumber: entry.startNumberNorm,
+        className: eventClass.name,
+        classAllowsCodriver: eventClass.allowsCodriver,
+        driverFirstName: driverPerson.firstName,
+        driverLastName: driverPerson.lastName,
+        driverCity: driverPerson.city,
+        driverNationality: driverPerson.nationality,
+        codriverFirstName: codriverPerson.firstName,
+        codriverLastName: codriverPerson.lastName,
+        vehicleMake: vehicle.make,
+        vehicleModel: vehicle.model,
+        vehicleYear: vehicle.year,
+        vehicleDisplacement: vehicle.displacementCcm
+      })
+      .from(entry)
+      .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+      .innerJoin(driverPerson, eq(entry.driverPersonId, driverPerson.id))
+      .leftJoin(codriverPerson, eq(entry.codriverPersonId, codriverPerson.id))
+      .leftJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+      .where(
+        and(
+          eq(entry.eventId, input.eventId),
+          eq(entry.acceptanceStatus, 'accepted'),
+          eq(driverPerson.processingRestricted, false),
+          eq(driverPerson.objectionFlag, false)
+        )
+      )
+      .orderBy(asc(eventClass.name), asc(entry.startNumberNorm));
+
+    // Group by class
+    const byClass = new Map<string, { allowsCodriver: boolean; rows: typeof rows }>();
+    for (const row of rows) {
+      if (!byClass.has(row.className)) {
+        byClass.set(row.className, { allowsCodriver: row.classAllowsCodriver, rows: [] });
+      }
+      byClass.get(row.className)!.rows.push(row);
+    }
+
+    // Build workbook
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'MSC Nennungstool';
+    workbook.created = now;
+
+    // Gesamtliste sheet
+    const gesamtWs = workbook.addWorksheet('Gesamtliste');
+    {
+      const allCols = ['Start-Nr.', 'Vorname', 'Nachname', 'Ort', 'Fahrzeug', 'Modell', 'Baujahr', 'Hubraum', 'Land', 'Klasse'];
+      const n = allCols.length;
+
+      gesamtWs.mergeCells(1, 1, 1, n);
+      const tc = gesamtWs.getCell(1, 1);
+      tc.value = eventName;
+      tc.font = { bold: true, size: 14, color: { argb: TITLE_FONT } };
+      tc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLE_BG } };
+      tc.alignment = { horizontal: 'center', vertical: 'middle' };
+      gesamtWs.getRow(1).height = 22;
+
+      const hr = gesamtWs.getRow(2);
+      allCols.forEach((h, i) => {
+        const c = hr.getCell(i + 1);
+        c.value = h;
+        c.font = { bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BG } };
+        c.border = { bottom: { style: 'thin' } };
+      });
+
+      rows.forEach((r, idx) => {
+        const dr = gesamtWs.getRow(3 + idx);
+        const vals: (string | number)[] = [
+          r.startNumber ?? '',
+          r.driverFirstName,
+          r.driverLastName,
+          r.driverCity ?? '',
+          r.vehicleMake ?? '',
+          r.vehicleModel ?? '',
+          r.vehicleYear ?? '',
+          r.vehicleDisplacement ?? '',
+          r.driverNationality ?? '',
+          r.className
+        ];
+        vals.forEach((v, i) => {
+          dr.getCell(i + 1).value = v;
+          if (idx % 2 === 1) {
+            dr.getCell(i + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ZEBRA_BG } };
+          }
+        });
+      });
+
+      [10, 14, 16, 22, 16, 18, 10, 10, 8, 40].forEach((w, i) => { gesamtWs.getColumn(i + 1).width = w; });
+    }
+
+    // Per-class sheets
+    for (const [className, { allowsCodriver, rows: classRows }] of byClass) {
+      // Sheet names max 31 chars in Excel
+      const sheetName = className.length > 31 ? className.slice(0, 31) : className;
+      const ws = workbook.addWorksheet(sheetName);
+      buildClassSheet(ws, eventName, className, classRows, allowsCodriver);
+    }
+
+    // Write to buffer and upload
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+    const key = `exports/${input.eventId}/programmheft_xlsx/${randomUUID()}.xlsx`;
+    await uploadFile(
+      key,
+      buffer,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+
+    const [updated] = await db
+      .update(exportJob)
+      .set({ status: 'succeeded', s3Key: key, completedAt: new Date() })
+      .where(eq(exportJob.id, job.id))
+      .returning();
+
+    await writeAuditLog(db as never, {
+      eventId: input.eventId,
+      actorUserId,
+      action: 'export_created',
+      entityType: 'export_job',
+      entityId: job.id,
+      payload: { type: 'programmheft_xlsx', rowCount: rows.length }
+    });
+
+    return updated ?? job;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Export failed';
+    await db
+      .update(exportJob)
+      .set({ status: 'failed', errorLast: message, completedAt: new Date() })
+      .where(eq(exportJob.id, job.id));
+    throw error;
+  }
+};

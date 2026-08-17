@@ -125,7 +125,7 @@ export class ApiStack extends Stack {
         target: 'node20',
         sourceMap: true,
         minify: false,
-        nodeModules: ['pdfkit']
+        nodeModules: ['pdfkit', 'exceljs']
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
       ...lambdaVpcConfig
@@ -954,6 +954,13 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/exports/entries',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/exports/programmheft',
       methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer

@@ -16,7 +16,10 @@ export const deriveEntryPaymentStatus = (
   entryTotalCents: number | null | undefined,
   acceptanceStatus: string | null | undefined,
   invoicePaymentStatus: string | null | undefined
-): 'due' | 'paid' => {
+): 'due' | 'paid' | null => {
+  if (acceptanceStatus === 'rejected' || acceptanceStatus === 'withdrawn') {
+    return null;
+  }
   if (entryTotalCents === null || entryTotalCents === undefined) {
     return 'due';
   }
@@ -48,8 +51,8 @@ export const resolveEntryTotalCents = (input: {
       input.invoiceTotalCents
     );
   }
-  if (input.acceptanceStatus === 'rejected') {
-    return 0;
+  if (input.acceptanceStatus === 'rejected' || input.acceptanceStatus === 'withdrawn') {
+    return null;
   }
   return input.focusedForecastTotalCents ?? input.manualOverrideCents ?? input.provisionalTotalCents;
 };

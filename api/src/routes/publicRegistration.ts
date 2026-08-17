@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
@@ -8,10 +8,12 @@ import {
   entry,
   event,
   eventClass,
+  entryStartNumberReservation,
   eventPricingRule,
   person,
   consentEvidence,
   publicEntrySubmission,
+  registrationInvitation,
   registrationGroup,
   registrationGroupEmailVerification,
   vehicle,
@@ -20,6 +22,7 @@ import {
 import { getPresignedAssetsUploadUrl, getAssetObjectBuffer, getAssetObjectMetadata } from '../docs/storage';
 import { validateImageBuffer } from '../domain/imageValidation';
 import { normalizeStartNumber } from '../domain/startNumber';
+import { assertBackupClassCompatible, assertUniqueEffectiveRunGroups, reservedStartNumberClassIds } from '../domain/runGroups';
 import { buildOrgaCode } from '../domain/orgaCode';
 import { assertClassRegistrationOpen } from '../domain/classRegistration';
 import { isPgUniqueViolation } from '../http/dbErrors';
@@ -259,6 +262,7 @@ const consentInputSchema = z.object({
 
 const createEntryItemBaseSchema = z.object({
   classId: z.string().uuid(),
+  backupClassId: z.string().uuid().optional(),
   codriverEnabled: z.boolean().optional(),
   codriver: codriverInputSchema.optional(),
   vehicle: vehicleInputSchema,
@@ -278,14 +282,19 @@ const createEntryItemSchema = createEntryItemBaseSchema
         message: 'codriver is required when codriverEnabled=true'
       });
     }
+    if (value.backupClassId && !value.backupVehicle) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['backupClassId'], message: 'backupClassId requires backupVehicle' });
+    }
   });
 
 const createEntrySchema = z
   .object({
     eventId: z.string().uuid(),
+    inviteToken: z.string().min(32).max(256).optional(),
     driver: driverInputSchema,
     consent: consentInputSchema,
     classId: createEntryItemBaseSchema.shape.classId,
+    backupClassId: createEntryItemBaseSchema.shape.backupClassId,
     codriverEnabled: createEntryItemBaseSchema.shape.codriverEnabled,
     codriver: createEntryItemBaseSchema.shape.codriver,
     vehicle: createEntryItemBaseSchema.shape.vehicle,
@@ -302,6 +311,9 @@ const createEntrySchema = z
         path: ['codriver'],
         message: 'codriver is required when codriverEnabled=true'
       });
+    }
+    if (value.backupClassId && !value.backupVehicle) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['backupClassId'], message: 'backupClassId requires backupVehicle' });
     }
     if (value.codriver && normalizeEmail(value.codriver.email) === normalizeEmail(value.driver.email)) {
       ctx.addIssue({
@@ -333,6 +345,7 @@ const validateBatchDriverCodriverEmails = (
 const createBatchSchema = z
   .object({
     eventId: z.string().uuid(),
+    inviteToken: z.string().min(32).max(256).optional(),
     clientSubmissionKey: nonEmptySchema.max(128),
     driver: driverInputSchema,
     consent: consentInputSchema,
@@ -343,6 +356,7 @@ const createBatchSchema = z
 const createBatchWithoutIdempotencySchema = z
   .object({
     eventId: z.string().uuid(),
+    inviteToken: z.string().min(32).max(256).optional(),
     driver: driverInputSchema,
     consent: consentInputSchema,
     entries: z.array(createEntryItemSchema).min(1).max(10)
@@ -368,12 +382,14 @@ const resendVerificationSchema = z.object({});
 
 const validateStartNumberSchema = z.object({
   eventId: z.string().uuid(),
+  inviteToken: z.string().min(32).max(256).optional(),
   classId: z.string().uuid(),
   startNumber: z.string().min(1).max(6)
 });
 
 const uploadInitSchema = z.object({
   eventId: z.string().uuid(),
+  inviteToken: z.string().min(32).max(256).optional(),
   contentType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
   fileName: z.string().min(1).max(255).optional(),
   fileSizeBytes: z.number().int().min(1).max(15 * 1024 * 1024)
@@ -403,6 +419,50 @@ const VEHICLE_IMAGE_MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
 const VEHICLE_IMAGE_MAX_DIMENSION_PIXELS = 6000;
 
 const hashUploadToken = (token: string): string => createHash('sha256').update(token).digest('hex');
+const hashInvitationToken = (token: string): string => createHash('sha256').update(token, 'utf8').digest('hex');
+
+type InvitationAccess = Pick<
+  typeof registrationInvitation.$inferSelect,
+  'id' | 'eventId' | 'recipientName' | 'recipientEmailNorm' | 'allowedClassIds' | 'expiresAt' | 'revokedAt' | 'consumedAt'
+>;
+
+const assertInvitationUsable = (invitation: InvitationAccess | undefined, eventId: string, now = new Date()) => {
+  if (!invitation || invitation.eventId !== eventId) throw new Error('INVITATION_INVALID');
+  if (invitation.revokedAt) throw new Error('INVITATION_REVOKED');
+  if (invitation.consumedAt) throw new Error('INVITATION_USED');
+  if (invitation.expiresAt < now) throw new Error('INVITATION_EXPIRED');
+  return invitation;
+};
+
+const loadInvitation = async (db: any, eventId: string, token: string, now = new Date()): Promise<InvitationAccess> => {
+  const rows = await db.select({
+    id: registrationInvitation.id,
+    eventId: registrationInvitation.eventId,
+    recipientName: registrationInvitation.recipientName,
+    recipientEmailNorm: registrationInvitation.recipientEmailNorm,
+    allowedClassIds: registrationInvitation.allowedClassIds,
+    expiresAt: registrationInvitation.expiresAt,
+    revokedAt: registrationInvitation.revokedAt,
+    consumedAt: registrationInvitation.consumedAt
+  }).from(registrationInvitation).where(eq(registrationInvitation.tokenHash, hashInvitationToken(token))).limit(1);
+  return assertInvitationUsable(rows[0], eventId, now);
+};
+
+const loadInvitationForEventLookup = async (db: any, token: string, now = new Date()): Promise<InvitationAccess> => {
+  const rows = await db.select({
+    id: registrationInvitation.id,
+    eventId: registrationInvitation.eventId,
+    recipientName: registrationInvitation.recipientName,
+    recipientEmailNorm: registrationInvitation.recipientEmailNorm,
+    allowedClassIds: registrationInvitation.allowedClassIds,
+    expiresAt: registrationInvitation.expiresAt,
+    revokedAt: registrationInvitation.revokedAt,
+    consumedAt: registrationInvitation.consumedAt
+  }).from(registrationInvitation).where(eq(registrationInvitation.tokenHash, hashInvitationToken(token))).limit(1);
+  const invitation = rows[0];
+  if (!invitation) throw new Error('INVITATION_INVALID');
+  return assertInvitationUsable(invitation, invitation.eventId, now);
+};
 
 const buildEmergencyContactName = (input: Partial<DriverInput>): string | null => {
   if (input.emergencyContactName) {
@@ -545,7 +605,7 @@ export const createPublicEntriesBatch = async (input: CreateBatchInput) => {
 };
 
 const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput): Promise<BatchResponse> => {
-  await assertRegistrationOpen(input.eventId);
+  if (!input.inviteToken) await assertRegistrationOpen(input.eventId);
   const publishedConsentTextHash = await assertConsentMetadataMatchesPublishedLegalTexts(input.consent);
   const db = await getDb();
   const now = new Date();
@@ -581,6 +641,22 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
           eventName: null as string | null,
           driverPersonId: null as string | null
         };
+      }
+
+      const invitation = input.inviteToken
+        ? await loadInvitation(tx, input.eventId, input.inviteToken, now)
+        : null;
+      if (invitation?.recipientEmailNorm && invitation.recipientEmailNorm !== normalizedDriverEmail) {
+        throw new Error('INVITATION_EMAIL_MISMATCH');
+      }
+      if (invitation) {
+        const submittedClassIds = input.entries.flatMap((item) => [
+          item.classId,
+          ...(item.backupVehicle ? [item.backupClassId ?? item.classId] : [])
+        ]);
+        if (submittedClassIds.some((classId) => !invitation.allowedClassIds.includes(classId))) {
+          throw new Error('INVITATION_CLASS_NOT_ALLOWED');
+        }
       }
 
       const activeGroupRows = await tx
@@ -665,7 +741,8 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         .select({
           id: event.id,
           name: event.name,
-          entryConfirmationConfig: event.entryConfirmationConfig
+          entryConfirmationConfig: event.entryConfirmationConfig,
+          status: event.status
         })
         .from(event)
         .where(eq(event.id, input.eventId))
@@ -674,8 +751,53 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       if (!currentEvent) {
         throw new Error('EVENT_NOT_FOUND');
       }
+      if (currentEvent.status !== 'open') throw new Error('EVENT_NOT_OPEN');
 
       const driver = await upsertPersonByEmail(input.driver);
+
+      const [validationClasses, activeDriverEntries] = await Promise.all([
+        tx
+          .select({
+            id: eventClass.id,
+            eventId: eventClass.eventId,
+            runGroupId: eventClass.runGroupId,
+            vehicleType: eventClass.vehicleType,
+            registrationClosed: eventClass.registrationClosed
+          })
+          .from(eventClass)
+          .where(eq(eventClass.eventId, input.eventId)),
+        tx
+          .select({
+            id: entry.id,
+            driverPersonId: entry.driverPersonId,
+            classId: entry.classId,
+            backupClassId: entry.backupClassId,
+            isBackupVehicle: entry.isBackupVehicle
+          })
+          .from(entry)
+          .where(
+            and(
+              eq(entry.eventId, input.eventId),
+              eq(entry.driverPersonId, driver.id),
+              sql`${entry.deletedAt} is null`,
+              ne(entry.acceptanceStatus, 'withdrawn')
+            )
+          )
+      ]);
+      const validationClassesById = new Map(validationClasses.map((item) => [item.id, item]));
+      assertUniqueEffectiveRunGroups(
+        [
+          ...activeDriverEntries,
+          ...input.entries.map((item, index) => ({
+            id: `new-${index}`,
+            driverPersonId: driver.id,
+            classId: item.classId,
+            backupClassId: item.backupVehicle ? item.backupClassId ?? item.classId : null,
+            isBackupVehicle: item.isBackupVehicle === true || Boolean(item.backupOfEntryId)
+          }))
+        ],
+        validationClassesById
+      );
 
       const [createdGroup] = await tx
         .insert(registrationGroup)
@@ -708,6 +830,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
             vehicleType: eventClass.vehicleType,
             allowsCodriver: eventClass.allowsCodriver,
             registrationClosed: eventClass.registrationClosed
+            ,runGroupId: eventClass.runGroupId
           })
           .from(eventClass)
           .where(eq(eventClass.id, item.classId))
@@ -716,7 +839,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         if (!clazz || clazz.eventId !== input.eventId) {
           throw new Error('CLASS_NOT_FOUND');
         }
-        assertClassRegistrationOpen(clazz.registrationClosed);
+        if (!invitation) assertClassRegistrationOpen(clazz.registrationClosed);
         if (item.vehicle.vehicleType && clazz.vehicleType !== item.vehicle.vehicleType) {
           throw new Error('CLASS_VEHICLE_TYPE_MISMATCH');
         }
@@ -724,15 +847,39 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
           throw new Error('CLASS_CODRIVER_NOT_ALLOWED');
         }
 
+        const resolvedBackupClassId = item.backupVehicle ? item.backupClassId ?? item.classId : null;
+        const backupClassRows = resolvedBackupClassId
+          ? await tx
+              .select({
+                id: eventClass.id,
+                eventId: eventClass.eventId,
+                runGroupId: eventClass.runGroupId,
+                vehicleType: eventClass.vehicleType,
+                registrationClosed: eventClass.registrationClosed
+              })
+              .from(eventClass)
+              .where(eq(eventClass.id, resolvedBackupClassId))
+              .limit(1)
+          : [];
+        const backupClazz = backupClassRows[0] ?? null;
+        if (resolvedBackupClassId) {
+          if (!backupClazz || backupClazz.eventId !== input.eventId) throw new Error('BACKUP_CLASS_INVALID');
+          assertBackupClassCompatible(clazz, backupClazz, {
+            requireOpen: !invitation,
+            backupVehicleType: item.backupVehicle?.vehicleType ?? null
+          });
+        }
+
+        const reservedClassIds = reservedStartNumberClassIds(item.classId, resolvedBackupClassId);
         const activeStartNumberConflict = await tx
           .select({ id: entry.id })
-          .from(entry)
+          .from(entryStartNumberReservation)
+          .innerJoin(entry, eq(entry.id, entryStartNumberReservation.entryId))
           .where(
             and(
-              eq(entry.eventId, input.eventId),
-              eq(entry.classId, item.classId),
-              eq(entry.startNumberNorm, normalizedStartNumber),
-              sql`${entry.deletedAt} is null`
+              eq(entryStartNumberReservation.eventId, input.eventId),
+              inArray(entryStartNumberReservation.classId, reservedClassIds),
+              eq(entryStartNumberReservation.startNumberNorm, normalizedStartNumber)
             )
           )
           .limit(1);
@@ -783,13 +930,17 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
           return consumedUpload.s3Key;
         };
 
-        const createVehicleRecord = async (vehicleInput: VehicleInput, resolvedStartNumberRaw: string | null) => {
+        const createVehicleRecord = async (
+          vehicleInput: VehicleInput,
+          resolvedStartNumberRaw: string | null,
+          vehicleClass: { vehicleType: string }
+        ) => {
           const imageS3Key = await resolveVehicleImageS3Key(vehicleInput);
           const [createdVehicle] = await tx
             .insert(vehicle)
             .values({
               ownerPersonId: driver.id,
-              vehicleType: clazz.vehicleType,
+              vehicleType: vehicleClass.vehicleType,
               make: vehicleInput.make,
               model: vehicleInput.model,
               year: vehicleInput.year ?? null,
@@ -806,12 +957,9 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
           return createdVehicle;
         };
 
-        const normalizedBackupVehicleStartNumber = item.backupVehicle?.startNumberRaw
-          ? normalizeStartNumber(item.backupVehicle.startNumberRaw)
-          : null;
-        const createdVehicle = await createVehicleRecord(item.vehicle, normalizedStartNumber);
+        const createdVehicle = await createVehicleRecord(item.vehicle, normalizedStartNumber, clazz);
         const createdBackupVehicle = item.backupVehicle
-          ? await createVehicleRecord(item.backupVehicle, normalizedBackupVehicleStartNumber)
+          ? await createVehicleRecord(item.backupVehicle, normalizedStartNumber, backupClazz ?? clazz)
           : null;
 
         if (item.isBackupVehicle === true && !item.backupOfEntryId) {
@@ -851,6 +999,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
           .values({
             eventId: input.eventId,
             classId: item.classId,
+            backupClassId: resolvedBackupClassId,
             driverPersonId: driver.id,
             registrationGroupId: createdGroup.id,
             codriverPersonId: codriverId,
@@ -945,6 +1094,28 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         confirmationMailSent: false
       };
 
+      if (invitation) {
+        const consumedRows = await tx.update(registrationInvitation).set({
+          consumedAt: now,
+          consumedRegistrationGroupId: createdGroup.id,
+          updatedAt: now
+        }).where(and(
+          eq(registrationInvitation.id, invitation.id),
+          sql`${registrationInvitation.revokedAt} is null`,
+          sql`${registrationInvitation.consumedAt} is null`,
+          sql`${registrationInvitation.expiresAt} >= ${now}`
+        )).returning({ id: registrationInvitation.id });
+        if (!consumedRows[0]) throw new Error('INVITATION_USED');
+        await writeAuditLog(tx as never, {
+          eventId: input.eventId,
+          actorUserId: null,
+          action: 'registration_invitation_consumed',
+          entityType: 'registration_invitation',
+          entityId: invitation.id,
+          payload: { registrationGroupId: createdGroup.id }
+        });
+      }
+
       if ('clientSubmissionKey' in input) {
         await tx.insert(publicEntrySubmission).values({
           eventId: input.eventId,
@@ -976,13 +1147,17 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
     }
 
     if (created.driverPersonId) {
-      await recalculateInvoices(
-        input.eventId,
-        {
-          driverPersonId: created.driverPersonId
-        },
-        null
-      );
+      try {
+        await recalculateInvoices(
+          input.eventId,
+          {
+            driverPersonId: created.driverPersonId
+          },
+          null
+        );
+      } catch (error) {
+        if (!input.inviteToken) throw error;
+      }
     }
 
     const primaryEntryId = created.response.entryIds[0];
@@ -990,6 +1165,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       throw new Error('REGISTRATION_CONFIRMATION_QUEUE_FAILED');
     }
 
+    let confirmationMailQueued = true;
     try {
       await queueLifecycleMail(
         {
@@ -1003,11 +1179,12 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       );
     } catch (error) {
       if (!(error instanceof DuplicateRequestError)) {
-        throw new Error('REGISTRATION_CONFIRMATION_QUEUE_FAILED');
+        if (!input.inviteToken) throw new Error('REGISTRATION_CONFIRMATION_QUEUE_FAILED');
+        confirmationMailQueued = false;
       }
     }
 
-    await db.transaction(async (tx) => {
+    if (confirmationMailQueued) await db.transaction(async (tx) => {
       await tx
         .update(entry)
         .set({
@@ -1049,7 +1226,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
 
     return {
       ...created.response,
-      confirmationMailSent: true
+      confirmationMailSent: confirmationMailQueued
     };
   } catch (error) {
     if (
@@ -1060,6 +1237,15 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       (error as { constraint?: string }).constraint === 'registration_group_event_driver_email_active_unique'
     ) {
       throw new Error('EMAIL_ALREADY_IN_USE_ACTIVE_ENTRY');
+    }
+    if (
+      isPgUniqueViolation(error) &&
+      typeof error === 'object' &&
+      error !== null &&
+      'constraint' in error &&
+      (error as { constraint?: string }).constraint === 'entry_run_group_reservation_driver_group_unique'
+    ) {
+      throw new Error('RUN_GROUP_CONFLICT');
     }
     if (isPgUniqueViolation(error)) {
       throw new Error('UNIQUE_VIOLATION');
@@ -1250,6 +1436,7 @@ const sendRegistrationAlertMails = async (input: {
 export const createPublicEntry = async (input: CreateEntryInput) => {
   const batchResult = await createPublicEntriesBatchInternal({
     eventId: input.eventId,
+    inviteToken: input.inviteToken,
     driver: input.driver,
     consent: input.consent,
     entries: [
@@ -1259,6 +1446,7 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
         codriver: input.codriver,
         vehicle: input.vehicle,
         backupVehicle: input.backupVehicle,
+        backupClassId: input.backupClassId,
         specialNotes: input.specialNotes,
         backupOfEntryId: input.backupOfEntryId,
         startNumber: input.startNumber,
@@ -1276,8 +1464,9 @@ export const createPublicEntry = async (input: CreateEntryInput) => {
   };
 };
 
-export const getPublicCurrentEventWithClasses = async () => {
+export const getPublicCurrentEventWithClasses = async (inviteToken?: string) => {
   const db = await getDb();
+  const invitation = inviteToken ? await loadInvitationForEventLookup(db, inviteToken) : null;
   const eventRows = await db
     .select({
       id: event.id,
@@ -1292,7 +1481,7 @@ export const getPublicCurrentEventWithClasses = async () => {
       registrationCloseAt: event.registrationCloseAt
     })
     .from(event)
-    .where(eq(event.isCurrent, true))
+    .where(invitation ? eq(event.id, invitation.eventId) : eq(event.isCurrent, true))
     .limit(1);
 
   const current = eventRows[0];
@@ -1307,7 +1496,8 @@ export const getPublicCurrentEventWithClasses = async () => {
       name: eventClass.name,
       vehicleType: eventClass.vehicleType,
       allowsCodriver: eventClass.allowsCodriver,
-      registrationClosed: eventClass.registrationClosed
+      registrationClosed: eventClass.registrationClosed,
+      selectionGroupKey: sql<string>`coalesce(${eventClass.runGroupId}, ${eventClass.id})`
     })
     .from(eventClass)
     .where(eq(eventClass.eventId, current.id))
@@ -1342,15 +1532,18 @@ export const getPublicCurrentEventWithClasses = async () => {
   let reason: 'event_not_open' | 'before_window' | 'after_window' | null = null;
   if (current.status !== 'open') {
     reason = 'event_not_open';
-  } else if (!current.registrationOpenAt || now < current.registrationOpenAt) {
+  } else if (!invitation && (!current.registrationOpenAt || now < current.registrationOpenAt)) {
     reason = 'before_window';
-  } else if (current.registrationCloseAt && now > current.registrationCloseAt) {
+  } else if (!invitation && current.registrationCloseAt && now > current.registrationCloseAt) {
     reason = 'after_window';
   }
 
   return {
     event: current,
-    classes: classRows,
+    classes: classRows.map((item) => ({
+      ...item,
+      inviteAllowed: invitation ? invitation.allowedClassIds.includes(item.id) : false
+    })),
     pricingRules: pricingRule
       ? {
           earlyDeadline: pricingRule.earlyDeadline,
@@ -1367,12 +1560,19 @@ export const getPublicCurrentEventWithClasses = async () => {
     registration: {
       isOpen: reason === null,
       reason
-    }
+    },
+    invitation: invitation ? {
+      recipientName: invitation.recipientName,
+      recipientEmail: invitation.recipientEmailNorm,
+      expiresAt: invitation.expiresAt,
+      allowedClassIds: invitation.allowedClassIds
+    } : null
   };
 };
 
 export const validatePublicStartNumber = async (input: ValidateStartNumberInput) => {
   const db = await getDb();
+  const invitation = input.inviteToken ? await loadInvitation(db, input.eventId, input.inviteToken) : null;
   const normalizedStartNumber = normalizeStartNumber(input.startNumber);
   if (!normalizedStartNumber) {
     return {
@@ -1397,19 +1597,23 @@ export const validatePublicStartNumber = async (input: ValidateStartNumberInput)
   if (!clazz || clazz.eventId !== input.eventId) {
     throw new Error('CLASS_NOT_FOUND');
   }
-  assertClassRegistrationOpen(clazz.registrationClosed);
+  if (invitation) {
+    if (!invitation.allowedClassIds.includes(input.classId)) throw new Error('INVITATION_CLASS_NOT_ALLOWED');
+  } else {
+    assertClassRegistrationOpen(clazz.registrationClosed);
+  }
 
   const conflictRows = await db
     .select({
       id: entry.id
     })
-    .from(entry)
+    .from(entryStartNumberReservation)
+    .innerJoin(entry, eq(entry.id, entryStartNumberReservation.entryId))
     .where(
       and(
-        eq(entry.eventId, input.eventId),
-        eq(entry.classId, input.classId),
-        eq(entry.startNumberNorm, normalizedStartNumber),
-        sql`${entry.deletedAt} is null`
+        eq(entryStartNumberReservation.eventId, input.eventId),
+        eq(entryStartNumberReservation.classId, input.classId),
+        eq(entryStartNumberReservation.startNumberNorm, normalizedStartNumber)
       )
     )
     .limit(1);
@@ -1425,8 +1629,9 @@ export const validatePublicStartNumber = async (input: ValidateStartNumberInput)
 };
 
 export const initVehicleImageUpload = async (input: UploadInitInput) => {
-  await assertRegistrationOpen(input.eventId);
   const db = await getDb();
+  if (input.inviteToken) await loadInvitation(db, input.eventId, input.inviteToken);
+  else await assertRegistrationOpen(input.eventId);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 1000 * 60 * 15);
   const key = `uploads/${input.eventId}/vehicle-images/${randomUUID()}`;

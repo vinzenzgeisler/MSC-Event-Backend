@@ -492,7 +492,20 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "classes": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/PublicEventClass" }
+                    }
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "Bad Request",
@@ -1379,7 +1392,8 @@
                                     "pending",
                                     "shortlist",
                                     "accepted",
-                                    "rejected"
+                                    "rejected",
+                                    "withdrawn"
                                   ]
                                 },
                                 "registrationStatus": {
@@ -1850,7 +1864,8 @@
                           "pending",
                           "shortlist",
                           "accepted",
-                          "rejected"
+                          "rejected",
+                          "withdrawn"
                         ]
                       },
                       "registrationStatus": {
@@ -2215,6 +2230,72 @@
             "bearerAuth": []
           }
         ]
+      }
+    },
+    "/admin/events/{eventId}/registration-invitations": {
+      "get": {
+        "operationId": "get_admin_events_eventId_registration_invitations",
+        "tags": ["admin"],
+        "responses": { "200": { "description": "OK" }, "403": { "description": "Forbidden" } },
+        "parameters": [{ "name": "eventId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      },
+      "post": {
+        "operationId": "post_admin_events_eventId_registration_invitations",
+        "tags": ["admin"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "required": ["expiresAt", "allowedClassIds"], "properties": {
+            "recipientName": { "type": "string" }, "recipientEmail": { "type": "string", "format": "email" },
+            "expiresAt": { "type": "string", "format": "date-time" },
+            "allowedClassIds": { "type": "array", "minItems": 1, "items": { "type": "string", "format": "uuid" } }
+          }
+        } } } },
+        "responses": { "201": { "description": "Created; token is returned only in this response" }, "400": { "description": "Invalid input" }, "409": { "description": "Invalid class" } },
+        "parameters": [{ "name": "eventId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      }
+    },
+    "/admin/registration-invitations/{id}/revoke": {
+      "post": {
+        "operationId": "post_admin_registration_invitations_id_revoke",
+        "tags": ["admin"],
+        "responses": { "200": { "description": "OK" }, "409": { "description": "Already revoked or consumed" } },
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      }
+    },
+    "/admin/events/{eventId}/run-groups": {
+      "get": {
+        "operationId": "get_admin_events_id_run_groups",
+        "tags": ["admin"],
+        "responses": { "200": { "description": "OK" }, "403": { "description": "Forbidden" } },
+        "parameters": [{ "name": "eventId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      },
+      "post": {
+        "operationId": "post_admin_events_id_run_groups",
+        "tags": ["admin"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunGroupWriteRequest" } } } },
+        "responses": { "200": { "description": "OK" }, "409": { "description": "Class assignment or existing-entry conflict" } },
+        "parameters": [{ "name": "eventId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      }
+    },
+    "/admin/run-groups/{id}": {
+      "patch": {
+        "operationId": "patch_admin_run_groups_id",
+        "tags": ["admin"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunGroupWriteRequest" } } } },
+        "responses": { "200": { "description": "OK" }, "409": { "description": "Class assignment or existing-entry conflict" } },
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
+      },
+      "delete": {
+        "operationId": "delete_admin_run_groups_id",
+        "tags": ["admin"],
+        "responses": { "200": { "description": "OK" }, "409": { "description": "Existing entries prevent deletion" } },
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }]
       }
     },
     "/admin/events/{id}/classes": {
@@ -5287,8 +5368,15 @@
                       "pending",
                       "shortlist",
                       "accepted",
-                      "rejected"
+                      "rejected",
+                      "withdrawn"
                     ]
+                  },
+                  "withdrawalReason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000,
+                    "description": "Required when acceptanceStatus is withdrawn."
                   },
                   "sendLifecycleMail": {
                     "type": "boolean"
@@ -7175,6 +7263,64 @@
         }
       }
     },
+    "/admin/entries/{id}/backup-class": {
+      "patch": {
+        "operationId": "patch_admin_entries_id_backup_class",
+        "tags": ["admin"],
+        "description": "Changes the class of an inline backup vehicle while preserving the entry and start number.",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EntryBackupClassPatchRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Backup class updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EntryBackupClassPatchResponse" } } } },
+          "400": { "description": "Bad Request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "403": { "description": "Forbidden", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "404": { "description": "Not Found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "409": { "description": "Conflict", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+        }
+      }
+    },
+    "/admin/entries/{id}/assignment": {
+      "patch": {
+        "operationId": "patch_admin_entries_id_assignment",
+        "tags": ["admin"],
+        "description": "Atomically changes class and start number, recalculates affected invoices, audits the exact transition, and durably queues one driver system mail. Requires entries.status.write and communication.write.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EntryAssignmentPatchRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Assignment changed and mail queued, or an idempotent retry resolved",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EntryAssignmentPatchResponse" } } }
+          },
+          "400": { "description": "Invalid request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "403": { "description": "Missing entries.status.write or communication.write", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "404": { "description": "Entry, event, or class not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "409": { "description": "Assignment conflict or incompatible current state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "422": { "description": "Co-driver request or mail recipient is invalid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "500": { "description": "Internal Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+        }
+      }
+    },
     "/admin/mail/templates": {
       "get": {
         "operationId": "get_admin_mail_templates",
@@ -7959,7 +8105,8 @@
                 "pending",
                 "shortlist",
                 "accepted",
-                "rejected"
+                "rejected",
+                "withdrawn"
               ]
             }
           },
@@ -8437,7 +8584,8 @@
                           "pending",
                           "shortlist",
                           "accepted",
-                          "rejected"
+                          "rejected",
+                          "withdrawn"
                         ]
                       },
                       "registrationStatus": {
@@ -9196,12 +9344,48 @@
           "motorsportHistory"
         ]
       },
+      "RunGroupWriteRequest": {
+        "type": "object",
+        "required": ["name", "classIds"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "classIds": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "format": "uuid" }
+          }
+        }
+      },
+      "PublicEventClass": {
+        "type": "object",
+        "required": ["id", "eventId", "name", "vehicleType", "allowsCodriver", "registrationClosed", "selectionGroupKey"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "eventId": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "vehicleType": { "type": "string", "enum": ["moto", "auto"] },
+          "allowsCodriver": { "type": "boolean" },
+          "registrationClosed": { "type": "boolean" },
+          "inviteAllowed": { "type": "boolean", "description": "True only when the supplied invitation allows this class." },
+          "selectionGroupKey": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Opaque identifier used only to determine mutually exclusive entry choices."
+          }
+        }
+      },
       "PublicCreateEntryRequest": {
         "type": "object",
         "properties": {
+          "inviteToken": { "type": "string", "minLength": 32, "writeOnly": true },
           "classId": {
             "type": "string",
             "format": "uuid"
+          },
+          "backupClassId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Class of the inline backup vehicle; defaults to classId for legacy clients."
           },
           "driver": {
             "$ref": "#/components/schemas/PublicDriverInput"
@@ -9320,6 +9504,7 @@
       "PublicCreateEntriesBatchRequest": {
         "type": "object",
         "properties": {
+          "inviteToken": { "type": "string", "minLength": 32, "writeOnly": true },
           "clientSubmissionKey": {
             "type": "string"
           },
@@ -9382,6 +9567,11 @@
                 "classId": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "backupClassId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Class of the inline backup vehicle; defaults to classId."
                 },
                 "codriverEnabled": {
                   "type": "boolean"
@@ -9489,6 +9679,12 @@
                     "type": "string",
                     "format": "uuid"
                   },
+                  "backupClassId": {
+                    "oneOf": [
+                      { "type": "string", "format": "uuid" },
+                      { "type": "null" }
+                    ]
+                  },
                   "driverPersonId": {
                     "type": "string",
                     "format": "uuid"
@@ -9520,6 +9716,9 @@
                     ]
                   }
                 }
+              },
+              "backupClassName": {
+                "oneOf": [{ "type": "string" }, { "type": "null" }]
               },
               "person": {
                 "type": "object",
@@ -9629,6 +9828,24 @@
           },
           "acceptanceStatus": {
             "type": "string"
+          },
+          "withdrawnReason": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "withdrawnAt": {
+            "oneOf": [
+              { "type": "string", "format": "date-time" },
+              { "type": "null" }
+            ]
+          },
+          "withdrawnBy": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ]
           },
           "paymentStatus": {
             "oneOf": [
@@ -9779,6 +9996,22 @@
           }
         }
       },
+      "EntryBackupClassPatchRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["backupClassId"],
+        "properties": { "backupClassId": { "type": "string", "format": "uuid" } }
+      },
+      "EntryBackupClassPatchResponse": {
+        "type": "object",
+        "required": ["ok", "id", "backupClassId", "backupVehicleType"],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "id": { "type": "string", "format": "uuid" },
+          "backupClassId": { "type": "string", "format": "uuid" },
+          "backupVehicleType": { "type": "string", "enum": ["auto", "moto"] }
+        }
+      },
       "EntryClassPatchResponse": {
         "type": "object",
         "required": [
@@ -9826,6 +10059,43 @@
               "type": "string"
             }
           }
+        }
+      },
+      "EntryAssignmentPatchRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["classId", "startNumber", "sendSystemMail"],
+        "properties": {
+          "classId": { "type": "string", "format": "uuid" },
+          "startNumber": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{1,6}$",
+            "description": "Normalized to uppercase by the backend."
+          },
+          "applyToBackupVehicle": { "type": "boolean", "default": false },
+          "allowVehicleTypeChange": { "type": "boolean", "default": true },
+          "sendSystemMail": { "type": "boolean", "const": true },
+          "requestCodriverData": { "type": "boolean", "default": false }
+        }
+      },
+      "EntryAssignmentPatchResponse": {
+        "type": "object",
+        "required": [
+          "ok", "entryId", "classId", "startNumber", "vehicleTypeBefore", "vehicleTypeAfter",
+          "backupVehicleUpdated", "warnings", "outboxId", "mailQueued", "idempotent"
+        ],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "entryId": { "type": "string", "format": "uuid" },
+          "classId": { "type": "string", "format": "uuid" },
+          "startNumber": { "type": "string", "pattern": "^[A-Z0-9]{1,6}$" },
+          "vehicleTypeBefore": { "type": "string", "enum": ["auto", "moto"] },
+          "vehicleTypeAfter": { "type": "string", "enum": ["auto", "moto"] },
+          "backupVehicleUpdated": { "type": "boolean" },
+          "warnings": { "type": "array", "items": { "type": "string" } },
+          "outboxId": { "type": "string", "format": "uuid" },
+          "mailQueued": { "type": "boolean" },
+          "idempotent": { "type": "boolean" }
         }
       },
       "MailTemplateModel": {
@@ -10451,7 +10721,8 @@
               "pending",
               "shortlist",
               "accepted",
-              "rejected"
+              "rejected",
+              "withdrawn"
             ]
           },
           "registrationStatus": {

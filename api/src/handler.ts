@@ -14,6 +14,7 @@ import {
 import { buildPublicRateLimitKey, enforcePublicRateLimit } from './http/publicRateLimit';
 import { errorJson, json } from './http/response';
 import { parseJsonBody } from './http/parse';
+import { isPgUniqueViolation } from './http/dbErrors';
 import { getPresignedAssetsDownloadUrl } from './docs/storage';
 import {
   archiveEvent,
@@ -42,6 +43,19 @@ import {
   validateClassUpdateInput
 } from './routes/adminClasses';
 import {
+  createRunGroup,
+  deleteRunGroup,
+  listRunGroups,
+  updateRunGroup,
+  validateRunGroupPayload
+} from './routes/adminRunGroups';
+import {
+  createRegistrationInvitation,
+  listRegistrationInvitations,
+  revokeRegistrationInvitation,
+  validateCreateRegistrationInvitationInput
+} from './routes/adminRegistrationInvitations';
+import {
   getExportDownload,
   getExportJob,
   listExportJobs,
@@ -56,15 +70,19 @@ import {
   listEntries,
   restoreEntry,
   getEntryDetail,
+  patchEntryAssignment,
   patchEntryStatus,
   patchEntryClass,
+  patchEntryBackupClass,
   patchEntryTechStatus,
   patchEntryNotes,
   patchEntryDriverEmail,
   patchEntryPaymentStatus,
   patchEntryPaymentAmounts,
   validateEntryStatusPatchInput,
+  validateEntryAssignmentPatchInput,
   validateEntryClassPatchInput,
+  validateEntryBackupClassPatchInput,
   validateEntryTechStatusPatchInput,
   validateEntryNotesPatchInput,
   validateDriverEmailPatchInput,
@@ -175,9 +193,15 @@ import {
 } from './routes/adminMail';
 import {
   getDashboardDriverLocations,
+  getDashboardOverview,
+  queueMissingAcceptanceMailsFromDashboard,
   getDashboardSummary,
+  getDashboardWarnings,
   validateDashboardDriverLocationsQuery,
-  validateDashboardSummaryQuery
+  validateDashboardOverviewQuery,
+  validateDashboardQueueMissingAcceptanceMailsInput,
+  validateDashboardSummaryQuery,
+  validateDashboardWarningsQuery
 } from './routes/adminDashboard';
 import {
   createTechCheckBatchDocument,
@@ -232,6 +256,20 @@ import {
 
 const isInvalidJson = (error: unknown): boolean =>
   error instanceof Error && error.message === 'Invalid JSON body';
+
+const invitationErrorJson = (error: unknown): APIGatewayProxyStructuredResultV2 | null => {
+  if (!(error instanceof Error)) return null;
+  const statusByCode: Record<string, number> = {
+    INVITATION_INVALID: 404,
+    INVITATION_EXPIRED: 409,
+    INVITATION_REVOKED: 409,
+    INVITATION_USED: 409,
+    INVITATION_EMAIL_MISMATCH: 409,
+    INVITATION_CLASS_NOT_ALLOWED: 409
+  };
+  const status = statusByCode[error.message];
+  return status ? errorJson(status, error.message, undefined, error.message) : null;
+};
 
 const getClientIp = (event: APIGatewayProxyEventV2): string => {
   const forwardedFor = event.headers['x-forwarded-for'] ?? event.headers['X-Forwarded-For'];
@@ -446,6 +484,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const result = await createPublicEntry(input);
       return json(200, { ok: true, ...result });
     } catch (error) {
+      const invitationError = invitationErrorJson(error);
+      if (invitationError) return invitationError;
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
@@ -466,6 +506,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'CLASS_VEHICLE_TYPE_MISMATCH') {
         return errorJson(409, 'Class does not match vehicle type');
+      }
+      if (
+        error instanceof Error &&
+        ['RUN_GROUP_CONFLICT', 'BACKUP_CLASS_INVALID', 'BACKUP_CLASS_CLOSED', 'BACKUP_CLASS_VEHICLE_TYPE_MISMATCH'].includes(error.message)
+      ) {
+        return errorJson(409, 'This class combination is not available for multiple entries', undefined, 'CLASS_COMBINATION_NOT_AVAILABLE');
       }
       if (error instanceof Error && error.message === 'START_NUMBER_INVALID_FORMAT') {
         return errorJson(
@@ -557,6 +603,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const result = await createPublicEntriesBatch(input);
       return json(200, { ok: true, ...result });
     } catch (error) {
+      const invitationError = invitationErrorJson(error);
+      if (invitationError) return invitationError;
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
@@ -580,6 +628,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'CLASS_VEHICLE_TYPE_MISMATCH') {
         return errorJson(409, 'Class does not match vehicle type');
+      }
+      if (
+        error instanceof Error &&
+        ['RUN_GROUP_CONFLICT', 'BACKUP_CLASS_INVALID', 'BACKUP_CLASS_CLOSED', 'BACKUP_CLASS_VEHICLE_TYPE_MISMATCH'].includes(error.message)
+      ) {
+        return errorJson(409, 'This class combination is not available for multiple entries', undefined, 'CLASS_COMBINATION_NOT_AVAILABLE');
       }
       if (error instanceof Error && error.message === 'START_NUMBER_INVALID_FORMAT') {
         return errorJson(
@@ -658,12 +712,14 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/public/events/current') {
     try {
-      const current = await getPublicCurrentEventWithClasses();
+      const current = await getPublicCurrentEventWithClasses(event.queryStringParameters?.invite);
       if (!current) {
         return errorJson(404, 'Current event not found');
       }
       return json(200, { ok: true, ...current });
     } catch (error) {
+      const invitationError = invitationErrorJson(error);
+      if (invitationError) return invitationError;
       return errorJson(500, 'Get current public event failed');
     }
   }
@@ -683,6 +739,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const result = await validatePublicStartNumber(input);
       return json(200, { ok: true, ...result });
     } catch (error) {
+      const invitationError = invitationErrorJson(error);
+      if (invitationError) return invitationError;
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
@@ -710,6 +768,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const created = await initVehicleImageUpload(input);
       return json(200, { ok: true, ...created });
     } catch (error) {
+      const invitationError = invitationErrorJson(error);
+      if (invitationError) return invitationError;
       if (error instanceof ZodError) {
         if (hasZodTooLargeIssue(error, 'fileSizeBytes')) {
           return errorJson(
@@ -890,6 +950,49 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     });
   }
 
+  if (method === 'GET' && path === '/admin/dashboard/overview') {
+    const auth = getAuthContext(event);
+    if (!hasPermissionOrAutomation(auth, 'dashboard.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const query = validateDashboardOverviewQuery(event.queryStringParameters ?? {});
+      const result = await getDashboardOverview(query);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      return errorJson(500, 'Get dashboard overview failed');
+    }
+  }
+  if (method === 'POST' && path === '/admin/dashboard/actions/queue-missing-lifecycle-mails') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'communication.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const input = validateDashboardQueueMissingAcceptanceMailsInput(parseJsonBody(event));
+      const result = await queueMissingAcceptanceMailsFromDashboard(input, auth.email ?? auth.sub ?? null);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      return errorJson(500, 'Queue missing lifecycle mails failed');
+    }
+  }
   if (method === 'GET' && path === '/admin/dashboard/summary') {
     const auth = getAuthContext(event);
     if (!hasPermissionOrAutomation(auth, 'dashboard.read')) {
@@ -911,6 +1014,26 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  if (method === 'GET' && path === '/admin/dashboard/warnings') {
+    const auth = getAuthContext(event);
+    if (!hasPermissionOrAutomation(auth, 'dashboard.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+
+    try {
+      const query = validateDashboardWarningsQuery(event.queryStringParameters ?? {});
+      const result = await getDashboardWarnings(query);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found');
+      }
+      return errorJson(500, 'Get dashboard warnings failed');
+    }
+  }
   if (method === 'GET' && path === '/admin/dashboard/driver-locations') {
     const auth = getAuthContext(event);
     if (!hasPermissionOrAutomation(auth, 'dashboard.read')) {
@@ -1445,6 +1568,106 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, error.message);
       }
       return errorJson(500, 'List classes failed');
+    }
+  }
+
+  const eventRunGroupsMatch = path.match(/^\/admin\/events\/([^/]+)\/run-groups$/);
+  const eventInvitationsMatch = path.match(/^\/admin\/events\/([^/]+)\/registration-invitations$/);
+  if (method === 'GET' && eventInvitationsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermissionOrAutomation(auth, 'settings.read')) return errorJson(403, 'Forbidden');
+    try {
+      return json(200, { ok: true, invitations: await listRegistrationInvitations(eventInvitationsMatch[1]) });
+    } catch {
+      return errorJson(500, 'List registration invitations failed');
+    }
+  }
+  if (method === 'POST' && eventInvitationsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'settings.write')) return errorJson(403, 'Forbidden');
+    try {
+      const result = await createRegistrationInvitation(
+        eventInvitationsMatch[1],
+        validateCreateRegistrationInvitationInput(parseJsonBody(event)),
+        auth.sub
+      );
+      return json(201, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') return errorJson(404, 'Event not found');
+      if (error instanceof Error && error.message === 'INVITATION_CLASS_INVALID') {
+        return errorJson(409, 'Allowed classes must belong to the event', undefined, 'INVITATION_CLASS_INVALID');
+      }
+      return errorJson(500, 'Create registration invitation failed');
+    }
+  }
+
+  const invitationRevokeMatch = path.match(/^\/admin\/registration-invitations\/([^/]+)\/revoke$/);
+  if (method === 'POST' && invitationRevokeMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'settings.write')) return errorJson(403, 'Forbidden');
+    try {
+      const revoked = await revokeRegistrationInvitation(invitationRevokeMatch[1], auth.sub);
+      if (!revoked) return errorJson(409, 'Invitation cannot be revoked', undefined, 'INVITATION_NOT_REVOCABLE');
+      return json(200, { ok: true, invitation: revoked });
+    } catch {
+      return errorJson(500, 'Revoke registration invitation failed');
+    }
+  }
+
+  if (method === 'GET' && eventRunGroupsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'settings.write')) return errorJson(403, 'Forbidden');
+    try {
+      return json(200, { ok: true, runGroups: await listRunGroups(eventRunGroupsMatch[1]) });
+    } catch {
+      return errorJson(500, 'List run groups failed');
+    }
+  }
+  if (method === 'POST' && eventRunGroupsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'settings.write')) return errorJson(403, 'Forbidden');
+    try {
+      const created = await createRunGroup(eventRunGroupsMatch[1], validateRunGroupPayload(parseJsonBody(event)), auth.sub);
+      return json(200, { ok: true, runGroup: created });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') return errorJson(409, 'Event is read-only');
+      if (error instanceof Error && ['RUN_GROUP_CLASS_INVALID', 'RUN_GROUP_CLASS_ASSIGNED'].includes(error.message)) {
+        return errorJson(409, 'The selected classes cannot be combined', undefined, 'RUN_GROUP_CONFLICT');
+      }
+      if (error instanceof Error && ['RUN_GROUP_CONFLICT', 'BACKUP_CLASS_INVALID'].includes(error.message)) {
+        return errorJson(409, 'Existing entries prevent this class combination', undefined, 'RUN_GROUP_CONFLICT');
+      }
+      if (isPgUniqueViolation(error)) return errorJson(409, 'A run group with this name already exists', undefined, 'RUN_GROUP_NAME_TAKEN');
+      return errorJson(500, 'Create run group failed');
+    }
+  }
+
+  const runGroupMatch = path.match(/^\/admin\/run-groups\/([^/]+)$/);
+  if ((method === 'PATCH' || method === 'DELETE') && runGroupMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'settings.write')) return errorJson(403, 'Forbidden');
+    try {
+      const result = method === 'PATCH'
+        ? await updateRunGroup(runGroupMatch[1], validateRunGroupPayload(parseJsonBody(event)), auth.sub)
+        : await deleteRunGroup(runGroupMatch[1], auth.sub);
+      if (!result) return errorJson(404, 'Run group not found');
+      return json(200, method === 'PATCH' ? { ok: true, runGroup: result } : { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') return errorJson(409, 'Event is read-only');
+      if (error instanceof Error && ['RUN_GROUP_CLASS_INVALID', 'RUN_GROUP_CLASS_ASSIGNED'].includes(error.message)) {
+        return errorJson(409, 'The selected classes cannot be combined', undefined, 'RUN_GROUP_CONFLICT');
+      }
+      if (error instanceof Error && ['RUN_GROUP_CONFLICT', 'BACKUP_CLASS_INVALID'].includes(error.message)) {
+        return errorJson(409, 'Existing entries prevent this change', undefined, 'RUN_GROUP_CONFLICT');
+      }
+      if (isPgUniqueViolation(error)) return errorJson(409, 'A run group with this name already exists', undefined, 'RUN_GROUP_NAME_TAKEN');
+      return errorJson(500, method === 'PATCH' ? 'Update run group failed' : 'Delete run group failed');
     }
   }
 
@@ -2576,6 +2799,27 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           [{ field: 'acceptanceStatus', code: 'invalid_transition', message: 'Transition is not allowed' }]
         );
       }
+      if (error instanceof Error && error.message === 'START_NUMBER_CONFLICT') {
+        return errorJson(
+          409,
+          'Start number is already assigned in this class',
+          undefined,
+          'START_NUMBER_CONFLICT',
+          [{ field: 'acceptanceStatus', code: 'start_number_conflict', message: 'The historical start number has been reassigned' }]
+        );
+      }
+      if (error instanceof Error && ['RUN_GROUP_CONFLICT', 'BACKUP_CLASS_INVALID'].includes(error.message)) {
+        return errorJson(409, 'The selected class is not available for this entry', undefined, 'CLASS_COMBINATION_NOT_AVAILABLE');
+      }
+      if (error instanceof Error && error.message === 'INVALID_STATE') {
+        return errorJson(409, 'Entry is not active');
+      }
+      if (isPgUniqueViolation(error)) {
+        const constraint = (error as { constraint?: string }).constraint;
+        return constraint === 'entry_run_group_reservation_driver_group_unique'
+          ? errorJson(409, 'The selected class is not available for this entry', undefined, 'CLASS_COMBINATION_NOT_AVAILABLE')
+          : errorJson(409, 'Start number is already assigned in this class', undefined, 'START_NUMBER_CONFLICT');
+      }
       if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
         return errorJson(409, 'Event is read-only');
       }
@@ -2648,6 +2892,15 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'START_NUMBER_CONFLICT') {
         return errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');
       }
+      if (error instanceof Error && ['RUN_GROUP_CONFLICT', 'BACKUP_CLASS_INVALID'].includes(error.message)) {
+        return errorJson(409, 'The selected class is not available for this entry', undefined, 'CLASS_COMBINATION_NOT_AVAILABLE');
+      }
+      if (isPgUniqueViolation(error)) {
+        const constraint = (error as { constraint?: string }).constraint;
+        return constraint === 'entry_run_group_reservation_driver_group_unique'
+          ? errorJson(409, 'The selected class is not available for this entry', undefined, 'CLASS_COMBINATION_NOT_AVAILABLE')
+          : errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');
+      }
       if (error instanceof Error && error.message === 'INVALID_STATE') {
         return errorJson(409, 'Entry state does not allow class change', undefined, 'INVALID_STATE');
       }
@@ -2658,6 +2911,112 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(409, 'Event is read-only', undefined, 'INVALID_STATE');
       }
       return errorJson(500, 'Patch entry class failed', undefined, 'INVALID_STATE');
+    }
+  }
+
+  const entryBackupClassMatch = path.match(/^\/admin\/entries\/([^/]+)\/backup-class$/);
+  if (method === 'PATCH' && entryBackupClassMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.status.write')) return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
+    try {
+      const result = await patchEntryBackupClass(
+        entryBackupClassMatch[1],
+        validateEntryBackupClassPatchInput(parseJsonBody(event)),
+        auth.sub
+      );
+      if (!result) return errorJson(404, 'Entry not found', undefined, 'ENTRY_NOT_FOUND');
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') return errorJson(404, 'Class not found', undefined, 'CLASS_NOT_FOUND');
+      if (error instanceof Error && error.message === 'START_NUMBER_CONFLICT') {
+        return errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');
+      }
+      if (error instanceof Error && ['BACKUP_CLASS_INVALID', 'BACKUP_CLASS_CLOSED'].includes(error.message)) {
+        return errorJson(409, 'The selected backup class is not available for this entry', undefined, 'CLASS_COMBINATION_NOT_AVAILABLE');
+      }
+      if (isPgUniqueViolation(error)) return errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');
+      if (error instanceof Error && (error.message === 'INVALID_STATE' || error.message === 'EVENT_STATUS_FORBIDDEN')) {
+        return errorJson(409, 'Entry state does not allow backup class change', undefined, 'INVALID_STATE');
+      }
+      return errorJson(500, 'Patch entry backup class failed');
+    }
+  }
+
+  const entryAssignmentMatch = path.match(/^\/admin\/entries\/([^/]+)\/assignment$/);
+  if (method === 'PATCH' && entryAssignmentMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.status.write') || !hasPermission(auth, 'communication.write')) {
+      return errorJson(403, 'Forbidden', undefined, 'FORBIDDEN');
+    }
+
+    try {
+      const input = validateEntryAssignmentPatchInput(parseJsonBody(event));
+      const result = await patchEntryAssignment(entryAssignmentMatch[1], input, auth.sub);
+      if (!result) {
+        return errorJson(404, 'Entry not found', undefined, 'ENTRY_NOT_FOUND');
+      }
+      return json(200, {
+        ok: true,
+        entryId: result.id,
+        classId: result.classId,
+        startNumber: result.startNumber,
+        vehicleTypeBefore: result.vehicleTypeBefore,
+        vehicleTypeAfter: result.vehicleTypeAfter,
+        backupVehicleUpdated: result.backupVehicleUpdated,
+        warnings: result.warnings,
+        outboxId: result.outboxId,
+        mailQueued: result.mailQueued,
+        idempotent: result.idempotent
+      });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues }, 'VALIDATION_ERROR');
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body', undefined, 'INVALID_JSON');
+      }
+      if (error instanceof Error && error.message === 'CLASS_NOT_FOUND') {
+        return errorJson(404, 'Class not found', undefined, 'CLASS_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'START_NUMBER_CONFLICT') {
+        return errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');
+      }
+      if (error instanceof Error && ['RUN_GROUP_CONFLICT', 'BACKUP_CLASS_INVALID'].includes(error.message)) {
+        return errorJson(409, 'The selected class is not available for this entry', undefined, 'CLASS_COMBINATION_NOT_AVAILABLE');
+      }
+      if (isPgUniqueViolation(error)) {
+        const constraint = (error as { constraint?: string }).constraint;
+        return constraint === 'entry_run_group_reservation_driver_group_unique'
+          ? errorJson(409, 'The selected class is not available for this entry', undefined, 'CLASS_COMBINATION_NOT_AVAILABLE')
+          : errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');
+      }
+      if (error instanceof Error && error.message === 'CODRIVER_NOT_ALLOWED') {
+        return errorJson(422, 'Target class does not allow a co-driver', undefined, 'CODRIVER_NOT_ALLOWED');
+      }
+      if (error instanceof Error && error.message === 'CODRIVER_ALREADY_ASSIGNED') {
+        return errorJson(409, 'Entry already has a co-driver', undefined, 'CODRIVER_ALREADY_ASSIGNED');
+      }
+      if (error instanceof Error && error.message === 'DRIVER_MAIL_UNAVAILABLE') {
+        return errorJson(422, 'Driver cannot receive the required system mail', undefined, 'DRIVER_MAIL_UNAVAILABLE');
+      }
+      if (error instanceof Error && error.message === 'ASSIGNMENT_NOTIFICATION_ALREADY_QUEUED') {
+        return errorJson(409, 'This assignment notification was already used for a different current assignment', undefined, 'ASSIGNMENT_NOTIFICATION_ALREADY_QUEUED');
+      }
+      if (error instanceof Error && (error.message === 'INVALID_STATE' || error.message === 'EVENT_STATUS_FORBIDDEN')) {
+        return errorJson(409, 'Entry state does not allow assignment change', undefined, 'INVALID_STATE');
+      }
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') {
+        return errorJson(404, 'Event not found', undefined, 'EVENT_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'PRICING_RULES_NOT_FOUND') {
+        return errorJson(409, 'Pricing rules are required to change this class', undefined, 'PRICING_RULES_NOT_FOUND');
+      }
+      if (isPgUniqueViolation(error)) {
+        return errorJson(409, 'Start number conflict for selected class', undefined, 'START_NUMBER_CONFLICT');
+      }
+      return errorJson(500, 'Assignment update failed');
     }
   }
 

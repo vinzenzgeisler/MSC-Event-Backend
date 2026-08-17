@@ -11,8 +11,16 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   document_generated: ['type', 'templateVariant', 'templateVersion', 'sha256', 's3Key'],
   batch_document_generated: ['type', 'templateVersion', 'count', 's3Key'],
   document_download_url_issued: ['expiresInSeconds'],
-  entry_status_updated: ['from', 'to'],
+  entry_status_updated: ['from', 'to', 'withdrawalReason', 'withdrawnAt'],
   entry_class_updated: ['previousClassId', 'classId', 'isBackupVehicle', 'backupOfEntryId', 'backupVehicleId'],
+  entry_assignment_updated: [
+    'previousClassId',
+    'classId',
+    'previousStartNumber',
+    'startNumber',
+    'requestCodriverData',
+    'outboxId'
+  ],
   entry_tech_status_updated: ['techStatus', 'target'],
   entry_inspection_note_updated: ['target', 'noteUpdated'],
   entry_notes_updated: ['internalNoteUpdated', 'driverNoteUpdated', 'inspectionNoteUpdated'],
@@ -37,6 +45,9 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   email_outbox_retry_requested: ['previousStatus'],
   public_entry_created: ['registrationStatus', 'registrationGroupId'],
   public_entry_verified: ['registrationStatus', 'registrationGroupId'],
+  registration_invitation_created: ['recipientBound', 'allowedClassIds', 'expiresAt'],
+  registration_invitation_revoked: [],
+  registration_invitation_consumed: ['registrationGroupId'],
   privacy_retention_run: ['windowStart', 'windowEnd', 'dryRun', 'deletedRows', 'errors']
   ,
   signing_session_started: ['entryIds', 'deviceSessionId'],

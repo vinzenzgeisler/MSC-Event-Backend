@@ -47,6 +47,8 @@ type RecalcInput = z.infer<typeof recalcSchema>;
 type PaymentInput = z.infer<typeof paymentSchema>;
 type ListInvoiceFilters = z.infer<typeof listInvoiceFiltersSchema>;
 
+type FinanceDb = Pick<Awaited<ReturnType<typeof getDb>>, 'select' | 'insert'>;
+
 type EntryForPricing = {
   entryId: string;
   eventId: string;
@@ -56,8 +58,12 @@ type EntryForPricing = {
   createdAt: Date;
 };
 
-const loadPricingInputs = async (eventId: string, driverPersonId?: string): Promise<EntryForPricing[]> => {
-  const db = await getDb();
+const loadPricingInputs = async (
+  eventId: string,
+  driverPersonId?: string,
+  executor?: FinanceDb
+): Promise<EntryForPricing[]> => {
+  const db = executor ?? await getDb();
   const query = db
     .select({
       entryId: entry.id,
@@ -214,7 +220,9 @@ export const buildPricingSnapshot = (
         .map((current) => [current.entryId, driverManualOverrides.get(current.entryId)] as const)
         .filter((item): item is readonly [string, number] => typeof item[1] === 'number')
     );
-    const activeEntries = entries.filter((current) => current.acceptanceStatus !== 'rejected');
+    const activeEntries = entries.filter(
+      (current) => current.acceptanceStatus !== 'rejected' && current.acceptanceStatus !== 'withdrawn'
+    );
     const forecastLines = activeEntries.map((current, idx) => {
       const baseFee = classFeeByClassId.get(current.classId) ?? 0;
       const lateFee = current.createdAt > earlyDeadline ? lateFeeCents : 0;
@@ -252,9 +260,19 @@ export const buildPricingSnapshot = (
   });
 };
 
-export const recalculateInvoices = async (eventId: string, input: RecalcInput, actorUserId: string | null) => {
-  await assertEventStatusAllowed(eventId, ['draft', 'open', 'closed']);
-  const db = await getDb();
+const recalculateInvoicesUsing = async (
+  db: FinanceDb,
+  eventId: string,
+  input: RecalcInput,
+  actorUserId: string | null
+) => {
+  const eventRows = await db.select({ status: event.status }).from(event).where(eq(event.id, eventId)).limit(1);
+  if (!eventRows[0]) {
+    throw new Error('EVENT_NOT_FOUND');
+  }
+  if (!['draft', 'open', 'closed'].includes(eventRows[0].status)) {
+    throw new Error('EVENT_STATUS_FORBIDDEN');
+  }
   const ruleRows = await db.select().from(eventPricingRule).where(eq(eventPricingRule.eventId, eventId)).limit(1);
   const rules = ruleRows[0];
   if (!rules) {
@@ -294,7 +312,7 @@ export const recalculateInvoices = async (eventId: string, input: RecalcInput, a
     existingInvoices.map((row) => [row.driverPersonId, listManualEntryTotalOverrides(row.pricingSnapshot)])
   );
 
-  const pricingRows = await loadPricingInputs(eventId, driverPersonId);
+  const pricingRows = await loadPricingInputs(eventId, driverPersonId, db);
   const computed = buildPricingSnapshot(
     pricingRows,
     classFeeByClassId,
@@ -358,6 +376,13 @@ export const recalculateInvoices = async (eventId: string, input: RecalcInput, a
 
   return { recalculated: normalizedComputed.length };
 };
+
+export const recalculateInvoices = async (eventId: string, input: RecalcInput, actorUserId: string | null) => {
+  const db = await getDb();
+  return recalculateInvoicesUsing(db, eventId, input, actorUserId);
+};
+
+export const recalculateInvoicesInTransaction = recalculateInvoicesUsing;
 
 export const listInvoices = async (filters: ListInvoiceFilters) => {
   const db = await getDb();

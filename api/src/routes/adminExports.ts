@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, SQL } from 'drizzle-orm';
+import { and, asc, eq, sql, SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import ExcelJS from 'exceljs';
 import { z } from 'zod';
@@ -13,7 +13,7 @@ const createExportSchema = z.object({
   eventId: z.string().uuid(),
   type: z.enum(['entries_csv', 'startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv', 'programmheft_xlsx']).default('participants_csv'),
   classId: z.string().uuid().optional(),
-  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
   paymentOpenOnly: z.boolean().optional(),
   checkinIdVerified: z.boolean().optional(),
   format: z.enum(['csv', 'xlsx']).default('csv')
@@ -63,6 +63,7 @@ export const createEntriesExport = async (
   try {
     const conditions: SQL<unknown>[] = [
       eq(entry.eventId, input.eventId),
+      sql`${entry.deletedAt} is null`,
       eq(person.processingRestricted, false),
       eq(person.objectionFlag, false)
     ];
@@ -71,6 +72,8 @@ export const createEntriesExport = async (
     }
     if (input.acceptanceStatus) {
       conditions.push(eq(entry.acceptanceStatus, input.acceptanceStatus));
+    } else if (input.type !== 'entries_csv') {
+      conditions.push(eq(entry.acceptanceStatus, 'accepted'));
     }
     if (input.checkinIdVerified !== undefined) {
       conditions.push(eq(entry.checkinIdVerified, input.checkinIdVerified));

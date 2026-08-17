@@ -79,6 +79,23 @@ export const publicRateLimit = pgTable(
   })
 );
 
+export const runGroup = pgTable(
+  'run_group',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    uniqueName: uniqueIndex('run_group_event_name_unique').on(table.eventId, table.name),
+    nameNotBlank: check('run_group_name_not_blank_check', sql`btrim(${table.name}) <> ''`)
+  })
+);
+
 export const eventClass = pgTable(
   'class',
   {
@@ -86,6 +103,7 @@ export const eventClass = pgTable(
     eventId: uuid('event_id')
       .notNull()
       .references(() => event.id, { onDelete: 'cascade' }),
+    runGroupId: uuid('run_group_id').references(() => runGroup.id, { onDelete: 'set null' }),
     name: text('name').notNull(),
     vehicleType: text('vehicle_type').notNull(),
     allowsCodriver: boolean('allows_codriver').notNull().default(false),
@@ -95,6 +113,7 @@ export const eventClass = pgTable(
   },
   (table) => ({
     uniqueName: uniqueIndex('class_event_name_unique').on(table.eventId, table.name),
+    runGroupIndex: index('class_run_group_idx').on(table.runGroupId),
     vehicleTypeCheck: check('class_vehicle_type_check', sql`${table.vehicleType} in ('moto', 'auto')`)
   })
 );
@@ -188,6 +207,7 @@ export const entry = pgTable(
     classId: uuid('class_id')
       .notNull()
       .references(() => eventClass.id),
+    backupClassId: uuid('backup_class_id').references(() => eventClass.id),
     driverPersonId: uuid('driver_person_id')
       .notNull()
       .references(() => person.id),
@@ -203,6 +223,9 @@ export const entry = pgTable(
     driverEmailNorm: text('driver_email_norm'),
     registrationStatus: text('registration_status').notNull(),
     acceptanceStatus: text('acceptance_status').notNull(),
+    withdrawnReason: text('withdrawn_reason'),
+    withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
+    withdrawnBy: text('withdrawn_by'),
     idVerified: boolean('id_verified').notNull().default(false),
     idVerifiedAt: timestamp('id_verified_at', { withTimezone: true }),
     idVerifiedBy: text('id_verified_by'),
@@ -247,7 +270,7 @@ export const entry = pgTable(
     ),
     acceptanceStatusCheck: check(
       'entry_acceptance_status_check',
-      sql`${table.acceptanceStatus} in ('pending', 'shortlist', 'accepted', 'rejected')`
+      sql`${table.acceptanceStatus} in ('pending', 'shortlist', 'accepted', 'rejected', 'withdrawn')`
     ),
     techStatusCheck: check('entry_tech_status_check', sql`${table.techStatus} in ('pending', 'passed', 'failed')`),
     backupTechStatusCheck: check(
@@ -259,13 +282,65 @@ export const entry = pgTable(
       'entry_backup_vehicle_not_primary_check',
       sql`${table.backupVehicleId} is null or ${table.backupVehicleId} != ${table.vehicleId}`
     ),
+    backupVehicleClassConsistencyCheck: check(
+      'entry_backup_vehicle_class_consistency_check',
+      sql`(${table.backupVehicleId} is null) = (${table.backupClassId} is null)`
+    ),
     startNumberUnique: uniqueIndex('entry_start_number_unique')
       .on(table.eventId, table.classId, table.startNumberNorm)
-      .where(sql`${table.startNumberNorm} is not null and ${table.deletedAt} is null`),
+      .where(sql`${table.startNumberNorm} is not null and ${table.deletedAt} is null and ${table.acceptanceStatus} != 'withdrawn'`),
     backupOfEntryIndex: index('entry_backup_of_entry_idx').on(table.backupOfEntryId),
     backupVehicleIndex: index('entry_backup_vehicle_idx').on(table.backupVehicleId),
+    backupClassIndex: index('entry_backup_class_idx').on(table.backupClassId),
     registrationGroupIndex: index('entry_registration_group_idx').on(table.registrationGroupId),
     orgaCodeIndex: index('entry_orga_code_idx').on(table.orgaCode)
+  })
+);
+
+export const entryStartNumberReservation = pgTable(
+  'entry_start_number_reservation',
+  {
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => entry.id, { onDelete: 'cascade' }),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    classId: uuid('class_id')
+      .notNull()
+      .references(() => eventClass.id, { onDelete: 'cascade' }),
+    startNumberNorm: text('start_number_norm').notNull()
+  },
+  (table) => ({
+    entryClassUnique: uniqueIndex('entry_start_number_reservation_entry_class_unique').on(table.entryId, table.classId),
+    classNumberUnique: uniqueIndex('entry_start_number_reservation_class_number_unique').on(
+      table.eventId,
+      table.classId,
+      table.startNumberNorm
+    )
+  })
+);
+
+export const entryRunGroupReservation = pgTable(
+  'entry_run_group_reservation',
+  {
+    entryId: uuid('entry_id')
+      .primaryKey()
+      .references(() => entry.id, { onDelete: 'cascade' }),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    driverPersonId: uuid('driver_person_id')
+      .notNull()
+      .references(() => person.id),
+    effectiveGroupId: uuid('effective_group_id').notNull()
+  },
+  (table) => ({
+    driverGroupUnique: uniqueIndex('entry_run_group_reservation_driver_group_unique').on(
+      table.eventId,
+      table.driverPersonId,
+      table.effectiveGroupId
+    )
   })
 );
 
@@ -326,6 +401,39 @@ export const publicEntrySubmission = pgTable(
   (table) => ({
     eventKeyUnique: uniqueIndex('public_entry_submission_event_key_unique').on(table.eventId, table.clientSubmissionKey),
     eventIndex: index('public_entry_submission_event_idx').on(table.eventId)
+  })
+);
+
+export const registrationInvitation = pgTable(
+  'registration_invitation',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    recipientName: text('recipient_name'),
+    recipientEmailNorm: text('recipient_email_norm'),
+    allowedClassIds: uuid('allowed_class_ids').array().notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedBy: text('revoked_by'),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    consumedRegistrationGroupId: uuid('consumed_registration_group_id').references(() => registrationGroup.id, {
+      onDelete: 'set null'
+    }),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex('registration_invitation_token_hash_unique').on(table.tokenHash),
+    eventIndex: index('registration_invitation_event_idx').on(table.eventId, table.createdAt),
+    expiryIndex: index('registration_invitation_expiry_idx').on(table.expiresAt),
+    allowedClassesNotEmpty: check(
+      'registration_invitation_allowed_classes_not_empty_check',
+      sql`cardinality(${table.allowedClassIds}) > 0`
+    )
   })
 );
 
@@ -872,6 +980,9 @@ export const marshalPost = pgTable(
     code: text('code').notNull(),
     description: text('description'),
     targetStaff: integer('target_staff').notNull().default(2),
+    emergencyTargetStaff: integer('emergency_target_staff').notNull().default(1),
+    mapX: integer('map_x'),
+    mapY: integer('map_y'),
     isActive: boolean('is_active').notNull().default(true),
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -880,7 +991,9 @@ export const marshalPost = pgTable(
   (table) => ({
     eventCodeUnique: uniqueIndex('marshal_post_event_code_unique').on(table.eventId, table.code),
     sectionSortIndex: index('marshal_post_section_sort_idx').on(table.sectionId, table.sortOrder),
-    targetStaffCheck: check('marshal_post_target_staff_check', sql`${table.targetStaff} > 0`)
+    targetStaffCheck: check('marshal_post_target_staff_check', sql`${table.targetStaff} > 0`),
+    emergencyTargetStaffCheck: check('marshal_post_emergency_target_staff_check', sql`${table.emergencyTargetStaff} > 0 and ${table.emergencyTargetStaff} <= ${table.targetStaff}`),
+    mapCoordinatesCheck: check('marshal_post_map_coordinates_check', sql`(${table.mapX} is null and ${table.mapY} is null) or (${table.mapX} is not null and ${table.mapY} is not null and ${table.mapX} between 0 and 1000 and ${table.mapY} between 0 and 1000)`)
   })
 );
 

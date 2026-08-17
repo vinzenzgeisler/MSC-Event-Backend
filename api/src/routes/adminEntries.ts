@@ -7,11 +7,14 @@ import {
   classPricingRule,
   consentEvidence,
   document,
+  emailOutbox,
   entry,
+  event,
   eventClass,
   eventPricingRule,
   invoice,
   invoicePayment,
+  entryStartNumberReservation,
   person,
   registrationGroup,
   registrationGroupEmailVerification,
@@ -19,18 +22,24 @@ import {
 } from '../db/schema';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
+import {
+  assertBackupClassCompatible,
+  assertUniqueEffectiveRunGroups,
+  reservedStartNumberClassIds,
+  type RunGroupEntry
+} from '../domain/runGroups';
 import { deriveEntryPaymentStatus, deriveInvoicePaymentStatus, resolveEntryTotalCents } from '../domain/invoiceStatus';
 import { getEntryLineTotalCents, getForecastEntryLineTotalCents, getManualEntryTotalOverrideCents } from '../domain/pricingSnapshot';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { decodeCursor, encodeCursor, parseListQuery } from '../http/pagination';
-import { recalculateInvoices } from './adminFinance';
+import { recalculateInvoices, recalculateInvoicesInTransaction } from './adminFinance';
 import { resolveIamUserDisplayNames } from './adminIam';
 import { queueLifecycleMail } from './adminMail';
 
 const listEntriesQuerySchema = z.object({
   eventId: z.string().uuid(),
   classId: z.string().uuid().optional(),
-  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']).optional(),
+  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
   registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
   paymentStatus: z.enum(['due', 'paid']).optional(),
   q: z.string().min(1).optional(),
@@ -44,21 +53,39 @@ const listEntriesQuerySchema = z.object({
   sortDir: z.enum(['asc', 'desc']).optional()
 });
 
-const entryStatusPatchSchema = z.object({
-  acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']),
-  sendLifecycleMail: z.boolean().optional().default(false),
-  includeDriverNoteInLifecycleMail: z.boolean().optional().default(false),
-  lifecycleEventType: z
-    .enum([
-      'registration_received',
-      'preselection',
-      'accepted_open_payment',
-      'accepted_paid_completed',
-      'rejected',
-      'waitlist'
-    ])
-    .optional()
-});
+const entryStatusPatchSchema = z
+  .object({
+    acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']),
+    withdrawalReason: z.string().trim().min(1).max(2000).optional(),
+    sendLifecycleMail: z.boolean().optional().default(false),
+    includeDriverNoteInLifecycleMail: z.boolean().optional().default(false),
+    lifecycleEventType: z
+      .enum([
+        'registration_received',
+        'preselection',
+        'accepted_open_payment',
+        'accepted_paid_completed',
+        'rejected',
+        'waitlist'
+      ])
+      .optional()
+  })
+  .superRefine((value, context) => {
+    if (value.acceptanceStatus === 'withdrawn' && !value.withdrawalReason) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['withdrawalReason'],
+        message: 'withdrawalReason is required when acceptanceStatus=withdrawn'
+      });
+    }
+    if (value.acceptanceStatus === 'withdrawn' && value.sendLifecycleMail) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sendLifecycleMail'],
+        message: 'Withdrawal does not have a lifecycle mail template'
+      });
+    }
+  });
 
 const techStatusPatchSchema = z.object({
   techStatus: z.enum(['pending', 'passed', 'failed'])
@@ -69,6 +96,84 @@ const entryClassPatchSchema = z.object({
   applyToBackupVehicle: z.boolean().optional().default(false),
   allowVehicleTypeChange: z.boolean().optional().default(true)
 });
+
+const entryBackupClassPatchSchema = z.object({
+  backupClassId: z.string().uuid()
+});
+
+const entryAssignmentPatchSchema = z.object({
+  classId: z.string().uuid(),
+  startNumber: z.string().trim().min(1).max(6).regex(/^[a-z0-9]+$/i).transform((value) => value.toUpperCase()),
+  applyToBackupVehicle: z.boolean().optional().default(false),
+  allowVehicleTypeChange: z.boolean().optional().default(true),
+  sendSystemMail: z.literal(true),
+  requestCodriverData: z.boolean().optional().default(false)
+});
+
+type EntryRuleOverride = RunGroupEntry;
+
+const assertActiveDriverEntryRules = async (
+  tx: any,
+  eventId: string,
+  driverPersonId: string,
+  overrides: EntryRuleOverride[] = []
+) => {
+  const [classes, activeEntries] = await Promise.all([
+    tx
+      .select({ id: eventClass.id, eventId: eventClass.eventId, runGroupId: eventClass.runGroupId })
+      .from(eventClass)
+      .where(eq(eventClass.eventId, eventId)),
+    tx
+      .select({
+        id: entry.id,
+        driverPersonId: entry.driverPersonId,
+        classId: entry.classId,
+        backupClassId: entry.backupClassId,
+        isBackupVehicle: entry.isBackupVehicle
+      })
+      .from(entry)
+      .where(
+        and(
+          eq(entry.eventId, eventId),
+          eq(entry.driverPersonId, driverPersonId),
+          sql`${entry.deletedAt} is null`,
+          ne(entry.acceptanceStatus, 'withdrawn')
+        )
+      )
+  ]);
+  const overridesById = new Map(overrides.map((item) => [item.id, item]));
+  const merged = activeEntries.map((item: RunGroupEntry) => overridesById.get(item.id) ?? item);
+  for (const override of overrides) {
+    if (!activeEntries.some((item: RunGroupEntry) => item.id === override.id)) merged.push(override);
+  }
+  assertUniqueEffectiveRunGroups(merged, new Map(classes.map((item: { id: string }) => [item.id, item])));
+};
+
+const assertStartNumberReservationsAvailable = async (
+  tx: any,
+  eventId: string,
+  entryId: string,
+  classId: string,
+  backupClassId: string | null,
+  startNumber: string | null,
+  ignoredEntryIds: ReadonlySet<string>
+) => {
+  if (!startNumber) return;
+  const classIds = reservedStartNumberClassIds(classId, backupClassId);
+  const conflicts = await tx
+    .select({ entryId: entryStartNumberReservation.entryId })
+    .from(entryStartNumberReservation)
+    .where(
+      and(
+        eq(entryStartNumberReservation.eventId, eventId),
+        inArray(entryStartNumberReservation.classId, classIds),
+        eq(entryStartNumberReservation.startNumberNorm, startNumber)
+      )
+    );
+  if (conflicts.some((item: { entryId: string }) => item.entryId !== entryId && !ignoredEntryIds.has(item.entryId))) {
+    throw new Error('START_NUMBER_CONFLICT');
+  }
+};
 
 const entryNotesPatchSchema = z
   .object({
@@ -125,6 +230,7 @@ type ListEntriesQuery = z.infer<typeof listEntriesQuerySchema>;
 type EntryStatusPatch = z.infer<typeof entryStatusPatchSchema>;
 type TechStatusPatch = z.infer<typeof techStatusPatchSchema>;
 type EntryClassPatch = z.infer<typeof entryClassPatchSchema>;
+type EntryAssignmentPatch = z.infer<typeof entryAssignmentPatchSchema>;
 type EntryNotesPatch = z.infer<typeof entryNotesPatchSchema>;
 type DriverEmailPatch = z.infer<typeof driverEmailPatchSchema>;
 type EntryPaymentStatusPatch = z.infer<typeof entryPaymentStatusPatchSchema>;
@@ -139,12 +245,13 @@ const toVehicleLabel = (make: string | null, model: string | null, startNumberNo
   return startNumberNorm ? `#${startNumberNorm}` : 'Unknown vehicle';
 };
 
-const assertAcceptanceTransitionAllowed = (from: EntryStatusPatch['acceptanceStatus'], to: EntryStatusPatch['acceptanceStatus']) => {
+export const assertAcceptanceTransitionAllowed = (from: EntryStatusPatch['acceptanceStatus'], to: EntryStatusPatch['acceptanceStatus']) => {
   const allowed: Record<EntryStatusPatch['acceptanceStatus'], EntryStatusPatch['acceptanceStatus'][]> = {
-    pending: ['shortlist', 'accepted', 'rejected'],
-    shortlist: ['pending', 'accepted', 'rejected'],
-    accepted: ['shortlist', 'rejected'],
-    rejected: ['shortlist', 'accepted']
+    pending: ['shortlist', 'accepted', 'rejected', 'withdrawn'],
+    shortlist: ['pending', 'accepted', 'rejected', 'withdrawn'],
+    accepted: ['pending', 'shortlist', 'rejected', 'withdrawn'],
+    rejected: ['pending', 'shortlist', 'accepted', 'withdrawn'],
+    withdrawn: ['pending', 'shortlist', 'accepted', 'rejected']
   };
   if (!allowed[from].includes(to)) {
     throw new Error('INVALID_STATUS_TRANSITION');
@@ -258,6 +365,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       id: entry.id,
       eventId: entry.eventId,
       classId: entry.classId,
+      backupClassId: entry.backupClassId,
       groupId: entry.registrationGroupId,
       groupSize: sql<number>`coalesce((select count(*)::int from "entry" e2 where e2."registration_group_id" = ${entry.registrationGroupId} and e2."deleted_at" is null), 1)`,
       vehicleId: entry.vehicleId,
@@ -270,6 +378,8 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       techStatus: entry.techStatus,
       techCheckedAt: entry.techCheckedAt,
       techCheckedBy: entry.techCheckedBy,
+      waiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      waiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
       startNumberNorm: entry.startNumberNorm,
       orgaCode: entry.orgaCode,
       confirmationMailSentAt: entry.confirmationMailSentAt,
@@ -278,6 +388,9 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       deletedBy: entry.deletedBy,
       deletedByDisplay: entry.deletedByDisplay,
       deleteReason: entry.deleteReason,
+      withdrawnReason: entry.withdrawnReason,
+      withdrawnAt: entry.withdrawnAt,
+      withdrawnBy: entry.withdrawnBy,
       internalNote: entry.internalNote,
       driverNote: entry.driverNote,
       driverPersonId: entry.driverPersonId,
@@ -352,12 +465,14 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
 
   const rowsWithPaymentStatus = rows.map((row) => {
     const driverEntries = driverEntriesByPersonId.get(row.driverPersonId) ?? [];
-    const activeDriverEntries = driverEntries.filter((item) => item.acceptanceStatus !== 'rejected');
+    const activeDriverEntries = driverEntries.filter(
+      (item) => item.acceptanceStatus !== 'rejected' && item.acceptanceStatus !== 'withdrawn'
+    );
     const acceptedDriverEntryCount = driverEntries.filter((item) => item.acceptanceStatus === 'accepted').length;
     const entryOrderIndex = activeDriverEntries.findIndex((item) => item.id === row.id);
     const classBaseFeeCents = classFeeByClassId.get(row.classId);
     const provisionalTotalCents =
-      classBaseFeeCents === undefined || row.acceptanceStatus === 'rejected'
+      classBaseFeeCents === undefined || row.acceptanceStatus === 'rejected' || row.acceptanceStatus === 'withdrawn'
         ? null
         : Math.max(
             0,
@@ -392,7 +507,13 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
     const vehicleLabel = toVehicleLabel(row.vehicleMake, row.vehicleModel, row.startNumberNorm);
     const vehicleThumbUrl = await getVehicleThumbUrl(row.vehicleImageS3Key);
     const shouldRedactSensitiveFields = redactSensitiveFields || row.driverProcessingRestricted || row.driverObjectionFlag;
-    const { invoicePricingSnapshot: _pricingSnapshot, invoicePaymentStatus: _invoicePaymentStatus, ...publicRow } = row;
+    const {
+      invoicePricingSnapshot: _pricingSnapshot,
+      invoicePaymentStatus: _invoicePaymentStatus,
+      waiverSignedDocumentId: _waiverSignedDocumentId,
+      waiverSignedAt: _waiverSignedAt,
+      ...publicRow
+    } = row;
     return {
       ...publicRow,
       paymentStatus,
@@ -401,6 +522,11 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       vehicleThumbUrl,
       confirmationMailSent: row.confirmationMailSentAt !== null,
       confirmationMailVerified: row.confirmationMailVerifiedAt !== null,
+      waiverSigned: {
+        signed: Boolean(row.waiverSignedDocumentId),
+        signedAt: row.waiverSignedAt,
+        documentId: row.waiverSignedDocumentId
+      },
       deletedAt: row.deletedAt,
       deletedBy: row.deletedBy,
       deletedByUserId: row.deletedBy,
@@ -427,7 +553,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
 };
 
 export const listCheckinEntries = async (query: ListEntriesQuery, redactSensitiveFields: boolean) =>
-  listEntries(query, redactSensitiveFields);
+  listEntries({ ...query, acceptanceStatus: 'accepted' }, redactSensitiveFields);
 
 export const getEntryDetail = async (entryId: string, redactSensitiveFields: boolean) => {
   const db = await getDb();
@@ -438,15 +564,21 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       classId: entry.classId,
       vehicleId: entry.vehicleId,
       backupVehicleId: entry.backupVehicleId,
+      backupClassId: entry.backupClassId,
       className: eventClass.name,
       registrationStatus: entry.registrationStatus,
       acceptanceStatus: entry.acceptanceStatus,
+      withdrawnReason: entry.withdrawnReason,
+      withdrawnAt: entry.withdrawnAt,
+      withdrawnBy: entry.withdrawnBy,
       checkinIdVerified: entry.checkinIdVerified,
       checkinIdVerifiedAt: entry.checkinIdVerifiedAt,
       checkinIdVerifiedBy: entry.checkinIdVerifiedBy,
       techStatus: entry.techStatus,
       techCheckedAt: entry.techCheckedAt,
       techCheckedBy: entry.techCheckedBy,
+      waiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      waiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
       startNumberNorm: entry.startNumberNorm,
       orgaCode: entry.orgaCode,
       isBackupVehicle: entry.isBackupVehicle,
@@ -560,6 +692,14 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
           .where(eq(vehicle.id, current.backupVehicleId))
           .limit(1);
   const backupVehicle = backupVehicleRows[0] ?? null;
+  const backupClassRows = current.backupClassId
+    ? await db
+        .select({ id: eventClass.id, name: eventClass.name })
+        .from(eventClass)
+        .where(eq(eventClass.id, current.backupClassId))
+        .limit(1)
+    : [];
+  const backupClass = backupClassRows[0] ?? null;
   const consentEvidenceRows = await db
     .select({
       consentTextHash: consentEvidence.consentTextHash,
@@ -590,6 +730,10 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .where(eq(document.entryId, entryId))
     .orderBy(sql`${document.createdAt} desc`, sql`${document.id} desc`);
 
+  const driverSignedWaiverDocument = documentRows.find(
+    (row) => row.type === 'waiver_signed' && row.status === 'generated' && row.driverPersonId === current.driverPersonId
+  ) ?? null;
+
   const driverEntryRows = await db
     .select({
       id: entry.id,
@@ -601,7 +745,9 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .orderBy(asc(entry.createdAt), asc(entry.id));
 
   const relatedEntryIds = driverEntryRows.map((row) => row.id).filter((id) => id !== entryId);
-  const activeDriverEntryRows = driverEntryRows.filter((row) => row.acceptanceStatus !== 'rejected');
+  const activeDriverEntryRows = driverEntryRows.filter(
+    (row) => row.acceptanceStatus !== 'rejected' && row.acceptanceStatus !== 'withdrawn'
+  );
   const acceptedDriverEntryCount = driverEntryRows.filter((row) => row.acceptanceStatus === 'accepted').length;
 
   const [eventPricingRuleRows, classPricingRuleRows] = await Promise.all([
@@ -627,7 +773,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
 
   const entryOrderIndex = activeDriverEntryRows.findIndex((row) => row.id === entryId);
   const provisionalTotalCents = (() => {
-    if (!classPricing || current.acceptanceStatus === 'rejected') {
+    if (!classPricing || current.acceptanceStatus === 'rejected' || current.acceptanceStatus === 'withdrawn') {
       return null;
     }
     const baseFeeCents = classPricing.baseFeeCents ?? 0;
@@ -649,16 +795,19 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     invoiceTotalCents: current.invoiceTotalCents,
     provisionalTotalCents
   });
-  const totalCents = resolvedTotalCents ?? 0;
+  const isPaymentApplicable = current.acceptanceStatus !== 'rejected' && current.acceptanceStatus !== 'withdrawn';
+  const totalCents = isPaymentApplicable ? (resolvedTotalCents ?? 0) : null;
   const paidAmountCents =
-    current.acceptanceStatus !== 'accepted'
+    !isPaymentApplicable
+      ? null
+      : current.acceptanceStatus !== 'accepted'
       ? 0
       : current.invoicePaymentStatus === 'paid'
       ? totalCents
       : acceptedDriverEntryCount === 1
-        ? Math.min(current.invoicePaidAmountCents ?? 0, totalCents)
+        ? Math.min(current.invoicePaidAmountCents ?? 0, totalCents ?? 0)
         : 0;
-  const amountOpenCents = Math.max(0, totalCents - paidAmountCents);
+  const amountOpenCents = totalCents === null || paidAmountCents === null ? null : Math.max(0, totalCents - paidAmountCents);
   const paymentStatus = deriveEntryPaymentStatus(
     resolvedTotalCents,
     current.acceptanceStatus,
@@ -694,6 +843,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         entryId: current.id,
         eventId: current.eventId,
         classId: current.classId,
+        backupClassId: current.backupClassId,
         driverPersonId: current.driverPersonId,
         codriverPersonId: current.codriverPersonId,
         vehicleId: current.vehicleId,
@@ -701,8 +851,12 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         backupOfEntryId: current.backupOfEntryId
       },
       className: current.className,
+      backupClassName: backupClass?.name ?? null,
       registrationStatus: current.registrationStatus,
       acceptanceStatus: current.acceptanceStatus,
+      withdrawnReason: current.withdrawnReason,
+      withdrawnAt: current.withdrawnAt,
+      withdrawnBy: current.withdrawnBy,
       startNumberNorm: current.startNumberNorm,
       orgaCode: current.orgaCode,
       isBackupVehicle: current.isBackupVehicle,
@@ -712,6 +866,11 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       backupVehicleThumbUrl,
       confirmationMailSent: current.confirmationMailSentAt !== null,
       confirmationMailVerified: current.confirmationMailVerifiedAt !== null,
+      waiverSigned: {
+        signed: Boolean(driverSignedWaiverDocument),
+        signedAt: driverSignedWaiverDocument?.createdAt ?? null,
+        documentId: driverSignedWaiverDocument?.id ?? null
+      },
       person: {
         driver: {
           firstName: driverRestricted ? null : current.driverFirstName,
@@ -827,12 +986,28 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
 
 export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch, actorUserId: string | null) => {
   const db = await getDb();
+  const shouldQueueLifecycleMail = input.sendLifecycleMail && input.acceptanceStatus !== 'shortlist';
+  const lifecycleEventType =
+    input.lifecycleEventType ??
+    (input.acceptanceStatus === 'accepted'
+      ? 'accepted_open_payment'
+      : input.acceptanceStatus === 'rejected'
+        ? 'rejected'
+        : undefined);
+  if (shouldQueueLifecycleMail && !lifecycleEventType) {
+    throw new Error('LIFECYCLE_EVENT_TYPE_REQUIRED');
+  }
   const rows = await db
     .select({
       id: entry.id,
       eventId: entry.eventId,
       acceptanceStatus: entry.acceptanceStatus,
-      driverPersonId: entry.driverPersonId
+      driverPersonId: entry.driverPersonId,
+      classId: entry.classId,
+      backupClassId: entry.backupClassId,
+      isBackupVehicle: entry.isBackupVehicle,
+      startNumberNorm: entry.startNumberNorm,
+      deletedAt: entry.deletedAt
     })
     .from(entry)
     .where(eq(entry.id, entryId))
@@ -841,14 +1016,47 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
   if (!existing) {
     return null;
   }
+  if (existing.deletedAt) {
+    throw new Error('INVALID_STATE');
+  }
   await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
   assertAcceptanceTransitionAllowed(existing.acceptanceStatus as EntryStatusPatch['acceptanceStatus'], input.acceptanceStatus);
+
+  if (existing.acceptanceStatus === 'withdrawn' && input.acceptanceStatus !== 'withdrawn' && existing.startNumberNorm) {
+    await assertStartNumberReservationsAvailable(
+      db,
+      existing.eventId,
+      entryId,
+      existing.classId,
+      existing.backupClassId,
+      existing.startNumberNorm,
+      new Set([entryId])
+    );
+  }
+  if (existing.acceptanceStatus === 'withdrawn' && input.acceptanceStatus !== 'withdrawn') {
+    await assertActiveDriverEntryRules(db, existing.eventId, existing.driverPersonId, [{
+      id: entryId,
+      driverPersonId: existing.driverPersonId,
+      classId: existing.classId,
+      backupClassId: existing.backupClassId,
+      isBackupVehicle: existing.isBackupVehicle
+    }]);
+  }
+
+  const now = new Date();
 
   const [updated] = await db
     .update(entry)
     .set({
       acceptanceStatus: input.acceptanceStatus,
-      updatedAt: new Date()
+      ...(input.acceptanceStatus === 'withdrawn'
+        ? {
+            withdrawnReason: input.withdrawalReason,
+            withdrawnAt: now,
+            withdrawnBy: actorUserId
+          }
+        : {}),
+      updatedAt: now
     })
     .where(eq(entry.id, entryId))
     .returning();
@@ -861,7 +1069,9 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
     entityId: entryId,
     payload: {
       from: existing.acceptanceStatus,
-      to: input.acceptanceStatus
+      to: input.acceptanceStatus,
+      withdrawalReason: input.acceptanceStatus === 'withdrawn' ? input.withdrawalReason : undefined,
+      withdrawnAt: input.acceptanceStatus === 'withdrawn' ? now.toISOString() : undefined
     }
   });
 
@@ -873,16 +1083,15 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
     actorUserId
   );
 
-  const shouldQueueLifecycleMail = input.sendLifecycleMail && input.acceptanceStatus !== 'shortlist';
   if (shouldQueueLifecycleMail) {
-    if (!input.lifecycleEventType) {
+    if (!lifecycleEventType) {
       throw new Error('LIFECYCLE_EVENT_TYPE_REQUIRED');
     }
     await queueLifecycleMail(
       {
         eventId: existing.eventId,
         entryId,
-        eventType: input.lifecycleEventType,
+        eventType: lifecycleEventType,
         allowDuplicate: false,
         includeDriverNote: input.includeDriverNoteInLifecycleMail
       },
@@ -944,6 +1153,8 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
         id: entry.id,
         eventId: entry.eventId,
         classId: entry.classId,
+        backupClassId: entry.backupClassId,
+        driverPersonId: entry.driverPersonId,
         isBackupVehicle: entry.isBackupVehicle,
         backupOfEntryId: entry.backupOfEntryId,
         startNumberNorm: entry.startNumberNorm,
@@ -1008,6 +1219,9 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
         id: entry.id,
         eventId: entry.eventId,
         classId: entry.classId,
+        backupClassId: entry.backupClassId,
+        driverPersonId: entry.driverPersonId,
+        isBackupVehicle: entry.isBackupVehicle,
         vehicleId: entry.vehicleId,
         startNumberNorm: entry.startNumberNorm,
         deletedAt: entry.deletedAt,
@@ -1034,6 +1248,19 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
     }
 
     const updateIds = updateRows.map((row) => row.id);
+    await assertActiveDriverEntryRules(
+      tx,
+      existing.eventId,
+      existing.driverPersonId,
+      updateRows.map((row) => ({
+        id: row.id,
+        driverPersonId: row.driverPersonId,
+        classId: input.classId,
+        backupClassId: row.backupClassId,
+        isBackupVehicle: row.isBackupVehicle
+      }))
+    );
+    const ignoredEntryIds = new Set(updateIds);
 
     for (const targetRow of targetRows) {
       if (!updateEntryIds.has(targetRow.id)) {
@@ -1042,22 +1269,15 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
       if (!targetRow.startNumberNorm) {
         continue;
       }
-      const conflictRows = await tx
-        .select({ id: entry.id })
-        .from(entry)
-        .where(
-          and(
-            eq(entry.eventId, existing.eventId),
-            eq(entry.classId, input.classId),
-            eq(entry.startNumberNorm, targetRow.startNumberNorm),
-            sql`${entry.deletedAt} is null`
-          )
-        )
-        .limit(1);
-      const conflict = conflictRows[0];
-      if (conflict && !updateEntryIds.has(conflict.id)) {
-        throw new Error('START_NUMBER_CONFLICT');
-      }
+      await assertStartNumberReservationsAvailable(
+        tx,
+        existing.eventId,
+        targetRow.id,
+        input.classId,
+        targetRow.backupClassId,
+        targetRow.startNumberNorm,
+        ignoredEntryIds
+      );
     }
 
     const updatedRows = await tx
@@ -1112,6 +1332,411 @@ export const patchEntryClass = async (entryId: string, input: EntryClassPatch, a
       vehicleTypeAfter,
       backupVehicleUpdated: Boolean(backupEntryId && updateEntryIds.has(backupEntryId)),
       warnings
+    };
+  });
+};
+
+export const patchEntryBackupClass = async (
+  entryId: string,
+  input: z.infer<typeof entryBackupClassPatchSchema>,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({
+        id: entry.id,
+        eventId: entry.eventId,
+        classId: entry.classId,
+        backupClassId: entry.backupClassId,
+        backupVehicleId: entry.backupVehicleId,
+        startNumberNorm: entry.startNumberNorm,
+        deletedAt: entry.deletedAt
+      })
+      .from(entry)
+      .where(eq(entry.id, entryId))
+      .limit(1);
+    if (!existing) return null;
+    if (existing.deletedAt || !existing.backupVehicleId || !existing.backupClassId) {
+      throw new Error('INVALID_STATE');
+    }
+    await assertEventStatusAllowed(existing.eventId, ['open', 'closed']);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${existing.eventId}))`);
+
+    const classes = await tx
+      .select({
+        id: eventClass.id,
+        eventId: eventClass.eventId,
+        runGroupId: eventClass.runGroupId,
+        registrationClosed: eventClass.registrationClosed,
+        vehicleType: eventClass.vehicleType
+      })
+      .from(eventClass)
+      .where(inArray(eventClass.id, [existing.classId, input.backupClassId]));
+    const primaryClass = classes.find((item: { id: string }) => item.id === existing.classId);
+    const backupClass = classes.find((item: { id: string }) => item.id === input.backupClassId);
+    if (!primaryClass || !backupClass) throw new Error('CLASS_NOT_FOUND');
+    assertBackupClassCompatible(primaryClass, backupClass, { requireOpen: true });
+
+    await assertStartNumberReservationsAvailable(
+      tx,
+      existing.eventId,
+      entryId,
+      existing.classId,
+      input.backupClassId,
+      existing.startNumberNorm,
+      new Set([entryId])
+    );
+    await tx.update(vehicle).set({ vehicleType: backupClass.vehicleType, updatedAt: new Date() }).where(eq(vehicle.id, existing.backupVehicleId));
+    const [updated] = await tx
+      .update(entry)
+      .set({ backupClassId: input.backupClassId, updatedAt: new Date() })
+      .where(eq(entry.id, entryId))
+      .returning({ id: entry.id, backupClassId: entry.backupClassId });
+    await writeAuditLog(tx as never, {
+      eventId: existing.eventId,
+      actorUserId,
+      action: 'entry_backup_class_updated',
+      entityType: 'entry',
+      entityId: entryId,
+      payload: { previousBackupClassId: existing.backupClassId, backupClassId: input.backupClassId }
+    });
+    return { ...updated, backupVehicleType: backupClass.vehicleType };
+  });
+};
+
+const CODRIVER_FIELD_LIST = [
+  'Vorname',
+  'Nachname',
+  'Geburtsdatum',
+  'Land',
+  'Straße',
+  'PLZ',
+  'Ort',
+  'E-Mail-Adresse',
+  'Telefonnummer'
+] as const;
+
+export const buildAssignmentMailBody = (requestCodriverData: boolean) => {
+  const assignmentText =
+    'Ihre Nennung für {{eventName}} wurde neu zugeordnet.\n\n' +
+    'Neue Klasse: {{className}}\n' +
+    'Neue Startnummer: {{startNumber}}';
+  const codriverText = requestCodriverData
+    ? '\n\nBitte senden Sie uns für die manuelle Ergänzung Ihres Beifahrers folgende Angaben:\n' +
+      CODRIVER_FIELD_LIST.map((field) => `- ${field}`).join('\n')
+    : '';
+  const closing =
+    '\n\nBei Fragen wenden Sie sich bitte an nennung@msc-oberlausitzer-dreilaendereck.eu.' +
+    '\n\nMit freundlichen Grüßen\nMSC Oberlausitzer Dreiländereck e.V.';
+  const text = `Hallo {{driverName}},\n\n${assignmentText}${codriverText}${closing}`;
+  const htmlFields = requestCodriverData
+    ? `<p>Bitte senden Sie uns für die manuelle Ergänzung Ihres Beifahrers folgende Angaben:</p><ul>${CODRIVER_FIELD_LIST.map((field) => `<li>${field}</li>`).join('')}</ul>`
+    : '';
+  const html =
+    '<p>Hallo {{driverName}},</p>' +
+    '<p>Ihre Nennung für <strong>{{eventName}}</strong> wurde neu zugeordnet.</p>' +
+    '<p><strong>Neue Klasse:</strong> {{className}}<br><strong>Neue Startnummer:</strong> {{startNumber}}</p>' +
+    htmlFields +
+    '<p>Bei Fragen wenden Sie sich bitte an <a href="mailto:nennung@msc-oberlausitzer-dreilaendereck.eu">nennung@msc-oberlausitzer-dreilaendereck.eu</a>.</p>' +
+    '<p>Mit freundlichen Grüßen<br>MSC Oberlausitzer Dreiländereck e.V.</p>';
+  return { text, html };
+};
+
+export const buildEntryAssignmentIdempotencyKey = (
+  entryId: string,
+  classId: string,
+  startNumber: string,
+  requestCodriverData: boolean,
+  applyToBackupVehicle = false,
+  allowVehicleTypeChange = true
+) => [
+  'entry-assignment',
+  entryId,
+  classId,
+  startNumber,
+  requestCodriverData ? 'codriver' : 'standard',
+  applyToBackupVehicle ? 'backup' : 'primary',
+  allowVehicleTypeChange ? 'align-vehicle' : 'preserve-vehicle'
+].join(':');
+
+export const patchEntryAssignment = async (
+  entryId: string,
+  input: EntryAssignmentPatch,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const now = new Date();
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        id: entry.id,
+        eventId: entry.eventId,
+        eventName: event.name,
+        classId: entry.classId,
+        backupClassId: entry.backupClassId,
+        driverPersonId: entry.driverPersonId,
+        codriverPersonId: entry.codriverPersonId,
+        isBackupVehicle: entry.isBackupVehicle,
+        backupOfEntryId: entry.backupOfEntryId,
+        startNumberNorm: entry.startNumberNorm,
+        vehicleType: vehicle.vehicleType,
+        driverEmail: person.email,
+        driverFirstName: person.firstName,
+        driverLastName: person.lastName,
+        processingRestricted: person.processingRestricted,
+        objectionFlag: person.objectionFlag,
+        deletedAt: entry.deletedAt
+      })
+      .from(entry)
+      .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+      .innerJoin(person, eq(entry.driverPersonId, person.id))
+      .innerJoin(event, eq(entry.eventId, event.id))
+      .where(eq(entry.id, entryId))
+      .limit(1)
+      .for('update');
+
+    const existing = rows[0];
+    if (!existing) {
+      return null;
+    }
+    if (existing.deletedAt) {
+      throw new Error('INVALID_STATE');
+    }
+    const statusRows = await tx.select({ status: event.status }).from(event).where(eq(event.id, existing.eventId)).limit(1);
+    if (!statusRows[0] || !['open', 'closed'].includes(statusRows[0].status)) {
+      throw new Error(statusRows[0] ? 'EVENT_STATUS_FORBIDDEN' : 'EVENT_NOT_FOUND');
+    }
+
+    const targetClassRows = await tx
+      .select({
+        id: eventClass.id,
+        eventId: eventClass.eventId,
+        name: eventClass.name,
+        vehicleType: eventClass.vehicleType,
+        allowsCodriver: eventClass.allowsCodriver
+      })
+      .from(eventClass)
+      .where(eq(eventClass.id, input.classId))
+      .limit(1);
+    const targetClass = targetClassRows[0];
+    if (!targetClass || targetClass.eventId !== existing.eventId) {
+      throw new Error('CLASS_NOT_FOUND');
+    }
+    if (input.requestCodriverData && !targetClass.allowsCodriver) {
+      throw new Error('CODRIVER_NOT_ALLOWED');
+    }
+    if (input.requestCodriverData && existing.codriverPersonId) {
+      throw new Error('CODRIVER_ALREADY_ASSIGNED');
+    }
+    if (!existing.driverEmail || existing.processingRestricted || existing.objectionFlag) {
+      throw new Error('DRIVER_MAIL_UNAVAILABLE');
+    }
+
+    const idempotencyKey = buildEntryAssignmentIdempotencyKey(
+      entryId,
+      input.classId,
+      input.startNumber,
+      input.requestCodriverData,
+      input.applyToBackupVehicle,
+      input.allowVehicleTypeChange
+    );
+    const duplicateRows = await tx
+      .select({ id: emailOutbox.id })
+      .from(emailOutbox)
+      .where(eq(emailOutbox.idempotencyKey, idempotencyKey))
+      .limit(1);
+    if (duplicateRows[0]) {
+      if (existing.classId !== input.classId || existing.startNumberNorm !== input.startNumber) {
+        throw new Error('ASSIGNMENT_NOTIFICATION_ALREADY_QUEUED');
+      }
+      return {
+        id: entryId,
+        classId: input.classId,
+        startNumber: input.startNumber,
+        vehicleTypeBefore: existing.vehicleType,
+        vehicleTypeAfter: input.allowVehicleTypeChange ? targetClass.vehicleType : existing.vehicleType,
+        backupVehicleUpdated: false,
+        warnings: [] as string[],
+        outboxId: duplicateRows[0].id,
+        mailQueued: false,
+        idempotent: true
+      };
+    }
+
+    const warnings: string[] = [];
+    const updateEntryIds = new Set<string>([entryId]);
+    let backupEntryId: string | null = null;
+    if (input.applyToBackupVehicle) {
+      if (existing.isBackupVehicle && existing.backupOfEntryId) {
+        backupEntryId = existing.backupOfEntryId;
+      } else {
+        const linkedRows = await tx
+          .select({ id: entry.id })
+          .from(entry)
+          .where(and(eq(entry.backupOfEntryId, entryId), sql`${entry.deletedAt} is null`))
+          .limit(1);
+        backupEntryId = linkedRows[0]?.id ?? null;
+      }
+      if (backupEntryId) {
+        updateEntryIds.add(backupEntryId);
+      } else {
+        warnings.push('No linked backup entry found to update.');
+      }
+    }
+
+    const targetRows = await tx
+      .select({
+        id: entry.id,
+        eventId: entry.eventId,
+        driverPersonId: entry.driverPersonId,
+        backupClassId: entry.backupClassId,
+        isBackupVehicle: entry.isBackupVehicle,
+        vehicleId: entry.vehicleId,
+        startNumberNorm: entry.startNumberNorm,
+        deletedAt: entry.deletedAt
+      })
+      .from(entry)
+      .where(inArray(entry.id, Array.from(updateEntryIds)));
+    const activeTargetRows = targetRows.filter((row) => {
+      if (!row.deletedAt && row.eventId === existing.eventId) {
+        return true;
+      }
+      if (row.id !== entryId) {
+        warnings.push('Linked backup entry was skipped because it is not active.');
+        updateEntryIds.delete(row.id);
+      }
+      return false;
+    });
+    if (!activeTargetRows.some((row) => row.id === entryId)) {
+      throw new Error('INVALID_STATE');
+    }
+
+    await assertActiveDriverEntryRules(
+      tx,
+      existing.eventId,
+      existing.driverPersonId,
+      activeTargetRows.map((row) => ({
+        id: row.id,
+        driverPersonId: row.driverPersonId,
+        classId: input.classId,
+        backupClassId: row.backupClassId,
+        isBackupVehicle: row.isBackupVehicle
+      }))
+    );
+
+    const nextStartNumberById = new Map(
+      activeTargetRows.map((row) => [row.id, row.id === entryId ? input.startNumber : row.startNumberNorm])
+    );
+    for (const targetRow of activeTargetRows) {
+      const nextStartNumber = nextStartNumberById.get(targetRow.id);
+      if (!nextStartNumber) {
+        continue;
+      }
+      await assertStartNumberReservationsAvailable(
+        tx,
+        existing.eventId,
+        targetRow.id,
+        input.classId,
+        targetRow.backupClassId,
+        nextStartNumber,
+        updateEntryIds
+      );
+    }
+
+    await tx
+      .update(entry)
+      .set({
+        classId: input.classId,
+        startNumberNorm: sql`case when ${entry.id} = ${entryId} then ${input.startNumber} else ${entry.startNumberNorm} end`,
+        updatedAt: now
+      })
+      .where(inArray(entry.id, activeTargetRows.map((row) => row.id)));
+
+    let vehicleTypeAfter = existing.vehicleType;
+    if (input.allowVehicleTypeChange) {
+      await tx
+        .update(vehicle)
+        .set({ vehicleType: targetClass.vehicleType, updatedAt: now })
+        .where(inArray(vehicle.id, activeTargetRows.map((row) => row.vehicleId)));
+      vehicleTypeAfter = targetClass.vehicleType;
+    } else if (existing.vehicleType !== targetClass.vehicleType) {
+      warnings.push('Vehicle type change skipped by request; class and vehicle type now differ.');
+    }
+
+    const affectedPricingRows = existing.classId === input.classId
+      ? []
+      : await tx
+          .select({ classId: classPricingRule.classId, baseFeeCents: classPricingRule.baseFeeCents })
+          .from(classPricingRule)
+          .where(and(
+            eq(classPricingRule.eventId, existing.eventId),
+            inArray(classPricingRule.classId, [existing.classId, input.classId])
+          ));
+    const feeByClass = new Map(affectedPricingRows.map((row) => [row.classId, row.baseFeeCents]));
+    if ((feeByClass.get(existing.classId) ?? 0) !== (feeByClass.get(input.classId) ?? 0)) {
+      await recalculateInvoicesInTransaction(tx, existing.eventId, { driverPersonId: existing.driverPersonId }, actorUserId);
+    }
+
+    const body = buildAssignmentMailBody(input.requestCodriverData);
+    const [outbox] = await tx
+      .insert(emailOutbox)
+      .values({
+        eventId: existing.eventId,
+        toEmail: existing.driverEmail,
+        subject: 'Neue Klasseneinteilung und Startnummer – {{eventName}}',
+        templateId: 'entry_assignment_changed',
+        templateVersion: 1,
+        templateData: {
+          entryId,
+          driverPersonId: existing.driverPersonId,
+          driverName: `${existing.driverFirstName} ${existing.driverLastName}`.trim(),
+          eventName: existing.eventName,
+          className: targetClass.name,
+          startNumber: input.startNumber,
+          requestCodriverData: input.requestCodriverData,
+          requestedCodriverFields: input.requestCodriverData ? [...CODRIVER_FIELD_LIST] : [],
+          bodyTextOverride: body.text,
+          bodyHtmlOverride: body.html,
+          renderOptions: { showBadge: false, mailLabel: 'Systemnachricht', includeEntryContext: true }
+        },
+        status: 'queued',
+        sendAfter: now,
+        idempotencyKey,
+        maxAttempts: 5
+      })
+      .returning({ id: emailOutbox.id });
+    if (!outbox) {
+      throw new Error('OUTBOX_INSERT_FAILED');
+    }
+
+    await writeAuditLog(tx as never, {
+      eventId: existing.eventId,
+      actorUserId,
+      action: 'entry_assignment_updated',
+      entityType: 'entry',
+      entityId: entryId,
+      payload: {
+        previousClassId: existing.classId,
+        classId: input.classId,
+        previousStartNumber: existing.startNumberNorm,
+        startNumber: input.startNumber,
+        requestCodriverData: input.requestCodriverData,
+        outboxId: outbox.id
+      }
+    });
+
+    return {
+      id: entryId,
+      classId: input.classId,
+      startNumber: input.startNumber,
+      vehicleTypeBefore: existing.vehicleType,
+      vehicleTypeAfter,
+      backupVehicleUpdated: Boolean(backupEntryId && updateEntryIds.has(backupEntryId)),
+      warnings,
+      outboxId: outbox.id,
+      mailQueued: true,
+      idempotent: false
     };
   });
 };
@@ -1273,6 +1898,10 @@ export const patchEntryDriverEmail = async (
         .update(person)
         .set({ email: newEmail, updatedAt: now })
         .where(eq(person.id, group.driverPersonId));
+      await tx
+        .update(entry)
+        .set({ driverEmailNorm: normalizedEmail, updatedAt: now })
+        .where(eq(entry.id, entryId));
       await tx
         .update(registrationGroup)
         .set({ driverEmailNorm: normalizedEmail, updatedAt: now })
@@ -1824,6 +2453,10 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
       eventId: entry.eventId,
       driverPersonId: entry.driverPersonId,
       registrationGroupId: entry.registrationGroupId,
+      classId: entry.classId,
+      backupClassId: entry.backupClassId,
+      isBackupVehicle: entry.isBackupVehicle,
+      startNumberNorm: entry.startNumberNorm,
       deletedAt: entry.deletedAt
     })
     .from(entry)
@@ -1841,6 +2474,23 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
 
   try {
     await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${existing.eventId}))`);
+      await assertActiveDriverEntryRules(tx, existing.eventId, existing.driverPersonId, [{
+        id: entryId,
+        driverPersonId: existing.driverPersonId,
+        classId: existing.classId,
+        backupClassId: existing.backupClassId,
+        isBackupVehicle: existing.isBackupVehicle
+      }]);
+      await assertStartNumberReservationsAvailable(
+        tx,
+        existing.eventId,
+        entryId,
+        existing.classId,
+        existing.backupClassId,
+        existing.startNumberNorm,
+        new Set([entryId])
+      );
       if (existing.registrationGroupId) {
         await tx
           .update(registrationGroup)
@@ -1862,7 +2512,10 @@ export const restoreEntry = async (entryId: string, actorUserId: string | null) 
         .where(eq(entry.id, entryId));
     });
   } catch (error) {
-    if (isPgUniqueViolation(error)) {
+    if (
+      isPgUniqueViolation(error) ||
+      (error instanceof Error && ['RUN_GROUP_CONFLICT', 'BACKUP_CLASS_INVALID', 'START_NUMBER_CONFLICT'].includes(error.message))
+    ) {
       throw new Error('RESTORE_CONFLICT');
     }
     throw error;
@@ -1905,6 +2558,8 @@ export const validateListEntriesQuery = (query: Record<string, string | undefine
 export const validateEntryStatusPatchInput = (payload: unknown) => entryStatusPatchSchema.parse(payload);
 export const validateEntryTechStatusPatchInput = (payload: unknown) => techStatusPatchSchema.parse(payload);
 export const validateEntryClassPatchInput = (payload: unknown) => entryClassPatchSchema.parse(payload);
+export const validateEntryBackupClassPatchInput = (payload: unknown) => entryBackupClassPatchSchema.parse(payload);
+export const validateEntryAssignmentPatchInput = (payload: unknown) => entryAssignmentPatchSchema.parse(payload);
 export const validateEntryNotesPatchInput = (payload: unknown) => entryNotesPatchSchema.parse(payload);
 export const validateDriverEmailPatchInput = (payload: unknown): DriverEmailPatch => driverEmailPatchSchema.parse(payload);
 export const validateEntryPaymentStatusPatchInput = (payload: unknown) => entryPaymentStatusPatchSchema.parse(payload);

@@ -961,23 +961,32 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     }
   });
 
-  // Queue system mail to the signer — best-effort, must not fail the session
+  // Queue system mail to the driver - best-effort, must not fail the session.
   try {
-    const signerEmail = payload.signer.email ?? payload.driver.email;
-    if (signerEmail && documentS3Key) {
+    const driverEmail = payload.driver.email?.trim();
+    if (driverEmail && documentS3Key) {
       await queueWaiverSignedMail(db, {
-        toEmail: signerEmail,
-        signerName: `${payload.signer.firstName ?? payload.driver.firstName} ${payload.signer.lastName ?? payload.driver.lastName}`,
+        toEmail: driverEmail,
+        driverName: `${payload.driver.firstName ?? ''} ${payload.driver.lastName ?? ''}`.trim(),
+        signerName: `${payload.signer.firstName ?? payload.driver.firstName ?? ''} ${payload.signer.lastName ?? payload.driver.lastName ?? ''}`.trim(),
+        signerRole: payload.signer.label,
         eventId: payload.event.id,
         eventName: payload.event.name,
-        eventDates: `${payload.event.startsAt} – ${payload.event.endsAt}`,
+        eventDates: `${payload.event.startsAt} - ${payload.event.endsAt}`,
         signedAt: input.signedAt,
         documentS3Key,
         sessionId: current.id
       });
     }
-  } catch {
-    // Mail failure must never abort the signing session
+  } catch (error) {
+    // Mail failure must never abort the signing session, but it must leave a trace.
+    await db
+      .update(signingSession)
+      .set({
+        errorLast: error instanceof Error ? `WAIVER_MAIL_QUEUE_FAILED:${error.message}` : 'WAIVER_MAIL_QUEUE_FAILED',
+        updatedAt: new Date()
+      })
+      .where(eq(signingSession.id, current.id));
   }
 
   return updated;
@@ -987,7 +996,9 @@ const queueWaiverSignedMail = async (
   db: Awaited<ReturnType<typeof getDb>>,
   input: {
     toEmail: string;
+    driverName: string;
     signerName: string;
+    signerRole: string;
     eventId: string;
     eventName: string;
     eventDates: string;
@@ -998,7 +1009,11 @@ const queueWaiverSignedMail = async (
 ): Promise<void> => {
   // Resolve template
   const templateRows = await db
-    .select({ templateId: emailTemplate.id, version: emailTemplateVersion.version })
+    .select({
+      templateKey: emailTemplate.templateKey,
+      version: emailTemplateVersion.version,
+      subjectTemplate: emailTemplateVersion.subjectTemplate
+    })
     .from(emailTemplate)
     .innerJoin(emailTemplateVersion, eq(emailTemplateVersion.templateId, emailTemplate.id))
     .where(
@@ -1011,9 +1026,10 @@ const queueWaiverSignedMail = async (
     .orderBy(desc(emailTemplateVersion.version))
     .limit(1);
   if (templateRows.length === 0) {
-    return; // Template not yet migrated — skip silently
+    // Surfaced by the caller onto signingSession.errorLast instead of vanishing.
+    throw new Error('WAIVER_SIGNED_TEMPLATE_NOT_PUBLISHED');
   }
-  const { templateId, version } = templateRows[0];
+  const { templateKey, version, subjectTemplate } = templateRows[0];
 
   const idempotencyKey = `waiver_signed:${input.sessionId}`;
   const [outboxRow] = await db
@@ -1021,11 +1037,13 @@ const queueWaiverSignedMail = async (
     .values({
       eventId: input.eventId,
       toEmail: input.toEmail,
-      subject: `Ihre persönliche Haftverzichtserklärung – ${input.eventName}`,
-      templateId,
+      subject: subjectTemplate,
+      templateId: templateKey,
       templateVersion: version,
       templateData: {
+        driverName: input.driverName,
         signerName: input.signerName,
+        signerRole: input.signerRole,
         eventName: input.eventName,
         eventDates: input.eventDates,
         signedAt: input.signedAt

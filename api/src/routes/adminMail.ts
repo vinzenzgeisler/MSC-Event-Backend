@@ -4,6 +4,7 @@ import { and, asc, desc, eq, inArray, isNull, or, sql, SQL } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import {
   consentEvidence,
+  emailDelivery,
   emailOutboxAttachment,
   emailOutbox,
   emailTemplate,
@@ -161,6 +162,10 @@ const listOutboxSchema = z.object({
   sortDir: z.enum(['asc', 'desc']).optional()
 });
 
+const entryMailHistoryQuerySchema = z.object({
+  eventId: z.string().uuid().optional()
+});
+
 const templateCreateSchema = z.object({
   key: z.string().trim().min(1),
   label: z.string().trim().min(1),
@@ -292,6 +297,7 @@ type ReminderInput = z.infer<typeof reminderSchema>;
 type LifecycleInput = z.infer<typeof lifecycleSchema>;
 type BroadcastInput = z.infer<typeof broadcastSchema>;
 type ListOutboxInput = z.infer<typeof listOutboxSchema>;
+type EntryMailHistoryQuery = z.infer<typeof entryMailHistoryQuerySchema>;
 type TemplateCreateInput = z.infer<typeof templateCreateSchema>;
 type TemplatePatchInput = z.infer<typeof templatePatchSchema>;
 type TemplateVersionCreateInput = z.infer<typeof templateVersionCreateSchema>;
@@ -352,6 +358,16 @@ const normalizeRenderOptions = (templateKey: string, input?: MailRenderOptions):
     mailLabel,
     includeEntryContext: input?.includeEntryContext ?? contract.renderOptions.includeEntryContextDefault
   };
+};
+
+const normalizeRows = (rows: unknown): Array<Record<string, unknown>> =>
+  Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+
+const normalizeTemplateData = (value: unknown): Record<string, unknown> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
 };
 
 export type LifecycleMailErrorCode =
@@ -2464,6 +2480,210 @@ export const listOutbox = async (input: ListOutboxInput) => {
   return paginateAndSortRows(rows, paginationQuery);
 };
 
+type EntryMailHistoryRow = {
+  id: string;
+  eventId: string | null;
+  toEmail: string;
+  subject: string;
+  templateId: string;
+  templateVersion: number;
+  templateData: Record<string, unknown>;
+  status: string;
+  attemptCount: number;
+  maxAttempts: number;
+  errorLast: string | null;
+  sendAfter: Date | string;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+  deliveryId: string | null;
+  deliveryStatus: string | null;
+  sesMessageId: string | null;
+  sentAt: Date | string | null;
+  providerResponse: unknown;
+  relation: string;
+};
+
+const renderEntryMailHistoryContent = async (row: EntryMailHistoryRow) => {
+  try {
+    const template = await getTemplateVersion(row.templateId, row.templateVersion);
+    if (!template) {
+      return {
+        subjectRendered: row.subject,
+        bodyTextRendered: '',
+        bodyHtmlRendered: '',
+        htmlDocument: '',
+        warnings: ['Template-Version wurde nicht gefunden.'],
+        missingPlaceholders: [],
+        unknownPlaceholders: [],
+        renderError: 'TEMPLATE_NOT_FOUND'
+      };
+    }
+
+    const templateData = row.templateData;
+    const bodyTextOverride = typeof templateData.bodyTextOverride === 'string' ? templateData.bodyTextOverride : null;
+    const bodyHtmlOverride = typeof templateData.bodyHtmlOverride === 'string' ? templateData.bodyHtmlOverride : null;
+    const rendered = renderMailContract({
+      templateKey: row.templateId,
+      subjectTemplate: row.subject,
+      bodyTextTemplate: bodyTextOverride ?? template.bodyTextTemplate,
+      bodyHtmlTemplate: bodyHtmlOverride ?? template.bodyHtmlTemplate,
+      data: templateData,
+      renderOptions: normalizeRenderOptions(row.templateId, templateData.renderOptions as MailRenderOptions | undefined),
+      hasContentOverride: Boolean(bodyTextOverride || bodyHtmlOverride)
+    });
+
+    return {
+      subjectRendered: rendered.subjectRendered,
+      bodyTextRendered: rendered.bodyTextRendered,
+      bodyHtmlRendered: rendered.bodyHtmlRendered,
+      htmlDocument: rendered.htmlDocument,
+      warnings: rendered.warnings,
+      missingPlaceholders: rendered.missingPlaceholders,
+      unknownPlaceholders: rendered.unknownPlaceholders,
+      renderError: null
+    };
+  } catch (error) {
+    return {
+      subjectRendered: row.subject,
+      bodyTextRendered: '',
+      bodyHtmlRendered: '',
+      htmlDocument: '',
+      warnings: [],
+      missingPlaceholders: [],
+      unknownPlaceholders: [],
+      renderError: error instanceof Error ? error.message : 'RENDER_FAILED'
+    };
+  }
+};
+
+export const listEntryMailHistory = async (entryId: string, query: EntryMailHistoryQuery = {}) => {
+  const db = await getDb();
+  const entryRows = await db
+    .select({
+      id: entry.id,
+      eventId: entry.eventId,
+      registrationGroupId: entry.registrationGroupId
+    })
+    .from(entry)
+    .where(and(eq(entry.id, entryId), sql`${entry.deletedAt} is null`))
+    .limit(1);
+
+  const target = entryRows[0];
+  if (!target) {
+    return null;
+  }
+  if (query.eventId && target.eventId !== query.eventId) {
+    return null;
+  }
+
+  const result = await db.execute(sql`
+    select
+      o.id::text as "id",
+      o.event_id::text as "eventId",
+      o.to_email as "toEmail",
+      o.subject as "subject",
+      o.template_id as "templateId",
+      o.template_version as "templateVersion",
+      o.template_data as "templateData",
+      o.status as "status",
+      o.attempt_count as "attemptCount",
+      o.max_attempts as "maxAttempts",
+      o.error_last as "errorLast",
+      o.send_after as "sendAfter",
+      o.created_at as "createdAt",
+      o.updated_at as "updatedAt",
+      d.id::text as "deliveryId",
+      d.status as "deliveryStatus",
+      d.ses_message_id as "sesMessageId",
+      d.sent_at as "sentAt",
+      d.provider_response as "providerResponse",
+      case
+        when o.template_data->>'entryId' = ${target.id}::text then 'entry'
+        when ${target.registrationGroupId}::text is not null and o.template_data->>'registrationGroupId' = ${target.registrationGroupId}::text then 'registration_group'
+        else 'unknown'
+      end as "relation"
+    from ${emailOutbox} o
+    left join lateral (
+      select ${emailDelivery.id}, ${emailDelivery.status}, ${emailDelivery.sesMessageId}, ${emailDelivery.sentAt}, ${emailDelivery.providerResponse}
+      from ${emailDelivery}
+      where ${emailDelivery.outboxId} = o.id
+      order by ${emailDelivery.sentAt} desc nulls last
+      limit 1
+    ) d on true
+    where o.event_id = ${target.eventId}
+      and (
+        o.template_data->>'entryId' = ${target.id}::text
+        or (
+          ${target.registrationGroupId}::text is not null
+          and o.template_data->>'registrationGroupId' = ${target.registrationGroupId}::text
+        )
+      )
+    order by o.created_at desc, o.id desc
+  `);
+
+  const rows = normalizeRows(result.rows).map((row) => ({
+    id: String(row.id ?? ''),
+    eventId: row.eventId ? String(row.eventId) : null,
+    toEmail: String(row.toEmail ?? ''),
+    subject: String(row.subject ?? ''),
+    templateId: String(row.templateId ?? ''),
+    templateVersion: Number(row.templateVersion ?? 1) || 1,
+    templateData: normalizeTemplateData(row.templateData),
+    status: String(row.status ?? 'queued'),
+    attemptCount: Number(row.attemptCount ?? 0) || 0,
+    maxAttempts: Number(row.maxAttempts ?? 0) || 0,
+    errorLast: row.errorLast ? String(row.errorLast) : null,
+    sendAfter: row.sendAfter as Date | string,
+    createdAt: row.createdAt as Date | string,
+    updatedAt: row.updatedAt as Date | string,
+    deliveryId: row.deliveryId ? String(row.deliveryId) : null,
+    deliveryStatus: row.deliveryStatus ? String(row.deliveryStatus) : null,
+    sesMessageId: row.sesMessageId ? String(row.sesMessageId) : null,
+    sentAt: (row.sentAt as Date | string | null) ?? null,
+    providerResponse: row.providerResponse ?? null,
+    relation: String(row.relation ?? 'unknown')
+  })).filter((row) => row.id && row.templateId);
+
+  const mails = await Promise.all(
+    rows.map(async (row) => {
+      const rendered = await renderEntryMailHistoryContent(row);
+      return {
+        id: row.id,
+        eventId: row.eventId,
+        toEmail: row.toEmail,
+        subject: row.subject,
+        templateId: row.templateId,
+        templateVersion: row.templateVersion,
+        status: row.status,
+        attemptCount: row.attemptCount,
+        maxAttempts: row.maxAttempts,
+        errorLast: row.errorLast,
+        sendAfter: row.sendAfter,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        relation: row.relation,
+        delivery: row.deliveryId
+          ? {
+              id: row.deliveryId,
+              status: row.deliveryStatus,
+              sesMessageId: row.sesMessageId,
+              sentAt: row.sentAt,
+              providerResponse: row.providerResponse
+            }
+          : null,
+        content: rendered,
+        templateData: row.templateData
+      };
+    })
+  );
+
+  return {
+    entryId: target.id,
+    eventId: target.eventId,
+    mails
+  };
+};
+
 export const retryOutboxMail = async (outboxId: string, actorUserId: string | null) => {
   const db = await getDb();
   const now = new Date();
@@ -3270,6 +3490,10 @@ export const validateListOutboxInput = (query: Record<string, string | undefined
     limit: query.limit === undefined ? undefined : Number(query.limit),
     sortBy: query.sortBy,
     sortDir: query.sortDir
+  });
+export const validateEntryMailHistoryQuery = (query: Record<string, string | undefined>) =>
+  entryMailHistoryQuerySchema.parse({
+    eventId: query.eventId
   });
 export const validateMailTemplateCreateInput = (payload: unknown) => templateCreateSchema.parse(payload);
 export const validateMailTemplatePatchInput = (payload: unknown) => templatePatchSchema.parse(payload);

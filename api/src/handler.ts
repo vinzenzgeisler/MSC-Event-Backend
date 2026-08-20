@@ -168,6 +168,7 @@ import {
   getTemplatePlaceholders,
   listMailTemplates,
   listMailTemplateVersions,
+  listEntryMailHistory,
   listOutbox,
   initMailAttachmentUpload,
   finalizeMailAttachmentUpload,
@@ -179,6 +180,7 @@ import {
   validateBroadcastInput,
   validateCommunicationSendInput,
   validateLifecycleInput,
+  validateEntryMailHistoryQuery,
   validateListOutboxInput,
   validateMailTemplateCreateInput,
   validateMailTemplatePatchInput,
@@ -2636,6 +2638,27 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, error.message);
       }
       return errorJson(500, 'List check-in entries failed');
+    }
+  }
+
+  const entryMailHistoryMatch = path.match(/^\/admin\/entries\/([^/]+)\/mail-history$/);
+  if (method === 'GET' && entryMailHistoryMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermissionOrAutomation(auth, 'communication.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const query = validateEntryMailHistoryQuery(event.queryStringParameters ?? {});
+      const result = await listEntryMailHistory(entryMailHistoryMatch[1], query);
+      if (!result) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      return errorJson(500, 'List entry mail history failed');
     }
   }
 

@@ -50,4 +50,17 @@ assert.match(handlerSource, /historical start number has been reassigned/);
 const financeSource = readFileSync(join(__dirname, '..', 'src', 'routes', 'adminFinance.ts'), 'utf8');
 assert.match(financeSource, /acceptanceStatus !== 'withdrawn'/);
 
+const adminMailSource = readFileSync(join(__dirname, '..', 'src', 'routes', 'adminMail.ts'), 'utf8');
+assert.match(adminMailSource, /ne\(entry\.acceptanceStatus, 'withdrawn'\)/);
+assert.match(adminMailSource, /entry_withdrawn/);
+
+const emailWorkerSource = readFileSync(join(__dirname, '..', 'src', 'jobs', 'emailWorker.ts'), 'utf8');
+assert.match(emailWorkerSource, /SUPPRESSED_ENTRY_WITHDRAWN/);
+assert.match(emailWorkerSource, /acceptance_status <> 'withdrawn'/);
+assert.match(emailWorkerSource, /await markSuppressed\(row\.id, suppressionReason\)/);
+
+const adminEntriesSource = readFileSync(join(__dirname, '..', 'src', 'routes', 'adminEntries.ts'), 'utf8');
+assert.match(adminEntriesSource, /SUPPRESSED_ENTRY_WITHDRAWN/);
+assert.match(adminEntriesSource, /template_data->>'entryId'/);
+
 console.log('entry-withdrawn-status.test.js: ok');

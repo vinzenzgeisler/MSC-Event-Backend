@@ -876,6 +876,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/entries/{id}/mail-history',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/entries/{id}',
       methods: [apigwv2.HttpMethod.DELETE],
       integration,

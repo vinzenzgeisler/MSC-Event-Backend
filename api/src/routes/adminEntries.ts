@@ -1001,6 +1001,7 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
     .select({
       id: entry.id,
       eventId: entry.eventId,
+      registrationGroupId: entry.registrationGroupId,
       acceptanceStatus: entry.acceptanceStatus,
       driverPersonId: entry.driverPersonId,
       classId: entry.classId,
@@ -1082,6 +1083,31 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
     },
     actorUserId
   );
+
+  if (input.acceptanceStatus === 'withdrawn') {
+    await db.execute(sql`
+      update ${emailOutbox}
+      set status = 'failed',
+          error_last = 'SUPPRESSED_ENTRY_WITHDRAWN',
+          updated_at = now()
+      where event_id = ${existing.eventId}
+        and status in ('queued', 'sending')
+        and (
+          template_data->>'entryId' = ${entryId}
+          or (
+            ${existing.registrationGroupId}::text is not null
+            and template_data->>'registrationGroupId' = ${existing.registrationGroupId}::text
+            and not exists (
+              select 1
+              from ${entry} active
+              where active.registration_group_id = ${existing.registrationGroupId}
+                and active.deleted_at is null
+                and active.acceptance_status <> 'withdrawn'
+            )
+          )
+        )
+    `);
+  }
 
   if (shouldQueueLifecycleMail) {
     if (!lifecycleEventType) {

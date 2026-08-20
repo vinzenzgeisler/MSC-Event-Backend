@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { and, asc, desc, eq, inArray, isNull, or, sql, SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql, SQL } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import {
   consentEvidence,
@@ -1239,9 +1239,19 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
 
   if (input.driverPersonIds && input.driverPersonIds.length > 0) {
     const rows = await db
-      .select({ email: person.email, driverPersonId: person.id })
-      .from(person)
-      .where(and(inArray(person.id, input.driverPersonIds), eq(person.processingRestricted, false), eq(person.objectionFlag, false)));
+      .select({ email: person.email, driverPersonId: entry.driverPersonId, entryId: entry.id })
+      .from(entry)
+      .innerJoin(person, eq(entry.driverPersonId, person.id))
+      .where(
+        and(
+          eq(entry.eventId, input.eventId),
+          inArray(entry.driverPersonId, input.driverPersonIds),
+          sql`${entry.deletedAt} is null`,
+          ne(entry.acceptanceStatus, 'withdrawn'),
+          eq(person.processingRestricted, false),
+          eq(person.objectionFlag, false)
+        )
+      );
     collected.push(
       ...
       rows
@@ -1249,7 +1259,7 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
         .map((row) => ({
           email: row.email as string,
           driverPersonId: row.driverPersonId,
-          entryId: null
+          entryId: row.entryId
         }))
     );
   }
@@ -1263,7 +1273,16 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
       })
       .from(entry)
       .innerJoin(person, eq(entry.driverPersonId, person.id))
-      .where(and(inArray(entry.id, input.entryIds), eq(person.processingRestricted, false), eq(person.objectionFlag, false)));
+      .where(
+        and(
+          inArray(entry.id, input.entryIds),
+          eq(entry.eventId, input.eventId),
+          sql`${entry.deletedAt} is null`,
+          ne(entry.acceptanceStatus, 'withdrawn'),
+          eq(person.processingRestricted, false),
+          eq(person.objectionFlag, false)
+        )
+      );
     collected.push(
       ...
       rows
@@ -1281,6 +1300,7 @@ const resolveTargets = async (input: QueueMailInput): Promise<RecipientTarget[]>
     const conditions: SQL<unknown>[] = [
       eq(entry.eventId, input.eventId),
       sql`${entry.deletedAt} is null`,
+      ne(entry.acceptanceStatus, 'withdrawn'),
       eq(person.processingRestricted, false),
       eq(person.objectionFlag, false)
     ];
@@ -1847,6 +1867,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       driverNote: entry.driverNote,
       registrationStatus: entry.registrationStatus,
       acceptanceStatus: entry.acceptanceStatus,
+      deletedAt: entry.deletedAt,
       totalCents: invoice.totalCents,
       pricingSnapshot: invoice.pricingSnapshot,
       paidAmountCents: invoice.paidAmountCents,
@@ -1874,13 +1895,16 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     .innerJoin(person, eq(entry.driverPersonId, person.id))
     .leftJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
-    .where(and(eq(entry.eventId, input.eventId), eq(entry.id, input.entryId)));
+    .where(and(eq(entry.eventId, input.eventId), eq(entry.id, input.entryId), sql`${entry.deletedAt} is null`));
 
   if (rows.length === 0) {
     throw new LifecycleMailError('ENTRY_NOT_FOUND', 'entry_not_found');
   }
   if (!rows[0].email || rows[0].driverPersonId === null) {
     throw new LifecycleMailError('NO_RECIPIENT', 'entry_has_no_driver_email');
+  }
+  if (rows[0].acceptanceStatus === 'withdrawn') {
+    throw new LifecycleMailError('NOT_ALLOWED', 'entry_withdrawn');
   }
   let blockedRows: Array<{ id: string }> = [];
   try {
@@ -2327,6 +2351,8 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
 
   const conditions: SQL<unknown>[] = [
     eq(entry.eventId, input.eventId),
+    sql`${entry.deletedAt} is null`,
+    ne(entry.acceptanceStatus, 'withdrawn'),
     eq(person.processingRestricted, false),
     eq(person.objectionFlag, false)
   ];
@@ -3297,6 +3323,7 @@ export const resolveBroadcastRecipients = async (input: ResolveRecipientsInput) 
     const conditions: SQL<unknown>[] = [
       eq(entry.eventId, eventId),
       sql`${entry.deletedAt} is null`,
+      ne(entry.acceptanceStatus, 'withdrawn'),
       eq(person.processingRestricted, false),
       eq(person.objectionFlag, false)
     ];
@@ -3323,8 +3350,18 @@ export const resolveBroadcastRecipients = async (input: ResolveRecipientsInput) 
   if (input.driverPersonIds && input.driverPersonIds.length > 0) {
     const driverRows = await db
       .select({ email: person.email })
-      .from(person)
-      .where(and(inArray(person.id, input.driverPersonIds), eq(person.processingRestricted, false), eq(person.objectionFlag, false)));
+      .from(entry)
+      .innerJoin(person, eq(entry.driverPersonId, person.id))
+      .where(
+        and(
+          eq(entry.eventId, eventId),
+          inArray(entry.driverPersonId, input.driverPersonIds),
+          sql`${entry.deletedAt} is null`,
+          ne(entry.acceptanceStatus, 'withdrawn'),
+          eq(person.processingRestricted, false),
+          eq(person.objectionFlag, false)
+        )
+      );
     collectedEmails.push(...driverRows.map((row) => row.email).filter((email): email is string => Boolean(email)));
   }
 
@@ -3338,6 +3375,7 @@ export const resolveBroadcastRecipients = async (input: ResolveRecipientsInput) 
           inArray(entry.id, input.entryIds),
           eq(entry.eventId, eventId),
           sql`${entry.deletedAt} is null`,
+          ne(entry.acceptanceStatus, 'withdrawn'),
           eq(person.processingRestricted, false),
           eq(person.objectionFlag, false)
         )
@@ -3386,7 +3424,7 @@ export const resolveBroadcastRecipients = async (input: ResolveRecipientsInput) 
 
 export const searchMailRecipients = async (input: SearchRecipientsInput) => {
   const db = await getDb();
-  const conditions: SQL<unknown>[] = [eq(entry.eventId, input.eventId), sql`${entry.deletedAt} is null`];
+  const conditions: SQL<unknown>[] = [eq(entry.eventId, input.eventId), sql`${entry.deletedAt} is null`, ne(entry.acceptanceStatus, 'withdrawn')];
   if (input.classId) {
     conditions.push(eq(entry.classId, input.classId));
   }

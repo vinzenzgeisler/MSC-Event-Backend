@@ -160,6 +160,73 @@ const markFailed = async (id: string, attemptCount: number, maxAttempts: number,
   );
 };
 
+const markSuppressed = async (id: string, reason: string) => {
+  const pool = await getPool();
+  await pool.query(
+    `
+    update email_outbox
+    set status = 'failed',
+        updated_at = now(),
+        error_last = $2
+    where id = $1
+  `,
+    [id, reason]
+  );
+  await pool.query(
+    `
+    insert into email_delivery (id, outbox_id, status, sent_at, provider_response)
+    values (gen_random_uuid(), $1, 'failed', now(), $2)
+  `,
+    [id, JSON.stringify({ error: reason, suppressed: true })]
+  );
+};
+
+const getStringValue = (data: Record<string, unknown> | null, key: string): string | null => {
+  const value = data?.[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+};
+
+const getEntrySuppressionReason = async (row: OutboxRow): Promise<string | null> => {
+  const entryId = getStringValue(row.template_data, 'entryId');
+  const registrationGroupId = getStringValue(row.template_data, 'registrationGroupId');
+  if (!entryId && !registrationGroupId) {
+    return null;
+  }
+
+  const pool = await getPool();
+  if (entryId) {
+    const result = await pool.query(
+      `
+        select deleted_at is not null as deleted, acceptance_status
+        from entry
+        where id = $1
+        limit 1
+      `,
+      [entryId]
+    );
+    const entryRow = result.rows[0] as { deleted: boolean; acceptance_status: string } | undefined;
+    if (!entryRow) {
+      return 'SUPPRESSED_ENTRY_NOT_FOUND';
+    }
+    if (entryRow.deleted || entryRow.acceptance_status === 'withdrawn') {
+      return 'SUPPRESSED_ENTRY_WITHDRAWN';
+    }
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      select count(*)::int as active_count
+      from entry
+      where registration_group_id = $1
+        and deleted_at is null
+        and acceptance_status <> 'withdrawn'
+    `,
+    [registrationGroupId]
+  );
+  return Number(result.rows[0]?.active_count ?? 0) > 0 ? null : 'SUPPRESSED_REGISTRATION_GROUP_WITHDRAWN';
+};
+
 const queueEmailConfirmationReminders = async (limit: number, reminderDelayDays: number): Promise<number> => {
   const pool = await getPool();
   const result = await pool.query(
@@ -171,6 +238,7 @@ const queueEmailConfirmationReminders = async (limit: number, reminderDelayDays:
       from entry e
       inner join event ev on ev.id = e.event_id
       where e.deleted_at is null
+        and e.acceptance_status <> 'withdrawn'
         and e.registration_status = 'submitted_unverified'
         and e.confirmation_mail_verified_at is null
         and e.confirmation_mail_sent_at is not null
@@ -421,6 +489,12 @@ export const handler = async () => {
 
   for (const row of rows) {
     try {
+      const suppressionReason = await getEntrySuppressionReason(row);
+      if (suppressionReason) {
+        await markSuppressed(row.id, suppressionReason);
+        continue;
+      }
+
       const template = await getTemplateVersion(row.template_id, row.template_version);
       if (!template) {
         throw new Error(`Template not found: ${row.template_id}@${row.template_version}`);

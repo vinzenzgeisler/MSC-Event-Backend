@@ -298,16 +298,14 @@ export const isDueForPaymentReminder = (
   if (!paymentDueDate || Number.isNaN(paymentDueDate.getTime())) {
     return false;
   }
-  const validBaseDates = [acceptedMailAt, paymentDueDate].filter((value): value is Date => Boolean(value && !Number.isNaN(value.getTime())));
-  if (validBaseDates.length === 0) {
+  if (!acceptedMailAt || Number.isNaN(acceptedMailAt.getTime())) {
     return false;
   }
-  const baseDate = validBaseDates.reduce((latest, current) => (current > latest ? current : latest));
   const lastReminderAt = candidate.last_reminder_at ? new Date(candidate.last_reminder_at) : null;
   const nextReminderAt =
     lastReminderAt && !Number.isNaN(lastReminderAt.getTime())
       ? addDays(lastReminderAt, recurringReminderDelayDays)
-      : addDays(baseDate, firstReminderDelayDays);
+      : addDays(acceptedMailAt, firstReminderDelayDays);
   return nextReminderAt <= now;
 };
 

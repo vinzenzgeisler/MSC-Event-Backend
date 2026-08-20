@@ -1620,7 +1620,17 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
   }
   const amountOpenEur = formatEuroFromCents(amountOpenCents);
   const amountOpen = `${amountOpenEur} EUR`;
-  const locale = resolveMailLocale({}, 'de');
+  const consentRows = await db
+    .select({
+      locale: consentEvidence.locale
+    })
+    .from(consentEvidence)
+    .where(eq(consentEvidence.entryId, current.entryId))
+    .orderBy(desc(consentEvidence.createdAt))
+    .limit(1);
+  const locale = resolveMailLocale({
+    locale: consentRows[0]?.locale ?? null
+  });
   const eventRows = await db
     .select({
       eventEntryConfirmationConfig: event.entryConfirmationConfig

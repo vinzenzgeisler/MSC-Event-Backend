@@ -719,6 +719,14 @@ export const getDashboardOverview = async (query: DashboardOverviewQuery) => {
           count(*) filter (where i.total_cents = 0)::int as "zeroEuroInvoiceTotal"
         from invoice i
         where i.event_id = ${query.eventId}
+          and exists (
+            select 1
+            from entry e
+            where e.event_id = i.event_id
+              and e.driver_person_id = i.driver_person_id
+              and e.deleted_at is null
+              and e.acceptance_status = 'accepted'
+          )
       `),
       db.execute(sql`
         select

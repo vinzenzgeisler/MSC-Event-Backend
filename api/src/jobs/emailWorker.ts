@@ -36,6 +36,7 @@ type PaymentReminderCandidateRow = {
   accepted_mail_at: string | null;
   payment_due_date: string | null;
   last_reminder_at: string | null;
+  entry_amount_open_cents: number | string | null;
 };
 
 const parsePositiveInt = (value: string | undefined, fallbackValue: number): number => {
@@ -322,12 +323,23 @@ const queueAutomaticPaymentReminders = async (
         e.id as entry_id,
         accepted_mail.accepted_mail_at,
         ev.payment_due_at::text as payment_due_date,
-        reminders.last_reminder_at
+        reminders.last_reminder_at,
+        greatest(
+          coalesce(entry_line.line_total_cents, e.entry_fee_cents, i.total_cents, 0)
+          - least(coalesce(i.paid_amount_cents, 0), coalesce(entry_line.line_total_cents, e.entry_fee_cents, i.total_cents, 0)),
+          0
+        )::int as entry_amount_open_cents
       from entry e
       inner join event ev on ev.id = e.event_id
       inner join invoice i
         on i.event_id = e.event_id
        and i.driver_person_id = e.driver_person_id
+      left join lateral (
+        select (line->>'lineTotalCents')::int as line_total_cents
+        from jsonb_array_elements(coalesce(i.pricing_snapshot->'lines', '[]'::jsonb)) line
+        where line->>'entryId' = e.id::text
+        limit 1
+      ) entry_line on true
       left join lateral (
         select max(o.created_at) as accepted_mail_at
         from email_outbox o
@@ -360,6 +372,7 @@ const queueAutomaticPaymentReminders = async (
 
   const now = new Date();
   const dueCandidates = (result.rows as PaymentReminderCandidateRow[])
+    .filter((row) => Number(row.entry_amount_open_cents ?? 0) > 0)
     .filter((row) => isDueForPaymentReminder(row, firstReminderDelayDays, recurringReminderDelayDays, now))
     .slice(0, limit);
 

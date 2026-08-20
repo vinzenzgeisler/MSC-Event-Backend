@@ -160,8 +160,8 @@ export class ApiStack extends Stack {
         EMAIL_VERIFICATION_TOKEN_TTL_DAYS: '30',
         REQUIRE_ADMIN_MFA: 'false',
         EMAIL_WORKER_BATCH_SIZE: '20',
-        PAYMENT_REMINDER_FIRST_DAYS: '0',
-        PAYMENT_REMINDER_REPEAT_DAYS: '14'
+        PAYMENT_REMINDER_FIRST_DAYS: '5',
+        PAYMENT_REMINDER_REPEAT_DAYS: '5'
       },
       bundling: {
         target: 'node20',

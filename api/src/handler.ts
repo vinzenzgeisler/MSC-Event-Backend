@@ -138,18 +138,27 @@ import {
   createMarshalPerson,
   createMarshalPrintPdf,
   createMarshalTraining,
+  deleteMarshalPerson,
   getMarshalWorkspace,
   listMarshalEvents,
   patchMarshalPerson,
   previewMarshalImport,
+  replaceMarshalAreaConfig,
   replaceMarshalConfig,
+  resetMarshalEventAssignments,
+  upsertMarshalAreaAssignment,
   upsertMarshalAssignment,
+  upsertMarshalShiftAssignment,
   upsertMarshalTrainingParticipant,
+  validateMarshalAreaAssignmentInput,
+  validateMarshalAreaConfigInput,
   validateMarshalAssignmentInput,
   validateMarshalConfigInput,
   validateMarshalImportInput,
   validateMarshalPersonInput,
   validateMarshalPersonPatch,
+  validateMarshalResetInput,
+  validateMarshalShiftAssignmentInput,
   validateMarshalTrainingInput,
   validateMarshalTrainingParticipantInput
 } from './routes/adminMarshals';
@@ -1109,6 +1118,94 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  if (method === 'DELETE' && marshalPersonMatch) {
+    const auth = getAuthContext(event);
+    if (!auth) return errorJson(401, 'Unauthorized');
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      const deleted = await deleteMarshalPerson(marshalPersonMatch[1], auth.sub);
+      if (!deleted) return errorJson(404, 'Not found');
+      return { statusCode: 204, body: '' };
+    } catch {
+      return errorJson(500, 'Delete marshal failed');
+    }
+  }
+
+  const marshalAreaAssignmentMatch = path.match(/^\/admin\/marshals\/area-assignments\/([^/]+)$/);
+  if (method === 'PUT' && marshalAreaAssignmentMatch) {
+    const auth = getAuthContext(event);
+    if (!auth) return errorJson(401, 'Unauthorized');
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      const row = await upsertMarshalAreaAssignment(
+        marshalAreaAssignmentMatch[1],
+        validateMarshalAreaAssignmentInput(parseJsonBody(event)),
+        auth.sub
+      );
+      if (!row) return errorJson(404, 'Person not found');
+      return json(200, { ok: true, assignment: row });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'MARSHAL_AREA_SCOPE_INVALID') return errorJson(400, 'Area does not belong to event');
+      return errorJson(500, 'Update area assignment failed');
+    }
+  }
+
+  const marshalShiftAssignmentMatch = path.match(/^\/admin\/marshals\/shift-assignments\/([^/]+)$/);
+  if (method === 'PUT' && marshalShiftAssignmentMatch) {
+    const auth = getAuthContext(event);
+    if (!auth) return errorJson(401, 'Unauthorized');
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      const row = await upsertMarshalShiftAssignment(
+        marshalShiftAssignmentMatch[1],
+        validateMarshalShiftAssignmentInput(parseJsonBody(event)),
+        auth.sub
+      );
+      if (!row) return errorJson(404, 'Person not found');
+      return json(200, { ok: true, assignment: row });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'MARSHAL_SHIFT_SCOPE_INVALID') return errorJson(400, 'Shift does not belong to event or is not a setup shift');
+      return errorJson(500, 'Update shift assignment failed');
+    }
+  }
+
+  const marshalEventResetMatch = path.match(/^\/admin\/marshals\/events\/([^/]+)\/reset$/);
+  if (method === 'POST' && marshalEventResetMatch) {
+    const auth = getAuthContext(event);
+    if (!auth) return errorJson(401, 'Unauthorized');
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      validateMarshalResetInput(parseJsonBody(event));
+      await resetMarshalEventAssignments(marshalEventResetMatch[1], auth.sub);
+      return json(200, { ok: true });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') return errorJson(404, 'Event not found');
+      return errorJson(500, 'Reset failed');
+    }
+  }
+
+  if (method === 'PUT' && path === '/admin/marshals/config/areas') {
+    const auth = getAuthContext(event);
+    if (!auth) return errorJson(401, 'Unauthorized');
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      await replaceMarshalAreaConfig(validateMarshalAreaConfigInput(parseJsonBody(event)), auth.sub);
+      return json(200, { ok: true });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') return errorJson(404, 'Event not found');
+      if (error instanceof Error && error.message === 'MARSHAL_AREA_CONFIG_SCOPE_INVALID') return errorJson(400, 'Unknown or invalid setup area');
+      return errorJson(500, 'Update area config failed');
+    }
+  }
+
   const marshalAssignmentMatch = path.match(/^\/admin\/marshals\/assignments\/([^/]+)$/);
   if (method === 'PUT' && marshalAssignmentMatch) {
     const auth = getAuthContext(event);
@@ -1119,6 +1216,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     } catch (error) {
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') return errorJson(404, 'Event not found');
+      if (error instanceof Error && error.message === 'MARSHAL_ASSIGNMENT_SCOPE_INVALID') return errorJson(400, 'Assignment references data outside the event');
       return errorJson(500, 'Update marshal assignment failed');
     }
   }

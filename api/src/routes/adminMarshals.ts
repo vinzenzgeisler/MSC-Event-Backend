@@ -7,14 +7,18 @@ import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import {
   event,
+  marshalAreaAssignment,
+  marshalAreaShift,
   marshalDayAssignment,
   marshalEventDay,
   marshalEventParticipation,
+  marshalHelperArea,
   marshalImportRun,
   marshalPerson,
   marshalPost,
   marshalQualification,
   marshalSection,
+  marshalShiftAssignment,
   marshalTrainingParticipant,
   marshalTrainingSession
 } from '../db/schema';
@@ -35,7 +39,8 @@ const personInputSchema = z.object({
   vehicleRegistration: z.string().trim().max(100).nullable().optional(),
   activityAreas: z.array(z.string().trim().min(1).max(100)).max(30).optional(),
   note: z.string().trim().max(4000).nullable().optional(),
-  isActive: z.boolean().optional()
+  isActive: z.boolean().optional(),
+  noDeployment: z.boolean().optional()
 });
 
 const personPatchSchema = personInputSchema.omit({ helperNumber: true }).partial();
@@ -54,6 +59,77 @@ const assignmentInputSchema = z.object({
     functionCode: z.string().trim().max(100).nullable().optional(),
     note: z.string().trim().max(1000).nullable().optional()
   })).max(2)
+}).strict().superRefine((input, context) => {
+  const dayIds = input.days.map((day) => day.dayId);
+  if (new Set(dayIds).size !== dayIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['days'], message: 'Day assignments must be unique' });
+  }
+});
+
+const areaAssignmentInputSchema = z.object({
+  eventId: z.string().uuid(),
+  areaId: z.string().uuid(),
+  commitmentStatus: z.enum(['not_asked', 'pending', 'accepted', 'declined', 'tentative']),
+  note: z.string().trim().max(1000).nullable().optional()
+}).strict();
+
+const shiftAssignmentInputSchema = z.object({
+  eventId: z.string().uuid(),
+  shiftId: z.string().uuid(),
+  commitmentStatus: z.enum(['not_asked', 'pending', 'accepted', 'declined', 'tentative']),
+  note: z.string().trim().max(1000).nullable().optional()
+}).strict();
+
+const resetAssignmentsInputSchema = z.object({
+  scope: z.literal('assignments')
+}).strict();
+
+const areaConfigInputSchema = z.object({
+  eventId: z.string().uuid(),
+  areas: z.array(z.object({
+    code: z.string().trim().min(1).max(50),
+    name: z.string().trim().min(1).max(100),
+    areaType: z.enum(['setup', 'general']),
+    dayScope: z.enum(['saturday', 'sunday']).nullable().optional(),
+    sortOrder: z.number().int().min(0).max(100),
+    responsibleLabel: z.string().trim().max(100).nullable().optional()
+  })).max(20),
+  shifts: z.array(z.object({
+    areaCode: z.string().trim().min(1).max(50),
+    label: z.string().trim().min(1).max(100),
+    shiftDate: z.string().date(),
+    sortOrder: z.number().int().min(0).max(100)
+  })).max(50)
+}).strict().superRefine((input, context) => {
+  const areaByCode = new Map(input.areas.map((area) => [area.code, area]));
+  if (areaByCode.size !== input.areas.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['areas'], message: 'Area codes must be unique' });
+  }
+  const protectedAreas: Record<string, { areaType: 'setup' | 'general'; dayScope: 'saturday' | 'sunday' | null }> = {
+    setup_fl1: { areaType: 'setup', dayScope: null },
+    setup_fl2: { areaType: 'setup', dayScope: null },
+    general_saturday: { areaType: 'general', dayScope: 'saturday' },
+    general_sunday: { areaType: 'general', dayScope: 'sunday' }
+  };
+  input.areas.forEach((area, index) => {
+    if ((area.areaType === 'setup' && area.dayScope != null) || (area.areaType === 'general' && area.dayScope == null)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['areas', index, 'dayScope'], message: 'Setup areas must not have a day scope and general areas require one' });
+    }
+    const protectedArea = protectedAreas[area.code];
+    if (protectedArea && (area.areaType !== protectedArea.areaType || (area.dayScope ?? null) !== protectedArea.dayScope)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['areas', index], message: 'Default area type and day scope cannot be changed' });
+    }
+  });
+  const shiftKeys = input.shifts.map((shift) => `${shift.areaCode}:${shift.shiftDate}`);
+  if (new Set(shiftKeys).size !== shiftKeys.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['shifts'], message: 'Shift dates must be unique per area' });
+  }
+  input.shifts.forEach((shift, index) => {
+    const configuredArea = areaByCode.get(shift.areaCode);
+    if (configuredArea?.areaType === 'general' || shift.areaCode.startsWith('general_')) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['shifts', index, 'areaCode'], message: 'Shifts are only valid for setup areas' });
+    }
+  });
 });
 
 const configPostInputSchema = z.object({
@@ -100,6 +176,10 @@ const importInputSchema = z.object({
 export const validateMarshalPersonInput = (value: unknown) => personInputSchema.parse(value);
 export const validateMarshalPersonPatch = (value: unknown) => personPatchSchema.parse(value);
 export const validateMarshalAssignmentInput = (value: unknown) => assignmentInputSchema.parse(value);
+export const validateMarshalAreaAssignmentInput = (value: unknown) => areaAssignmentInputSchema.parse(value);
+export const validateMarshalShiftAssignmentInput = (value: unknown) => shiftAssignmentInputSchema.parse(value);
+export const validateMarshalResetInput = (value: unknown) => resetAssignmentsInputSchema.parse(value);
+export const validateMarshalAreaConfigInput = (value: unknown) => areaConfigInputSchema.parse(value);
 export const validateMarshalConfigInput = (value: unknown) => configInputSchema.parse(value);
 export const validateMarshalTrainingInput = (value: unknown) => trainingInputSchema.parse(value);
 export const validateMarshalTrainingParticipantInput = (value: unknown) => trainingParticipantSchema.parse(value);
@@ -115,6 +195,15 @@ const defaultPostCodes = [
   ...Array.from({ length: 5 }, (_, i) => `4/${i + 1}`),
   ...Array.from({ length: 3 }, (_, i) => `5/${i + 1}`)
 ];
+
+const defaultMarshalAreas = [
+  { code: 'setup_fl1', name: 'Aufbau Fahrerlager 1', areaType: 'setup' as const, dayScope: null, sortOrder: 10 },
+  { code: 'setup_fl2', name: 'Aufbau Fahrerlager 2', areaType: 'setup' as const, dayScope: null, sortOrder: 20 },
+  { code: 'general_saturday', name: 'Allgemeine Helfer', areaType: 'general' as const, dayScope: 'saturday' as const, sortOrder: 30 },
+  { code: 'general_sunday', name: 'Allgemeine Helfer', areaType: 'general' as const, dayScope: 'sunday' as const, sortOrder: 40 }
+] as const;
+
+const defaultMarshalAreaCodes = new Set(defaultMarshalAreas.map((area) => area.code));
 
 const toIsoDate = (value: unknown): string | null => {
   if (value instanceof Date && !Number.isNaN(value.valueOf())) return value.toISOString().slice(0, 10);
@@ -142,12 +231,27 @@ const zipValue = (value: unknown) => {
   if (!raw) return null;
   return /^\d{4}$/.test(raw) ? `0${raw}` : raw;
 };
-const normalizeName = (firstName: string, lastName: string) => `${firstName} ${lastName}`.toLocaleLowerCase('de-DE').replace(/\s+/g, ' ').trim();
+const normalizeName = (firstName: string, lastName: string) => `${firstName} ${lastName}`
+  .normalize('NFKC')
+  .toLocaleLowerCase('de-DE')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+export const indexMarshalPeopleByNormalizedName = <T extends { id: string; helperNumber: number; firstName: string; lastName: string }>(people: T[]) => {
+  const result = new Map<string, string>();
+  const sorted = [...people].sort((left, right) => left.helperNumber - right.helperNumber || left.id.localeCompare(right.id));
+  for (const person of sorted) {
+    const name = normalizeName(person.firstName, person.lastName);
+    if (!result.has(name)) result.set(name, person.id);
+  }
+  return result;
+};
 
 type ImportedPerson = z.infer<typeof personInputSchema> & { source: string };
 type ImportedParticipation = { helperNumber: number; contactOwner: string | null; wish: string | null; note: string | null; saturday: string; sunday: string };
 type ParsedWorkbook = {
   people: ImportedPerson[];
+  lauferPeople: ImportedPerson[];
   participations: ImportedParticipation[];
   historicalAssignments: Array<{ year: number; dayKey: 'saturday' | 'sunday'; name: string; firstName: string; lastName: string; shirtSize: string | null; assignment: string; sheet: string; row: number }>;
   trainings: Array<{ type: 'training' | 'briefing'; title: string; date: string; attendees: Array<{ helperNumber?: number; name?: string }> }>;
@@ -194,6 +298,7 @@ const parseWorkbook = async (buffer: Buffer): Promise<ParsedWorkbook> => {
   const historicalAssignments: ParsedWorkbook['historicalAssignments'] = [];
   const trainings: ParsedWorkbook['trainings'] = [];
   const conflicts: ParsedWorkbook['conflicts'] = [];
+  const lauferPeople: ImportedPerson[] = [];
 
   const base = workbook.getWorksheet('Vorlage Lily 2022');
   base?.eachRow((row, rowNumber) => {
@@ -247,6 +352,41 @@ const parseWorkbook = async (buffer: Buffer): Promise<ParsedWorkbook> => {
     trainings.push({ type: 'training', title: 'Lizenzschulung Streckenposten', date: '2025-03-29', attendees });
   }
 
+  const lauferSheet = workbook.getWorksheet('Team_Laufer_2023');
+  if (lauferSheet) {
+    lauferSheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const lastName = cellText(row.getCell(1).value);
+      const firstName = cellText(row.getCell(2).value);
+      if (!lastName || !firstName) return;
+      const rawBirth = cellText(row.getCell(3).value);
+      const birthdate = /^\d{4,}$/.test(rawBirth) ? null : toIsoDate(row.getCell(3).value);
+      const rawCity = cellText(row.getCell(6).value);
+      const cityClean = /^(verpflegung|gesamt)/i.test(rawCity) ? null : rawCity || null;
+      const rawEmail = cellText(row.getCell(8).value);
+      const emailClean = rawEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail) ? rawEmail : null;
+      lauferPeople.push({
+        helperNumber: 0,
+        lastName,
+        firstName,
+        street: nullable(row.getCell(4).value),
+        zip: zipValue(row.getCell(5).value),
+        city: cityClean,
+        birthdate,
+        phone: nullable(row.getCell(7).value),
+        email: emailClean,
+        vehicleRegistration: nullable(row.getCell(9).value),
+        shirtSize: nullable(row.getCell(10).value),
+        activityAreas: ['Aufbau'],
+        note: !cityClean && rawCity ? `Originalfeld: ${rawCity}` : null,
+        clubMember: false,
+        licenseNumber: null,
+        isActive: true,
+        source: 'Team_Laufer_2023'
+      });
+    });
+  }
+
   const briefingSheet = workbook.getWorksheet('Einweisung 11.09.2025');
   if (briefingSheet) {
     const attendees: Array<{ name: string }> = [];
@@ -260,7 +400,7 @@ const parseWorkbook = async (buffer: Buffer): Promise<ParsedWorkbook> => {
   }
 
   const knownNamesBeforeHistorical = new Set([...people.values()].map((person) => normalizeName(person.firstName, person.lastName)));
-  let nextHelperNumber = Math.max(...people.keys()) + 1;
+  let nextHelperNumber = Math.max(0, ...people.keys()) + 1;
   for (const historical of historicalAssignments) {
     if (knownNamesBeforeHistorical.has(historical.name)) continue;
     const helperNumber = nextHelperNumber++;
@@ -281,7 +421,7 @@ const parseWorkbook = async (buffer: Buffer): Promise<ParsedWorkbook> => {
       conflicts.push({ sheet: session.title, row: 0, message: `Person nicht eindeutig gefunden: ${attendee.helperNumber ?? attendee.name}` });
     }
   }
-  return { people: [...people.values()].sort((a, b) => a.helperNumber - b.helperNumber), participations, historicalAssignments, trainings, conflicts };
+  return { people: [...people.values()].sort((a, b) => a.helperNumber - b.helperNumber), lauferPeople, participations, historicalAssignments, trainings, conflicts };
 };
 
 const decodeWorkbook = (input: z.infer<typeof importInputSchema>) => {
@@ -311,8 +451,10 @@ const assignmentFromCell = (value: string) => {
 export const parseMarshalWorkbookBuffer = parseWorkbook;
 export const parseMarshalAssignmentCell = assignmentFromCell;
 
-export const ensureMarshalEventStructure = async (eventId: string) => {
-  const db = await getDb();
+type MarshalDb = Awaited<ReturnType<typeof getDb>>;
+type MarshalDbWriter = Pick<MarshalDb, 'select' | 'insert' | 'update' | 'delete' | 'execute'>;
+
+const ensureMarshalEventStructureWithDb = async (db: MarshalDbWriter, eventId: string) => {
   const [eventRow] = await db.select({ startsAt: event.startsAt, endsAt: event.endsAt }).from(event).where(eq(event.id, eventId)).limit(1);
   if (!eventRow) throw new Error('EVENT_NOT_FOUND');
   const start = new Date(`${eventRow.startsAt}T12:00:00Z`);
@@ -339,6 +481,14 @@ export const ensureMarshalEventStructure = async (eventId: string) => {
     const section = sectionByCode.get(sectionCode);
     if (section) await db.insert(marshalPost).values({ eventId, sectionId: section.id, code, targetStaff: 2, emergencyTargetStaff: 2, sortOrder }).onConflictDoNothing();
   }
+  for (const area of defaultMarshalAreas) {
+    await db.insert(marshalHelperArea).values({ eventId, ...area }).onConflictDoNothing();
+  }
+};
+
+export const ensureMarshalEventStructure = async (eventId: string) => {
+  const db = await getDb();
+  await ensureMarshalEventStructureWithDb(db, eventId);
 };
 
 export const listMarshalEvents = async () => {
@@ -353,7 +503,7 @@ export const getMarshalWorkspace = async (eventId: string, search?: string, area
   const filters = [];
   if (search?.trim()) filters.push(or(ilike(marshalPerson.firstName, `%${search.trim()}%`), ilike(marshalPerson.lastName, `%${search.trim()}%`), sql`${marshalPerson.helperNumber}::text ilike ${`%${search.trim()}%`}`)!);
   if (area?.trim()) filters.push(sql`${marshalPerson.activityAreas} @> ${JSON.stringify([area.trim()])}::jsonb`);
-  const [personRows, participations, days, sections, posts, trainings, trainingParticipants, qualifications] = await Promise.all([
+  const [personRows, participations, days, sections, posts, trainings, trainingParticipants, qualifications, areas, areaShifts] = await Promise.all([
     db.select().from(marshalPerson).where(filters.length ? and(...filters) : undefined).orderBy(asc(marshalPerson.lastName), asc(marshalPerson.firstName)),
     db.select().from(marshalEventParticipation).where(eq(marshalEventParticipation.eventId, eventId)),
     db.select().from(marshalEventDay).where(eq(marshalEventDay.eventId, eventId)).orderBy(asc(marshalEventDay.eventDate)),
@@ -361,10 +511,26 @@ export const getMarshalWorkspace = async (eventId: string, search?: string, area
     db.select().from(marshalPost).where(eq(marshalPost.eventId, eventId)).orderBy(asc(marshalPost.sortOrder)),
     db.select().from(marshalTrainingSession).where(eq(marshalTrainingSession.eventId, eventId)).orderBy(asc(marshalTrainingSession.sessionDate)),
     db.select().from(marshalTrainingParticipant).innerJoin(marshalTrainingSession, eq(marshalTrainingParticipant.sessionId, marshalTrainingSession.id)).where(eq(marshalTrainingSession.eventId, eventId)),
-    db.select().from(marshalQualification)
+    db.select().from(marshalQualification),
+    db.select().from(marshalHelperArea).where(eq(marshalHelperArea.eventId, eventId)).orderBy(asc(marshalHelperArea.sortOrder)),
+    db.select({ shift: marshalAreaShift }).from(marshalAreaShift)
+      .innerJoin(marshalHelperArea, eq(marshalAreaShift.areaId, marshalHelperArea.id))
+      .where(eq(marshalHelperArea.eventId, eventId))
+      .orderBy(asc(marshalHelperArea.sortOrder), asc(marshalAreaShift.sortOrder), asc(marshalAreaShift.shiftDate))
   ]);
   const participationIds = participations.map((item) => item.id);
-  const assignments = participationIds.length ? await db.select().from(marshalDayAssignment).where(inArray(marshalDayAssignment.participationId, participationIds)) : [];
+  const [assignments, areaAssignmentRows, shiftAssignmentRows] = await Promise.all([
+    participationIds.length ? db.select().from(marshalDayAssignment).where(inArray(marshalDayAssignment.participationId, participationIds)) : Promise.resolve([]),
+    participationIds.length ? db.select({ assignment: marshalAreaAssignment }).from(marshalAreaAssignment)
+      .innerJoin(marshalHelperArea, eq(marshalAreaAssignment.areaId, marshalHelperArea.id))
+      .where(and(inArray(marshalAreaAssignment.participationId, participationIds), eq(marshalHelperArea.eventId, eventId))) : Promise.resolve([]),
+    participationIds.length ? db.select({ assignment: marshalShiftAssignment }).from(marshalShiftAssignment)
+      .innerJoin(marshalAreaShift, eq(marshalShiftAssignment.shiftId, marshalAreaShift.id))
+      .innerJoin(marshalHelperArea, eq(marshalAreaShift.areaId, marshalHelperArea.id))
+      .where(and(inArray(marshalShiftAssignment.participationId, participationIds), eq(marshalHelperArea.eventId, eventId))) : Promise.resolve([])
+  ]);
+  const areaAssignments = areaAssignmentRows.map((item) => item.assignment);
+  const shiftAssignments = shiftAssignmentRows.map((item) => item.assignment);
   const personIds = new Set(personRows.map((item) => item.id));
   return {
     people: personRows.map((person) => {
@@ -374,7 +540,7 @@ export const getMarshalWorkspace = async (eventId: string, search?: string, area
       };
       return { ...person, participation, assignments: assignments.filter((assignment) => assignment.participationId === participation.id) };
     }),
-    days, sections, posts, trainings,
+    days, sections, posts, trainings, areas, areaShifts: areaShifts.map((item) => item.shift), areaAssignments, shiftAssignments,
     trainingParticipants: trainingParticipants.map((item) => item.marshal_training_participant),
     qualifications: qualifications.filter((item) => personIds.has(item.personId))
   };
@@ -396,21 +562,221 @@ export const patchMarshalPerson = async (personId: string, input: z.infer<typeof
 
 export const upsertMarshalAssignment = async (personId: string, input: z.infer<typeof assignmentInputSchema>, actorUserId: string | null) => {
   const db = await getDb();
-  const [person] = await db.select().from(marshalPerson).where(eq(marshalPerson.id, personId)).limit(1);
-  if (!person) return null;
-  const [participation] = await db.insert(marshalEventParticipation).values({
-    eventId: input.eventId, personId, contactOwner: input.contactOwner, wish: input.wish, note: input.note,
-    shirtSizeSnapshot: input.shirtSizeSnapshot ?? person.shirtSize
-  }).onConflictDoUpdate({ target: [marshalEventParticipation.eventId, marshalEventParticipation.personId], set: {
-    contactOwner: input.contactOwner, wish: input.wish, note: input.note, shirtSizeSnapshot: input.shirtSizeSnapshot ?? person.shirtSize, updatedAt: new Date()
-  }}).returning();
-  for (const day of input.days) {
-    await db.insert(marshalDayAssignment).values({ participationId: participation.id, ...day }).onConflictDoUpdate({
-      target: [marshalDayAssignment.participationId, marshalDayAssignment.dayId], set: { ...day, updatedAt: new Date() }
-    });
-  }
-  await writeAuditLog(db as never, { eventId: input.eventId, actorUserId, action: 'marshal_assignment_updated', entityType: 'marshal_event_participation', entityId: participation.id });
-  return participation;
+  return db.transaction(async (tx) => {
+    const [person] = await tx.select().from(marshalPerson).where(eq(marshalPerson.id, personId)).limit(1);
+    if (!person) return null;
+    const [eventRow] = await tx.select({ id: event.id }).from(event).where(eq(event.id, input.eventId)).limit(1);
+    if (!eventRow) throw new Error('EVENT_NOT_FOUND');
+    const dayIds = input.days.map((day) => day.dayId);
+    const eventDays = dayIds.length
+      ? await tx.select({ id: marshalEventDay.id }).from(marshalEventDay)
+        .where(and(eq(marshalEventDay.eventId, input.eventId), inArray(marshalEventDay.id, dayIds)))
+      : [];
+    const sectionIds = Array.from(new Set(input.days.flatMap((day) => day.sectionId ? [day.sectionId] : [])));
+    const postIds = Array.from(new Set(input.days.flatMap((day) => day.postId ? [day.postId] : [])));
+    const eventSections = sectionIds.length
+      ? await tx.select({ id: marshalSection.id }).from(marshalSection)
+        .where(and(eq(marshalSection.eventId, input.eventId), inArray(marshalSection.id, sectionIds)))
+      : [];
+    const eventPosts = postIds.length
+      ? await tx.select({ id: marshalPost.id, sectionId: marshalPost.sectionId }).from(marshalPost)
+        .where(and(eq(marshalPost.eventId, input.eventId), inArray(marshalPost.id, postIds)))
+      : [];
+    const postById = new Map(eventPosts.map((post) => [post.id, post]));
+    if (eventDays.length !== dayIds.length || eventSections.length !== sectionIds.length || eventPosts.length !== postIds.length ||
+      input.days.some((day) => day.postId && day.sectionId && postById.get(day.postId)?.sectionId !== day.sectionId)) {
+      throw new Error('MARSHAL_ASSIGNMENT_SCOPE_INVALID');
+    }
+    const [participation] = await tx.insert(marshalEventParticipation).values({
+      eventId: input.eventId, personId, contactOwner: input.contactOwner, wish: input.wish, note: input.note,
+      shirtSizeSnapshot: input.shirtSizeSnapshot ?? person.shirtSize
+    }).onConflictDoUpdate({ target: [marshalEventParticipation.eventId, marshalEventParticipation.personId], set: {
+      contactOwner: input.contactOwner, wish: input.wish, note: input.note, shirtSizeSnapshot: input.shirtSizeSnapshot ?? person.shirtSize, updatedAt: new Date()
+    }}).returning();
+    for (const day of input.days) {
+      await tx.insert(marshalDayAssignment).values({ participationId: participation.id, ...day }).onConflictDoUpdate({
+        target: [marshalDayAssignment.participationId, marshalDayAssignment.dayId], set: { ...day, updatedAt: new Date() }
+      });
+    }
+    await writeAuditLog(tx as never, { eventId: input.eventId, actorUserId, action: 'marshal_assignment_updated', entityType: 'marshal_event_participation', entityId: participation.id });
+    return participation;
+  });
+};
+
+export const upsertMarshalAreaAssignment = async (
+  personId: string,
+  input: z.infer<typeof areaAssignmentInputSchema>,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const [person] = await tx.select().from(marshalPerson).where(eq(marshalPerson.id, personId)).limit(1);
+    if (!person) return null;
+    const [area] = await tx.select({ id: marshalHelperArea.id }).from(marshalHelperArea).where(and(
+      eq(marshalHelperArea.id, input.areaId),
+      eq(marshalHelperArea.eventId, input.eventId)
+    )).limit(1);
+    if (!area) throw new Error('MARSHAL_AREA_SCOPE_INVALID');
+    const [participation] = await tx.insert(marshalEventParticipation).values({
+      eventId: input.eventId,
+      personId,
+      shirtSizeSnapshot: person.shirtSize
+    }).onConflictDoUpdate({
+      target: [marshalEventParticipation.eventId, marshalEventParticipation.personId],
+      set: { updatedAt: new Date() }
+    }).returning();
+    const [row] = await tx.insert(marshalAreaAssignment).values({
+      participationId: participation.id,
+      areaId: area.id,
+      commitmentStatus: input.commitmentStatus,
+      note: input.note ?? null
+    }).onConflictDoUpdate({
+      target: [marshalAreaAssignment.participationId, marshalAreaAssignment.areaId],
+      set: { commitmentStatus: input.commitmentStatus, note: input.note ?? null, updatedAt: new Date() }
+    }).returning();
+    await writeAuditLog(tx as never, { eventId: input.eventId, actorUserId, action: 'marshal_area_assignment_updated', entityType: 'marshal_area_assignment', entityId: row.id });
+    return row;
+  });
+};
+
+export const upsertMarshalShiftAssignment = async (
+  personId: string,
+  input: z.infer<typeof shiftAssignmentInputSchema>,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const [person] = await tx.select().from(marshalPerson).where(eq(marshalPerson.id, personId)).limit(1);
+    if (!person) return null;
+    const [shift] = await tx.select({ id: marshalAreaShift.id }).from(marshalAreaShift)
+      .innerJoin(marshalHelperArea, eq(marshalAreaShift.areaId, marshalHelperArea.id))
+      .where(and(
+        eq(marshalAreaShift.id, input.shiftId),
+        eq(marshalHelperArea.eventId, input.eventId),
+        eq(marshalHelperArea.areaType, 'setup')
+      )).limit(1);
+    if (!shift) throw new Error('MARSHAL_SHIFT_SCOPE_INVALID');
+    const [participation] = await tx.insert(marshalEventParticipation).values({
+      eventId: input.eventId,
+      personId,
+      shirtSizeSnapshot: person.shirtSize
+    }).onConflictDoUpdate({
+      target: [marshalEventParticipation.eventId, marshalEventParticipation.personId],
+      set: { updatedAt: new Date() }
+    }).returning();
+    const [row] = await tx.insert(marshalShiftAssignment).values({
+      participationId: participation.id,
+      shiftId: shift.id,
+      commitmentStatus: input.commitmentStatus,
+      note: input.note ?? null
+    }).onConflictDoUpdate({
+      target: [marshalShiftAssignment.participationId, marshalShiftAssignment.shiftId],
+      set: { commitmentStatus: input.commitmentStatus, note: input.note ?? null, updatedAt: new Date() }
+    }).returning();
+    await writeAuditLog(tx as never, { eventId: input.eventId, actorUserId, action: 'marshal_shift_assignment_updated', entityType: 'marshal_shift_assignment', entityId: row.id });
+    return row;
+  });
+};
+
+export const deleteMarshalPerson = async (personId: string, actorUserId: string | null) => {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const [deleted] = await tx.delete(marshalPerson).where(eq(marshalPerson.id, personId)).returning({ id: marshalPerson.id });
+    if (deleted) await writeAuditLog(tx as never, { actorUserId, action: 'marshal_person_deleted', entityType: 'marshal_person', entityId: deleted.id });
+    return deleted ?? null;
+  });
+};
+
+export const resetMarshalEventAssignments = async (eventId: string, actorUserId: string | null) => {
+  const db = await getDb();
+  await db.transaction(async (tx) => {
+    const [eventRow] = await tx.select({ id: event.id }).from(event).where(eq(event.id, eventId)).limit(1);
+    if (!eventRow) throw new Error('EVENT_NOT_FOUND');
+    const participations = await tx.select({ id: marshalEventParticipation.id })
+      .from(marshalEventParticipation).where(eq(marshalEventParticipation.eventId, eventId));
+    const participationIds = participations.map((participation) => participation.id);
+    if (participationIds.length) {
+      await tx.update(marshalDayAssignment).set({
+        commitmentStatus: 'not_asked',
+        sectionId: null,
+        postId: null,
+        functionCode: null,
+        updatedAt: new Date()
+      }).where(inArray(marshalDayAssignment.participationId, participationIds));
+      await tx.update(marshalAreaAssignment).set({
+        commitmentStatus: 'not_asked',
+        updatedAt: new Date()
+      }).where(inArray(marshalAreaAssignment.participationId, participationIds));
+      await tx.update(marshalShiftAssignment).set({
+        commitmentStatus: 'not_asked',
+        updatedAt: new Date()
+      }).where(inArray(marshalShiftAssignment.participationId, participationIds));
+    }
+    await writeAuditLog(tx as never, { eventId, actorUserId, action: 'marshal_assignments_reset', entityType: 'event', entityId: eventId });
+  });
+};
+
+export const replaceMarshalAreaConfig = async (
+  input: z.infer<typeof areaConfigInputSchema>,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  await db.transaction(async (tx) => {
+    const [eventRow] = await tx.select({ id: event.id }).from(event).where(eq(event.id, input.eventId)).limit(1);
+    if (!eventRow) throw new Error('EVENT_NOT_FOUND');
+    for (const area of defaultMarshalAreas) {
+      await tx.insert(marshalHelperArea).values({ eventId: input.eventId, ...area }).onConflictDoNothing();
+    }
+    for (const area of input.areas) {
+      await tx.insert(marshalHelperArea).values({ eventId: input.eventId, ...area }).onConflictDoUpdate({
+        target: [marshalHelperArea.eventId, marshalHelperArea.code],
+        set: {
+          name: area.name,
+          areaType: area.areaType,
+          dayScope: area.dayScope ?? null,
+          sortOrder: area.sortOrder,
+          responsibleLabel: area.responsibleLabel ?? null,
+          updatedAt: new Date()
+        }
+      });
+    }
+    let areas = await tx.select().from(marshalHelperArea).where(eq(marshalHelperArea.eventId, input.eventId));
+    const submittedCodes = new Set(input.areas.map((area) => area.code));
+    const omittedCustomAreaIds = areas
+      .filter((area) => !defaultMarshalAreaCodes.has(area.code as typeof defaultMarshalAreas[number]['code']) && !submittedCodes.has(area.code))
+      .map((area) => area.id);
+    if (omittedCustomAreaIds.length) {
+      await tx.delete(marshalHelperArea).where(inArray(marshalHelperArea.id, omittedCustomAreaIds));
+      areas = areas.filter((area) => !omittedCustomAreaIds.includes(area.id));
+    }
+    const areaByCode = new Map(areas.map((area) => [area.code, area]));
+    for (const shift of input.shifts) {
+      const area = areaByCode.get(shift.areaCode);
+      if (!area || area.areaType !== 'setup') throw new Error('MARSHAL_AREA_CONFIG_SCOPE_INVALID');
+    }
+    const areaIds = areas.map((area) => area.id);
+    const existingShifts = areaIds.length
+      ? await tx.select().from(marshalAreaShift).where(inArray(marshalAreaShift.areaId, areaIds))
+      : [];
+    const desiredShiftKeys = new Set(input.shifts.map((shift) => `${areaByCode.get(shift.areaCode)!.id}:${shift.shiftDate}`));
+    const omittedShiftIds = existingShifts
+      .filter((shift) => !desiredShiftKeys.has(`${shift.areaId}:${shift.shiftDate}`))
+      .map((shift) => shift.id);
+    if (omittedShiftIds.length) await tx.delete(marshalAreaShift).where(inArray(marshalAreaShift.id, omittedShiftIds));
+    for (const shift of input.shifts) {
+      const areaId = areaByCode.get(shift.areaCode)!.id;
+      await tx.insert(marshalAreaShift).values({
+        areaId,
+        label: shift.label,
+        shiftDate: shift.shiftDate,
+        sortOrder: shift.sortOrder
+      }).onConflictDoUpdate({
+        target: [marshalAreaShift.areaId, marshalAreaShift.shiftDate],
+        set: { label: shift.label, sortOrder: shift.sortOrder }
+      });
+    }
+    await writeAuditLog(tx as never, { eventId: input.eventId, actorUserId, action: 'marshal_area_config_updated', entityType: 'event', entityId: input.eventId });
+  });
 };
 
 export const replaceMarshalConfig = async (input: z.infer<typeof configInputSchema>, actorUserId: string | null) => {
@@ -460,12 +826,23 @@ export const previewMarshalImport = async (input: z.infer<typeof importInputSche
   const db = await getDb();
   const [selectedEvent] = await db.select({ startsAt: event.startsAt }).from(event).where(eq(event.id, input.eventId)).limit(1);
   if (!selectedEvent) throw new Error('EVENT_NOT_FOUND');
-  const existing = await db.select({ helperNumber: marshalPerson.helperNumber }).from(marshalPerson);
+  const existing = await db.select({
+    id: marshalPerson.id,
+    helperNumber: marshalPerson.helperNumber,
+    firstName: marshalPerson.firstName,
+    lastName: marshalPerson.lastName
+  }).from(marshalPerson);
   const existingNumbers = new Set(existing.map((row) => row.helperNumber));
+  const existingNames = indexMarshalPeopleByNormalizedName(existing);
+  const uniqueLauferNames = new Set(parsed.lauferPeople.map((person) => normalizeName(person.firstName, person.lastName)));
+  const matchedLauferPeople = [...uniqueLauferNames].filter((name) => existingNames.has(name)).length;
   return {
     sha256,
     summary: {
       people: parsed.people.length,
+      lauferPeople: parsed.lauferPeople.length,
+      newLauferPeople: uniqueLauferNames.size - matchedLauferPeople,
+      matchedLauferPeople,
       newPeople: parsed.people.filter((person) => !existingNumbers.has(person.helperNumber)).length,
       updatedPeople: parsed.people.filter((person) => existingNumbers.has(person.helperNumber)).length,
       eventParticipations: parsed.participations.length,
@@ -478,36 +855,92 @@ export const previewMarshalImport = async (input: z.infer<typeof importInputSche
   };
 };
 
+const ensureFL2Participation = async (db: MarshalDbWriter, personId: string, eventId: string) => {
+  const [participation] = await db.insert(marshalEventParticipation).values({ eventId, personId })
+    .onConflictDoUpdate({
+      target: [marshalEventParticipation.eventId, marshalEventParticipation.personId],
+      set: { updatedAt: new Date() }
+    })
+    .returning();
+  const [area] = await db.select().from(marshalHelperArea)
+    .where(and(eq(marshalHelperArea.eventId, eventId), eq(marshalHelperArea.code, 'setup_fl2'))).limit(1);
+  if (area) {
+    await db.insert(marshalAreaAssignment).values({
+      participationId: participation.id,
+      areaId: area.id,
+      commitmentStatus: 'not_asked'
+    }).onConflictDoNothing();
+  }
+};
+
 export const commitMarshalImport = async (input: z.infer<typeof importInputSchema>, actorUserId: string | null) => {
   const { buffer, sha256 } = decodeWorkbook(input);
   if (!input.expectedSha256) throw new Error('MARSHAL_IMPORT_CONFIRMATION_REQUIRED');
   const db = await getDb();
-  const [alreadyImported] = await db.select().from(marshalImportRun).where(and(eq(marshalImportRun.eventId, input.eventId), eq(marshalImportRun.workbookSha256, sha256), eq(marshalImportRun.status, 'completed'))).limit(1);
-  if (alreadyImported) return { importRun: alreadyImported, alreadyImported: true };
-  const [selectedEvent] = await db.select({ startsAt: event.startsAt }).from(event).where(eq(event.id, input.eventId)).limit(1);
-  if (!selectedEvent) throw new Error('EVENT_NOT_FOUND');
-  await ensureMarshalEventStructure(input.eventId);
   const parsed = await parseWorkbook(buffer);
+  return db.transaction(async (tx) => {
+  await tx.execute(sql`LOCK TABLE marshal_person IN SHARE ROW EXCLUSIVE MODE`);
+  const [alreadyImported] = await tx.select().from(marshalImportRun).where(and(eq(marshalImportRun.eventId, input.eventId), eq(marshalImportRun.workbookSha256, sha256), eq(marshalImportRun.status, 'completed'))).limit(1);
+  if (alreadyImported) return { importRun: alreadyImported, alreadyImported: true };
+  const [selectedEvent] = await tx.select({ startsAt: event.startsAt }).from(event).where(eq(event.id, input.eventId)).limit(1);
+  if (!selectedEvent) throw new Error('EVENT_NOT_FOUND');
+  await ensureMarshalEventStructureWithDb(tx, input.eventId);
   const personValues = parsed.people.map(({ source: _source, ...values }) => values);
-  await db.insert(marshalPerson).values(personValues).onConflictDoUpdate({ target: marshalPerson.helperNumber, set: {
+  if (personValues.length) await tx.insert(marshalPerson).values(personValues).onConflictDoUpdate({ target: marshalPerson.helperNumber, set: {
     firstName: sql`excluded.first_name`, lastName: sql`excluded.last_name`, street: sql`excluded.street`, zip: sql`excluded.zip`,
     city: sql`excluded.city`, birthdate: sql`excluded.birthdate`, phone: sql`excluded.phone`, email: sql`excluded.email`,
     shirtSize: sql`excluded.shirt_size`, clubMember: sql`excluded.club_member`, licenseNumber: sql`excluded.license_number`,
     vehicleRegistration: sql`excluded.vehicle_registration`, activityAreas: sql`excluded.activity_areas`, note: sql`excluded.note`,
     isActive: sql`excluded.is_active`, updatedAt: new Date()
   }});
-  const importedPeople = await db.select().from(marshalPerson).where(inArray(marshalPerson.helperNumber, parsed.people.map((person) => person.helperNumber)));
+  const allPeople = await tx.select().from(marshalPerson);
+  const importedHelperNumbers = new Set(parsed.people.map((person) => person.helperNumber));
+  const importedPeople = allPeople.filter((person) => importedHelperNumbers.has(person.helperNumber));
   const personIds = new Map(importedPeople.map((row) => [row.helperNumber, row.id]));
-  const names = new Map(importedPeople.map((row) => [normalizeName(row.firstName, row.lastName), row.id]));
+  const names = indexMarshalPeopleByNormalizedName(allPeople);
+  const personById = new Map(allPeople.map((person) => [person.id, person]));
+
+  if (parsed.lauferPeople.length > 0) {
+    const [maxRow] = await tx.select({ max: sql<number>`coalesce(max(helper_number), 0)` }).from(marshalPerson);
+    let nextNum = (maxRow?.max ?? 0) + 1;
+    const knownNamesNow = indexMarshalPeopleByNormalizedName(allPeople);
+    const sortedLauferPeople = [...parsed.lauferPeople].sort((left, right) =>
+      normalizeName(left.firstName, left.lastName).localeCompare(normalizeName(right.firstName, right.lastName), 'de-DE')
+    );
+    for (const lauferPerson of sortedLauferPeople) {
+      const normalizedName = normalizeName(lauferPerson.firstName, lauferPerson.lastName);
+      if (knownNamesNow.has(normalizedName)) {
+        const existingId = knownNamesNow.get(normalizedName)!;
+        const existingPerson = personById.get(existingId);
+        if (existingPerson && !existingPerson.activityAreas.includes('Aufbau')) {
+          await tx.update(marshalPerson).set({
+            activityAreas: [...existingPerson.activityAreas, 'Aufbau'],
+            updatedAt: new Date()
+          }).where(eq(marshalPerson.id, existingId));
+          existingPerson.activityAreas.push('Aufbau');
+        }
+        await ensureFL2Participation(tx, existingId, input.eventId);
+      } else {
+        lauferPerson.helperNumber = nextNum++;
+        const { source: _source, ...values } = lauferPerson;
+        const [newPerson] = await tx.insert(marshalPerson).values(values).returning();
+        knownNamesNow.set(normalizedName, newPerson.id);
+        names.set(normalizedName, newPerson.id);
+        personIds.set(lauferPerson.helperNumber, newPerson.id);
+        await ensureFL2Participation(tx, newPerson.id, input.eventId);
+      }
+    }
+  }
+
   const qualificationValues = importedPeople.filter((row) => row.licenseNumber).map((row) => ({ personId: row.id, qualificationType: 'dmsb_license', number: row.licenseNumber }));
-  if (qualificationValues.length) await db.insert(marshalQualification).values(qualificationValues).onConflictDoUpdate({
+  if (qualificationValues.length) await tx.insert(marshalQualification).values(qualificationValues).onConflictDoUpdate({
     target: [marshalQualification.personId, marshalQualification.qualificationType], set: { number: sql`excluded.number`, updatedAt: new Date() }
   });
-  const days = await db.select().from(marshalEventDay).where(eq(marshalEventDay.eventId, input.eventId));
+  const days = await tx.select().from(marshalEventDay).where(eq(marshalEventDay.eventId, input.eventId));
   const dayByKey = new Map(days.map((day) => [day.dayKey, day]));
-  const sections = await db.select().from(marshalSection).where(eq(marshalSection.eventId, input.eventId));
+  const sections = await tx.select().from(marshalSection).where(eq(marshalSection.eventId, input.eventId));
   const sectionByCode = new Map(sections.map((section) => [section.code, section]));
-  const posts = await db.select().from(marshalPost).where(eq(marshalPost.eventId, input.eventId));
+  const posts = await tx.select().from(marshalPost).where(eq(marshalPost.eventId, input.eventId));
   const postByCode = new Map(posts.map((post) => [post.code, post]));
   const importedByHelperNumber = new Map(parsed.people.map((person) => [person.helperNumber, person]));
   const participationValues = parsed.participations.flatMap((imported) => {
@@ -515,12 +948,12 @@ export const commitMarshalImport = async (input: z.infer<typeof importInputSchem
     if (!personId) return [];
     return [{ eventId: input.eventId, personId, contactOwner: imported.contactOwner, wish: imported.wish, note: imported.note, shirtSizeSnapshot: importedByHelperNumber.get(imported.helperNumber)?.shirtSize }];
   });
-  if (participationValues.length) await db.insert(marshalEventParticipation).values(participationValues).onConflictDoUpdate({
+  if (participationValues.length) await tx.insert(marshalEventParticipation).values(participationValues).onConflictDoUpdate({
     target: [marshalEventParticipation.eventId, marshalEventParticipation.personId], set: {
       contactOwner: sql`excluded.contact_owner`, wish: sql`excluded.wish`, note: sql`excluded.note`, shirtSizeSnapshot: sql`excluded.shirt_size_snapshot`, updatedAt: new Date()
     }
   });
-  const importedParticipations = await db.select().from(marshalEventParticipation).where(eq(marshalEventParticipation.eventId, input.eventId));
+  const importedParticipations = await tx.select().from(marshalEventParticipation).where(eq(marshalEventParticipation.eventId, input.eventId));
   const participationByPersonId = new Map(importedParticipations.map((row) => [row.personId, row]));
   const assignmentValues = parsed.participations.flatMap((imported) => {
     const personId = personIds.get(imported.helperNumber);
@@ -536,32 +969,32 @@ export const commitMarshalImport = async (input: z.infer<typeof importInputSchem
       return [{ participationId: participation.id, dayId: day.id, commitmentStatus: assignment.commitmentStatus, role: assignment.role, sectionId: section?.id, postId: post?.id, functionCode: assignment.functionCode }];
     });
   });
-  if (assignmentValues.length) await db.insert(marshalDayAssignment).values(assignmentValues).onConflictDoUpdate({
+  if (assignmentValues.length) await tx.insert(marshalDayAssignment).values(assignmentValues).onConflictDoUpdate({
     target: [marshalDayAssignment.participationId, marshalDayAssignment.dayId], set: {
       commitmentStatus: sql`excluded.commitment_status`, role: sql`excluded.role`, sectionId: sql`excluded.section_id`,
       postId: sql`excluded.post_id`, functionCode: sql`excluded.function_code`, updatedAt: new Date()
     }
   });
-  const historicalEvents = await db.select({ id: event.id }).from(event)
+  const historicalEvents = await tx.select({ id: event.id }).from(event)
     .where(and(sql`extract(year from ${event.startsAt}) = 2024`, ilike(event.name, '%Dreieck%'))).orderBy(sql`${event.startsAt} desc`).limit(2);
   if (historicalEvents.length === 1) {
     const historicalEventId = historicalEvents[0].id;
-    await ensureMarshalEventStructure(historicalEventId);
+    await ensureMarshalEventStructureWithDb(tx, historicalEventId);
     const historicalPersonIds = Array.from(new Set(parsed.historicalAssignments.map((item) => names.get(item.name)).filter((value): value is string => Boolean(value))));
     if (historicalPersonIds.length) {
       const historicalParticipationValues = historicalPersonIds.map((personId) => ({
         eventId: historicalEventId, personId,
         shirtSizeSnapshot: parsed.historicalAssignments.find((item) => names.get(item.name) === personId)?.shirtSize ?? null
       }));
-      await db.insert(marshalEventParticipation).values(historicalParticipationValues).onConflictDoUpdate({
+      await tx.insert(marshalEventParticipation).values(historicalParticipationValues).onConflictDoUpdate({
         target: [marshalEventParticipation.eventId, marshalEventParticipation.personId],
         set: { shirtSizeSnapshot: sql`coalesce(excluded.shirt_size_snapshot, ${marshalEventParticipation.shirtSizeSnapshot})`, updatedAt: new Date() }
       });
       const [historicalDays, historicalSections, historicalPosts, historicalParticipations] = await Promise.all([
-        db.select().from(marshalEventDay).where(eq(marshalEventDay.eventId, historicalEventId)),
-        db.select().from(marshalSection).where(eq(marshalSection.eventId, historicalEventId)),
-        db.select().from(marshalPost).where(eq(marshalPost.eventId, historicalEventId)),
-        db.select().from(marshalEventParticipation).where(eq(marshalEventParticipation.eventId, historicalEventId))
+        tx.select().from(marshalEventDay).where(eq(marshalEventDay.eventId, historicalEventId)),
+        tx.select().from(marshalSection).where(eq(marshalSection.eventId, historicalEventId)),
+        tx.select().from(marshalPost).where(eq(marshalPost.eventId, historicalEventId)),
+        tx.select().from(marshalEventParticipation).where(eq(marshalEventParticipation.eventId, historicalEventId))
       ]);
       const historicalDayByKey = new Map(historicalDays.map((item) => [item.dayKey, item]));
       const historicalSectionByCode = new Map(historicalSections.map((item) => [item.code, item]));
@@ -579,27 +1012,28 @@ export const commitMarshalImport = async (input: z.infer<typeof importInputSchem
         return [{ participationId: participation.id, dayId: day.id, commitmentStatus: 'accepted' as const, role: parsedAssignment.role, sectionId: section?.id, postId: post?.id, functionCode: parsedAssignment.functionCode }];
       });
       const historicalUniqueValues = Array.from(new Map(historicalValues.map((item) => [`${item.participationId}:${item.dayId}`, item])).values());
-      if (historicalUniqueValues.length) await db.insert(marshalDayAssignment).values(historicalUniqueValues).onConflictDoUpdate({
+      if (historicalUniqueValues.length) await tx.insert(marshalDayAssignment).values(historicalUniqueValues).onConflictDoUpdate({
         target: [marshalDayAssignment.participationId, marshalDayAssignment.dayId],
         set: { commitmentStatus: sql`excluded.commitment_status`, role: sql`excluded.role`, sectionId: sql`excluded.section_id`, postId: sql`excluded.post_id`, functionCode: sql`excluded.function_code`, updatedAt: new Date() }
       });
     }
-  } else {
+  } else if (parsed.historicalAssignments.length) {
     parsed.conflicts.push({ sheet: 'Samstag/Sonntag 2024', row: 0, message: historicalEvents.length === 0 ? 'Kein Event für 2024 gefunden; historische Einsätze wurden nicht importiert' : 'Mehrere Events für 2024 gefunden; historische Einsätze wurden nicht eindeutig zugeordnet' });
   }
   for (const importedSession of parsed.trainings) {
-    const [session] = await db.insert(marshalTrainingSession).values({ eventId: input.eventId, sessionType: importedSession.type, title: importedSession.title, sessionDate: importedSession.date }).returning();
+    const [session] = await tx.insert(marshalTrainingSession).values({ eventId: input.eventId, sessionType: importedSession.type, title: importedSession.title, sessionDate: importedSession.date }).returning();
     const participantValues: Array<{ sessionId: string; personId: string; attendanceStatus: 'registered' }> = [];
     for (const attendee of importedSession.attendees) {
       const personId = attendee.helperNumber ? personIds.get(attendee.helperNumber) : attendee.name ? names.get(attendee.name) : undefined;
       if (personId) participantValues.push({ sessionId: session.id, personId, attendanceStatus: 'registered' });
     }
-    if (participantValues.length) await db.insert(marshalTrainingParticipant).values(participantValues).onConflictDoNothing();
+    if (participantValues.length) await tx.insert(marshalTrainingParticipant).values(participantValues).onConflictDoNothing();
   }
-  const summary = { people: parsed.people.length, eventParticipations: parsed.participations.length, historicalAssignments: parsed.historicalAssignments.length, trainings: parsed.trainings.length, conflicts: parsed.conflicts.length };
-  const [importRun] = await db.insert(marshalImportRun).values({ eventId: input.eventId, workbookSha256: sha256, filename: input.filename, status: 'completed', summary, conflicts: parsed.conflicts, createdBy: actorUserId, completedAt: new Date() }).returning();
-  await writeAuditLog(db as never, { eventId: input.eventId, actorUserId, action: 'marshal_import_completed', entityType: 'marshal_import_run', entityId: importRun.id });
+  const summary = { people: parsed.people.length, lauferPeople: parsed.lauferPeople.length, eventParticipations: parsed.participations.length, historicalAssignments: parsed.historicalAssignments.length, trainings: parsed.trainings.length, conflicts: parsed.conflicts.length };
+  const [importRun] = await tx.insert(marshalImportRun).values({ eventId: input.eventId, workbookSha256: sha256, filename: input.filename, status: 'completed', summary, conflicts: parsed.conflicts, createdBy: actorUserId, completedAt: new Date() }).returning();
+  await writeAuditLog(tx as never, { eventId: input.eventId, actorUserId, action: 'marshal_import_completed', entityType: 'marshal_import_run', entityId: importRun.id });
   return { importRun, alreadyImported: false };
+  });
 };
 
 const renderPdf = (title: string, headers: string[], rows: string[][], widths: number[]) => new Promise<Buffer>((resolve, reject) => {
@@ -635,7 +1069,7 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
   const filters = [eq(marshalEventParticipation.eventId, input.eventId), eq(marshalDayAssignment.dayId, input.dayId), eq(marshalDayAssignment.commitmentStatus, 'accepted')];
   if (input.sectionId) filters.push(eq(marshalDayAssignment.sectionId, input.sectionId));
   const rows = await db.select({ firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, zip: marshalPerson.zip, city: marshalPerson.city, shirt: marshalEventParticipation.shirtSizeSnapshot, post: marshalPost.code, functionCode: marshalDayAssignment.functionCode })
-    .from(marshalDayAssignment).innerJoin(marshalEventParticipation, eq(marshalDayAssignment.participationId, marshalEventParticipation.id)).innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id)).leftJoin(marshalPost, eq(marshalDayAssignment.postId, marshalPost.id)).where(and(...filters)).orderBy(asc(marshalPerson.lastName));
+    .from(marshalDayAssignment).innerJoin(marshalEventParticipation, eq(marshalDayAssignment.participationId, marshalEventParticipation.id)).innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id)).leftJoin(marshalPost, eq(marshalDayAssignment.postId, marshalPost.id)).where(and(...filters)).orderBy(asc(marshalPost.sortOrder), asc(marshalPerson.lastName));
   if (input.type === 'section') return { filename: 'Abschnittsliste.pdf', buffer: await renderPdf('Abschnittsliste', ['Vorname', 'Nachname', 'Posten/Funktion', 'Änderung'], rows.map((row) => [row.firstName, row.lastName, row.post ?? row.functionCode ?? '', '']), [140, 160, 150, 290]) };
   return { filename: 'Anwesenheitsliste.pdf', buffer: await renderPdf('Anwesenheitsliste', ['Vorname', 'Nachname', 'PLZ', 'Wohnort', 'Shirt', 'Posten', 'Unterschrift'], rows.map((row) => [row.firstName, row.lastName, row.zip ?? '', row.city ?? '', row.shirt ?? '', row.post ?? row.functionCode ?? '', '']), [95, 115, 55, 115, 60, 85, 215]) };
 };

@@ -1045,7 +1045,28 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/marshals/persons/{id}',
-      methods: [apigwv2.HttpMethod.PATCH],
+      methods: [apigwv2.HttpMethod.PATCH, apigwv2.HttpMethod.DELETE],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/area-assignments/{personId}',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/shift-assignments/{personId}',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/events/{eventId}/reset',
+      methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
     });
@@ -1059,6 +1080,13 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/marshals/config',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/marshals/config/areas',
       methods: [apigwv2.HttpMethod.PUT],
       integration,
       authorizer: jwtAuthorizer

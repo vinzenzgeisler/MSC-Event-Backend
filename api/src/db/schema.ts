@@ -908,6 +908,7 @@ export const marshalPerson = pgTable(
     activityAreas: jsonb('activity_areas').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
     note: text('note'),
     isActive: boolean('is_active').notNull().default(true),
+    noDeployment: boolean('no_deployment').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
@@ -1093,6 +1094,80 @@ export const marshalImportRun = pgTable(
       .on(table.eventId, table.workbookSha256)
       .where(sql`${table.status} = 'completed'`),
     statusCheck: check('marshal_import_run_status_check', sql`${table.status} in ('preview', 'completed', 'failed')`)
+  })
+);
+
+export const marshalHelperArea = pgTable(
+  'marshal_helper_area',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    code: text('code').notNull(),
+    name: text('name').notNull(),
+    areaType: text('area_type').notNull(),
+    dayScope: text('day_scope'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    responsibleLabel: text('responsible_label'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    eventCodeUnique: uniqueIndex('marshal_helper_area_event_code_unique').on(table.eventId, table.code),
+    eventSortIndex: index('marshal_helper_area_event_sort_idx').on(table.eventId, table.sortOrder),
+    areaTypeCheck: check('marshal_helper_area_type_check', sql`${table.areaType} in ('setup', 'general')`),
+    dayScopeCheck: check('marshal_helper_area_day_scope_check', sql`${table.dayScope} is null or ${table.dayScope} in ('saturday', 'sunday')`)
+  })
+);
+
+export const marshalAreaShift = pgTable(
+  'marshal_area_shift',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    areaId: uuid('area_id').notNull().references(() => marshalHelperArea.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    shiftDate: date('shift_date').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    areaDateUnique: uniqueIndex('marshal_area_shift_area_date_unique').on(table.areaId, table.shiftDate),
+    areaSortIndex: index('marshal_area_shift_area_sort_idx').on(table.areaId, table.sortOrder)
+  })
+);
+
+export const marshalShiftAssignment = pgTable(
+  'marshal_shift_assignment',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    participationId: uuid('participation_id').notNull().references(() => marshalEventParticipation.id, { onDelete: 'cascade' }),
+    shiftId: uuid('shift_id').notNull().references(() => marshalAreaShift.id, { onDelete: 'cascade' }),
+    commitmentStatus: text('commitment_status').notNull().default('not_asked'),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    participationShiftUnique: uniqueIndex('marshal_shift_assignment_unique').on(table.participationId, table.shiftId),
+    shiftIndex: index('marshal_shift_assignment_shift_idx').on(table.shiftId),
+    statusCheck: check('marshal_shift_assignment_status_check', sql`${table.commitmentStatus} in ('not_asked', 'pending', 'accepted', 'declined', 'tentative')`)
+  })
+);
+
+export const marshalAreaAssignment = pgTable(
+  'marshal_area_assignment',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    participationId: uuid('participation_id').notNull().references(() => marshalEventParticipation.id, { onDelete: 'cascade' }),
+    areaId: uuid('area_id').notNull().references(() => marshalHelperArea.id, { onDelete: 'cascade' }),
+    commitmentStatus: text('commitment_status').notNull().default('not_asked'),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    participationAreaUnique: uniqueIndex('marshal_area_assignment_unique').on(table.participationId, table.areaId),
+    areaIndex: index('marshal_area_assignment_area_idx').on(table.areaId),
+    statusCheck: check('marshal_area_assignment_status_check', sql`${table.commitmentStatus} in ('not_asked', 'pending', 'accepted', 'declined', 'tentative')`)
   })
 );
 

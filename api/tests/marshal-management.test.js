@@ -221,6 +221,10 @@ async function run() {
   assert.match(handlerSource, /DELETE'[\s\S]*marshalAreaAssignmentMatch[\s\S]*validateMarshalAreaAssignmentDeleteInput[\s\S]*deleteMarshalAreaAssignment/);
   assert.match(handlerSource, /MARSHAL_DAY_SCOPE_INVALID[\s\S]*Day does not belong to event/);
   assert.match(handlerSource, /MARSHAL_SECTION_SCOPE_INVALID[\s\S]*Section does not belong to event/);
+  assert.match(handlerSource, /'attendance', 'section', 'training', 'area'/);
+  assert.match(handlerSource, /areaId: event\.queryStringParameters\?\.areaId[\s\S]*shiftId: event\.queryStringParameters\?\.shiftId/);
+  assert.match(handlerSource, /MARSHAL_AREA_SCOPE_INVALID[\s\S]*Area does not belong to event/);
+  assert.match(handlerSource, /MARSHAL_SHIFT_SCOPE_INVALID[\s\S]*Shift does not belong to area and event/);
 
   assert.match(routeSource, /export const upsertMarshalAssignment[\s\S]*db\.transaction\(async \(tx\)/);
   assert.match(routeSource, /marshalEventDay\.eventId, input\.eventId/);
@@ -242,6 +246,12 @@ async function run() {
   assert.match(routeSource, /MARSHAL_DAY_SCOPE_INVALID/);
   assert.match(routeSource, /MARSHAL_SECTION_SCOPE_INVALID/);
   assert.match(routeSource, /eq\(marshalPerson\.noDeployment, false\)/);
+  assert.match(routeSource, /input\.type === 'area'[\s\S]*marshalHelperArea\.id, input\.areaId[\s\S]*marshalHelperArea\.eventId, input\.eventId/);
+  assert.match(routeSource, /marshalAreaShift\.id, input\.shiftId[\s\S]*marshalAreaShift\.areaId, area\.id/);
+  assert.match(routeSource, /input\.shiftId[\s\S]*area\.areaType !== 'setup'[\s\S]*MARSHAL_SHIFT_SCOPE_INVALID/);
+  assert.match(routeSource, /marshalShiftAssignment\.shiftId, shift\.id[\s\S]*marshalPerson\.noDeployment, false/);
+  assert.match(routeSource, /marshalAreaAssignment\.areaId, area\.id[\s\S]*marshalPerson\.noDeployment, false/);
+  assert.doesNotMatch(routeSource.match(/if \(input\.type === 'area'\)[\s\S]*?if \(!input\.dayId\)/)?.[0] ?? '', /phone|email|birthdate/i);
   assert.match(routeSource, /const orderBy = input\.type === 'section'\s*\? \[sql`\$\{marshalPost\.sortOrder\} asc nulls first`, asc\(marshalPerson\.lastName\), asc\(marshalPerson\.firstName\)\]\s*: \[asc\(marshalPerson\.lastName\), asc\(marshalPerson\.firstName\)\]/);
   assert.match(routeSource, /\.where\(and\(\.\.\.filters\)\)\.orderBy\(\.\.\.orderBy\)/);
   assert.match(routeSource, /areas, areaShifts: areaShifts\.map[\s\S]*areaAssignments, shiftAssignments/);

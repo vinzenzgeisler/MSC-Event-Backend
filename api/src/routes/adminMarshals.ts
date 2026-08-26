@@ -1154,7 +1154,9 @@ const renderPdf = (title: string, headers: string[], rows: string[][], widths: n
   doc.end();
 });
 
-export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: string; sectionId?: string; trainingId?: string; type: 'attendance' | 'section' | 'training' }) => {
+const printStatusLabel = (status: string) => ({ not_asked: 'Nicht angefragt', pending: 'Offen', accepted: 'Zugesagt', declined: 'Abgesagt', tentative: 'Vielleicht' }[status] ?? status);
+
+export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: string; sectionId?: string; trainingId?: string; areaId?: string; shiftId?: string; type: 'attendance' | 'section' | 'training' | 'area' }) => {
   const db = await getDb();
   if (input.type === 'training' && input.trainingId) {
     const [session] = await db.select().from(marshalTrainingSession).where(and(eq(marshalTrainingSession.id, input.trainingId), eq(marshalTrainingSession.eventId, input.eventId))).limit(1);
@@ -1162,6 +1164,34 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
     const rows = await db.select({ firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, zip: marshalPerson.zip, city: marshalPerson.city, status: marshalTrainingParticipant.attendanceStatus })
       .from(marshalTrainingParticipant).innerJoin(marshalPerson, eq(marshalTrainingParticipant.personId, marshalPerson.id)).where(eq(marshalTrainingParticipant.sessionId, session.id)).orderBy(asc(marshalPerson.lastName));
     return { filename: `Teilnehmerliste-${session.sessionDate}.pdf`, buffer: await renderPdf(session.title, ['Vorname', 'Nachname', 'PLZ', 'Wohnort', 'Status', 'Unterschrift'], rows.map((row) => [row.firstName, row.lastName, row.zip ?? '', row.city ?? '', row.status, '']), [100, 120, 70, 130, 90, 250]) };
+  }
+  if (input.type === 'area') {
+    if (!input.areaId) throw new Error('MARSHAL_AREA_REQUIRED');
+    const [area] = await db.select().from(marshalHelperArea).where(and(eq(marshalHelperArea.id, input.areaId), eq(marshalHelperArea.eventId, input.eventId))).limit(1);
+    if (!area) throw new Error('MARSHAL_AREA_SCOPE_INVALID');
+    let title = area.name;
+    let rows: Array<{ firstName: string; lastName: string; helperNumber: number; status: string; note: string | null }>;
+    if (input.shiftId) {
+      if (area.areaType !== 'setup') throw new Error('MARSHAL_SHIFT_SCOPE_INVALID');
+      const [shift] = await db.select().from(marshalAreaShift).where(and(eq(marshalAreaShift.id, input.shiftId), eq(marshalAreaShift.eventId, input.eventId), eq(marshalAreaShift.areaId, area.id))).limit(1);
+      if (!shift) throw new Error('MARSHAL_SHIFT_SCOPE_INVALID');
+      title = `${area.name} – ${shift.label}`;
+      rows = await db.select({ firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, helperNumber: marshalPerson.helperNumber, status: marshalShiftAssignment.commitmentStatus, note: marshalShiftAssignment.note })
+        .from(marshalShiftAssignment)
+        .innerJoin(marshalEventParticipation, eq(marshalShiftAssignment.participationId, marshalEventParticipation.id))
+        .innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id))
+        .where(and(eq(marshalShiftAssignment.shiftId, shift.id), eq(marshalEventParticipation.eventId, input.eventId), eq(marshalPerson.noDeployment, false)))
+        .orderBy(asc(marshalPerson.lastName), asc(marshalPerson.firstName));
+    } else {
+      rows = await db.select({ firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, helperNumber: marshalPerson.helperNumber, status: marshalAreaAssignment.commitmentStatus, note: marshalAreaAssignment.note })
+        .from(marshalAreaAssignment)
+        .innerJoin(marshalEventParticipation, eq(marshalAreaAssignment.participationId, marshalEventParticipation.id))
+        .innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id))
+        .where(and(eq(marshalAreaAssignment.areaId, area.id), eq(marshalEventParticipation.eventId, input.eventId), eq(marshalPerson.noDeployment, false)))
+        .orderBy(asc(marshalPerson.lastName), asc(marshalPerson.firstName));
+    }
+    const safeName = title.normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'Bereich';
+    return { filename: `Helferliste-${safeName}.pdf`, buffer: await renderPdf(title, ['Nr.', 'Vorname', 'Nachname', 'Status', 'Bemerkung', 'Anwesend'], rows.map((row) => [String(row.helperNumber), row.firstName, row.lastName, printStatusLabel(row.status), row.note ?? '', '']), [60, 120, 140, 90, 240, 90]) };
   }
   if (!input.dayId) throw new Error('MARSHAL_DAY_REQUIRED');
   const [day] = await db.select({ id: marshalEventDay.id }).from(marshalEventDay)

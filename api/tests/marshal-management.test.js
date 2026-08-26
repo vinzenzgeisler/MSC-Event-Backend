@@ -3,10 +3,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ExcelJS = require('exceljs');
 const {
+  findAmbiguousMarshalNameMatches,
   indexMarshalPeopleByNormalizedName,
+  indexMarshalPeopleByNormalizedNameCandidates,
   parseMarshalAssignmentCell,
   parseMarshalWorkbookBuffer,
   resolveMarshalEmergencyTargetStaff,
+  resolveMarshalAssignmentSectionId,
+  validateMarshalAreaAssignmentDeleteInput,
   validateMarshalAreaAssignmentInput,
   validateMarshalAreaConfigInput,
   validateMarshalAssignmentInput,
@@ -35,7 +39,18 @@ async function run() {
     { id: 'higher', helperNumber: 20, firstName: ' Lina ', lastName: 'Läufer' },
     { id: 'lower', helperNumber: 10, firstName: 'Lina', lastName: 'Läufer' }
   ]);
-  assert.equal(normalizedPeople.get('lina läufer'), 'lower', 'duplicate normalized names resolve deterministically');
+  assert.equal(normalizedPeople.has('lina läufer'), false, 'ambiguous normalized names must not auto-match');
+  const normalizedCandidates = indexMarshalPeopleByNormalizedNameCandidates([
+    { id: 'higher', helperNumber: 20, firstName: ' Lina ', lastName: 'Läufer' },
+    { id: 'lower', helperNumber: 10, firstName: 'Lina', lastName: 'Läufer' }
+  ]);
+  assert.deepEqual(normalizedCandidates.get('lina läufer').map((person) => person.id), ['lower', 'higher']);
+  const ambiguousMatches = findAmbiguousMarshalNameMatches(
+    [{ firstName: 'Lina', lastName: 'Läufer' }],
+    normalizedCandidates
+  );
+  assert.equal(ambiguousMatches.length, 1);
+  assert.deepEqual(ambiguousMatches[0].matches.map((person) => person.helperNumber), [10, 20]);
 
   assert.deepEqual(validateMarshalPersonPatch({ noDeployment: true }), { noDeployment: true });
   assert.throws(() => validateMarshalPersonPatch({ noDeployment: 'yes' }));
@@ -47,6 +62,8 @@ async function run() {
   const areaAssignment = { eventId, areaId, commitmentStatus: 'accepted', note: 'Samstag' };
   const shiftAssignment = { eventId, shiftId, commitmentStatus: 'tentative' };
   assert.deepEqual(validateMarshalAreaAssignmentInput(areaAssignment), areaAssignment);
+  assert.deepEqual(validateMarshalAreaAssignmentDeleteInput({ eventId, areaId }), { eventId, areaId });
+  assert.throws(() => validateMarshalAreaAssignmentDeleteInput({ eventId, areaId: 'invalid' }));
   assert.deepEqual(validateMarshalShiftAssignmentInput(shiftAssignment), shiftAssignment);
   assert.throws(() => validateMarshalAreaAssignmentInput({ ...areaAssignment, eventId: 'invalid' }));
   assert.throws(() => validateMarshalShiftAssignmentInput({ ...shiftAssignment, commitmentStatus: 'unknown' }));
@@ -61,6 +78,9 @@ async function run() {
     eventId,
     days: [{ dayId, commitmentStatus: 'accepted' }, { dayId, commitmentStatus: 'declined' }]
   }), /Day assignments must be unique/);
+  assert.equal(resolveMarshalAssignmentSectionId(undefined, areaId), areaId, 'post section is inferred when omitted');
+  assert.equal(resolveMarshalAssignmentSectionId(areaId, areaId), areaId);
+  assert.throws(() => resolveMarshalAssignmentSectionId(areaId, shiftId), /MARSHAL_ASSIGNMENT_SCOPE_INVALID/);
 
   assert.deepEqual(parseMarshalAssignmentCell(' 5/2'), {
     commitmentStatus: 'accepted', role: 'marshal', code: '5/2', functionCode: null
@@ -189,7 +209,7 @@ async function run() {
   ]) {
     assert.ok(infraSource.includes(`path: '${route}'`), `API Gateway route missing: ${route}`);
   }
-  assert.match(infraSource, /area-assignments\/\{personId\}'[\s\S]*methods: \[apigwv2\.HttpMethod\.PUT\]/);
+  assert.match(infraSource, /area-assignments\/\{personId\}'[\s\S]*methods: \[apigwv2\.HttpMethod\.PUT, apigwv2\.HttpMethod\.DELETE\]/);
   assert.match(infraSource, /shift-assignments\/\{personId\}'[\s\S]*methods: \[apigwv2\.HttpMethod\.PUT\]/);
   assert.match(infraSource, /events\/\{eventId\}\/reset'[\s\S]*methods: \[apigwv2\.HttpMethod\.POST\]/);
   assert.match(infraSource, /config\/areas'[\s\S]*methods: \[apigwv2\.HttpMethod\.PUT\]/);
@@ -198,6 +218,9 @@ async function run() {
   assert.match(handlerSource, /marshalEventResetMatch[\s\S]*validateMarshalResetInput\(parseJsonBody\(event\)\)/);
   assert.match(handlerSource, /MARSHAL_AREA_SCOPE_INVALID/);
   assert.match(handlerSource, /MARSHAL_SHIFT_SCOPE_INVALID/);
+  assert.match(handlerSource, /DELETE'[\s\S]*marshalAreaAssignmentMatch[\s\S]*validateMarshalAreaAssignmentDeleteInput[\s\S]*deleteMarshalAreaAssignment/);
+  assert.match(handlerSource, /MARSHAL_DAY_SCOPE_INVALID[\s\S]*Day does not belong to event/);
+  assert.match(handlerSource, /MARSHAL_SECTION_SCOPE_INVALID[\s\S]*Section does not belong to event/);
 
   assert.match(routeSource, /export const upsertMarshalAssignment[\s\S]*db\.transaction\(async \(tx\)/);
   assert.match(routeSource, /marshalEventDay\.eventId, input\.eventId/);
@@ -205,12 +228,20 @@ async function run() {
   assert.match(routeSource, /marshalAreaShift\.id, input\.shiftId[\s\S]*marshalHelperArea\.eventId, input\.eventId[\s\S]*marshalHelperArea\.areaType, 'setup'/);
   assert.match(routeSource, /export const resetMarshalEventAssignments[\s\S]*marshalDayAssignment[\s\S]*marshalAreaAssignment[\s\S]*marshalShiftAssignment/);
   assert.match(routeSource, /export const resetMarshalEventAssignments[\s\S]*commitmentStatus: 'not_asked',[\s\S]*role: null,[\s\S]*sectionId: null,[\s\S]*postId: null,[\s\S]*functionCode: null/);
+  assert.match(routeSource, /export const resetMarshalEventAssignments[\s\S]*tx\.delete\(marshalAreaAssignment\)[\s\S]*tx\.delete\(marshalShiftAssignment\)/);
+  assert.doesNotMatch(routeSource, /export const resetMarshalEventAssignments[\s\S]*tx\.update\(marshalAreaAssignment\)/);
+  assert.match(routeSource, /export const deleteMarshalAreaAssignment[\s\S]*marshalEventParticipation\.eventId, input\.eventId[\s\S]*marshalHelperArea\.eventId, input\.eventId[\s\S]*area\.areaType === 'setup'[\s\S]*tx\.delete\(marshalShiftAssignment\)/);
   assert.match(routeSource, /export const replaceMarshalAreaConfig[\s\S]*db\.transaction/);
   assert.match(routeSource, /omittedCustomAreaIds/);
   assert.match(routeSource, /omittedShiftIds/);
   assert.match(routeSource, /LOCK TABLE marshal_person IN SHARE ROW EXCLUSIVE MODE/);
   assert.match(routeSource, /const allPeople = await tx\.select\(\)\.from\(marshalPerson\)/);
-  assert.match(routeSource, /knownNamesNow = indexMarshalPeopleByNormalizedName\(allPeople\)/);
+  assert.match(routeSource, /knownNameCandidates = indexMarshalPeopleByNormalizedNameCandidates\(allPeople\)[\s\S]*appendAmbiguousLauferConflicts\(parsed, knownNameCandidates\)[\s\S]*if \(matches\.length > 1\) continue/);
+  assert.match(routeSource, /appendAmbiguousLauferConflicts\(parsed, existingNameCandidates\)[\s\S]*ambiguousLauferPeople/);
+  assert.match(routeSource, /normalizedDays = input\.days\.map[\s\S]*resolveMarshalAssignmentSectionId\(day\.sectionId, day\.postId/);
+  assert.match(routeSource, /MARSHAL_DAY_SCOPE_INVALID/);
+  assert.match(routeSource, /MARSHAL_SECTION_SCOPE_INVALID/);
+  assert.match(routeSource, /eq\(marshalPerson\.noDeployment, false\)/);
   assert.match(routeSource, /const orderBy = input\.type === 'section'\s*\? \[sql`\$\{marshalPost\.sortOrder\} asc nulls first`, asc\(marshalPerson\.lastName\), asc\(marshalPerson\.firstName\)\]\s*: \[asc\(marshalPerson\.lastName\), asc\(marshalPerson\.firstName\)\]/);
   assert.match(routeSource, /\.where\(and\(\.\.\.filters\)\)\.orderBy\(\.\.\.orderBy\)/);
   assert.match(routeSource, /areas, areaShifts: areaShifts\.map[\s\S]*areaAssignments, shiftAssignments/);
@@ -226,6 +257,16 @@ async function run() {
   assert.match(migrationSource, /marshal_area_shift_area_sort_idx/);
   assert.match(migrationSource, /marshal_shift_assignment_shift_idx/);
   assert.match(migrationSource, /marshal_area_assignment_area_idx/);
+  for (const constraint of [
+    'marshal_area_shift_area_event_fk',
+    'marshal_shift_assignment_participation_event_fk',
+    'marshal_shift_assignment_shift_event_fk',
+    'marshal_area_assignment_participation_event_fk',
+    'marshal_area_assignment_area_event_fk'
+  ]) {
+    assert.ok(migrationSource.includes(constraint), `Migration constraint missing ${constraint}`);
+    assert.ok(schemaSource.includes(constraint), `Drizzle constraint missing ${constraint}`);
+  }
 
   console.log('marshal management tests passed');
 }

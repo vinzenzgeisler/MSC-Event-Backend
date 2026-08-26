@@ -138,6 +138,7 @@ import {
   createMarshalPerson,
   createMarshalPrintPdf,
   createMarshalTraining,
+  deleteMarshalAreaAssignment,
   deleteMarshalPerson,
   getMarshalWorkspace,
   listMarshalEvents,
@@ -151,6 +152,7 @@ import {
   upsertMarshalShiftAssignment,
   upsertMarshalTrainingParticipant,
   validateMarshalAreaAssignmentInput,
+  validateMarshalAreaAssignmentDeleteInput,
   validateMarshalAreaConfigInput,
   validateMarshalAssignmentInput,
   validateMarshalConfigInput,
@@ -1152,6 +1154,25 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  if (method === 'DELETE' && marshalAreaAssignmentMatch) {
+    const auth = getAuthContext(event);
+    if (!auth) return errorJson(401, 'Unauthorized');
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      const input = validateMarshalAreaAssignmentDeleteInput({
+        eventId: event.queryStringParameters?.eventId,
+        areaId: event.queryStringParameters?.areaId
+      });
+      const result = await deleteMarshalAreaAssignment(marshalAreaAssignmentMatch[1], input, auth.sub);
+      if (!result) return errorJson(404, 'Participation not found');
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (error instanceof Error && error.message === 'MARSHAL_AREA_SCOPE_INVALID') return errorJson(400, 'Area does not belong to event');
+      return errorJson(500, 'Delete area assignment failed');
+    }
+  }
+
   const marshalShiftAssignmentMatch = path.match(/^\/admin\/marshals\/shift-assignments\/([^/]+)$/);
   if (method === 'PUT' && marshalShiftAssignmentMatch) {
     const auth = getAuthContext(event);
@@ -1291,6 +1312,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return { statusCode: 200, headers: { 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="${result.filename}"`, 'cache-control': 'no-store' }, isBase64Encoded: true, body: result.buffer.toString('base64') };
     } catch (error) {
       if (error instanceof Error && error.message === 'MARSHAL_DAY_REQUIRED') return errorJson(400, 'dayId is required');
+      if (error instanceof Error && error.message === 'MARSHAL_DAY_SCOPE_INVALID') return errorJson(400, 'Day does not belong to event');
+      if (error instanceof Error && error.message === 'MARSHAL_SECTION_SCOPE_INVALID') return errorJson(400, 'Section does not belong to event');
       return errorJson(500, 'Create marshal print list failed');
     }
   }

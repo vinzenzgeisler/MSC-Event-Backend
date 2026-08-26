@@ -1052,7 +1052,7 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/marshals/area-assignments/{personId}',
-      methods: [apigwv2.HttpMethod.PUT],
+      methods: [apigwv2.HttpMethod.PUT, apigwv2.HttpMethod.DELETE],
       integration,
       authorizer: jwtAuthorizer
     });

@@ -1305,15 +1305,18 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     if (!hasPermission(auth, 'marshals.export')) return errorJson(403, 'Forbidden');
     const eventId = event.queryStringParameters?.eventId;
     const type = event.queryStringParameters?.type;
-    if (!eventId || !type || !['attendance', 'section', 'training'].includes(type)) return errorJson(400, 'eventId and valid type are required');
+    if (!eventId || !type || !['attendance', 'section', 'training', 'area'].includes(type)) return errorJson(400, 'eventId and valid type are required');
     try {
-      const result = await createMarshalPrintPdf({ eventId, type: type as 'attendance' | 'section' | 'training', dayId: event.queryStringParameters?.dayId, sectionId: event.queryStringParameters?.sectionId, trainingId: event.queryStringParameters?.trainingId });
+      const result = await createMarshalPrintPdf({ eventId, type: type as 'attendance' | 'section' | 'training' | 'area', dayId: event.queryStringParameters?.dayId, sectionId: event.queryStringParameters?.sectionId, trainingId: event.queryStringParameters?.trainingId, areaId: event.queryStringParameters?.areaId, shiftId: event.queryStringParameters?.shiftId });
       if (!result) return errorJson(404, 'Print list not found');
       return { statusCode: 200, headers: { 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="${result.filename}"`, 'cache-control': 'no-store' }, isBase64Encoded: true, body: result.buffer.toString('base64') };
     } catch (error) {
       if (error instanceof Error && error.message === 'MARSHAL_DAY_REQUIRED') return errorJson(400, 'dayId is required');
       if (error instanceof Error && error.message === 'MARSHAL_DAY_SCOPE_INVALID') return errorJson(400, 'Day does not belong to event');
       if (error instanceof Error && error.message === 'MARSHAL_SECTION_SCOPE_INVALID') return errorJson(400, 'Section does not belong to event');
+      if (error instanceof Error && error.message === 'MARSHAL_AREA_REQUIRED') return errorJson(400, 'areaId is required');
+      if (error instanceof Error && error.message === 'MARSHAL_AREA_SCOPE_INVALID') return errorJson(400, 'Area does not belong to event');
+      if (error instanceof Error && error.message === 'MARSHAL_SHIFT_SCOPE_INVALID') return errorJson(400, 'Shift does not belong to area and event');
       return errorJson(500, 'Create marshal print list failed');
     }
   }

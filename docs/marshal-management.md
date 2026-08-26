@@ -7,7 +7,7 @@ Das Admin-Modul verwaltet Helferstammdaten unabhängig von Nennungs-Personen sow
 - Rolle `marshal_manager`
 - `marshals.read`: Arbeitsbereich lesen
 - `marshals.write`: Stammdaten, Einsätze, Konfiguration, Termine und Excel-Import bearbeiten
-- `marshals.export`: Anwesenheits-, Abschnitts- und Teilnehmerlisten erzeugen
+- `marshals.export`: Anwesenheits-, Abschnitts-, Bereichs- und Teilnehmerlisten erzeugen
 - Administratoren besitzen alle drei Rechte.
 
 ## Struktur
@@ -52,6 +52,8 @@ Zusammenführung erfolgt über die Helfernummer. Die Arbeitsmappe vom 12. Septem
 Personenbezogene Importdaten werden nicht im Git-Repository gespeichert. Die Originaldatei wird nach dem Backend-Deployment über den geschützten Admin-Endpunkt eingespielt.
 
 ## Drucklisten
+
+`GET /admin/marshals/print` unterstützt neben `attendance`, `section` und `training` auch `type=area`. Dafür ist `areaId` erforderlich; `shiftId` grenzt eine Aufbau-Liste optional auf eine konfigurierte Schicht ein. Bereich, Schicht und Veranstaltung werden serverseitig gemeinsam validiert. Bereichslisten enthalten Helfernummer, Name, Zusagestatus, Einsatzbemerkung und ein Anwesenheitsfeld, jedoch keine Telefon-, E-Mail- oder Geburtsdaten.
 
 PDFKit erzeugt A4-Querformat ohne Telefonnummern, E-Mail-Adressen oder Geburtsdaten:
 

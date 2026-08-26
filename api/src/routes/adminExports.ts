@@ -7,6 +7,14 @@ import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { entry, event as eventTable, eventClass, exportJob, invoice, person, vehicle } from '../db/schema';
 import { getPresignedDownloadUrl, uploadFile } from '../docs/storage';
+import {
+  getClassHeaders,
+  getClassRowValues,
+  getOverallRowValues,
+  isClassSeven,
+  OVERALL_HEADERS,
+  ProgrammheftRow
+} from '../domain/programmheftExport';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
 const createExportSchema = z.object({
@@ -254,35 +262,17 @@ const TITLE_FONT = 'FFFFFFFF';
 const HEADER_BG = 'FFD9E1F2';
 const ZEBRA_BG  = 'FFF2F2F2';
 
-type ProgrammheftRow = {
-  startNumber: string | null;
-  className: string;
-  classAllowsCodriver: boolean;
-  driverFirstName: string;
-  driverLastName: string;
-  driverCity: string | null;
-  driverCountry: string | null;
-  codriverFirstName: string | null;
-  codriverLastName: string | null;
-  vehicleMake: string | null;
-  vehicleModel: string | null;
-  vehicleYear: number | null;
-  vehicleDisplacement: number | null;
-};
-
 const buildClassSheet = (
   ws: ExcelJS.Worksheet,
   eventName: string,
   className: string,
-  classRows: ProgrammheftRow[],
-  withCodriver: boolean
+  classRows: ProgrammheftRow[]
 ) => {
-  const cols = withCodriver
-    ? ['Start-Nr.', 'Vorname', 'Nachname', 'Beifahrer Vorname', 'Beifahrer Nachname', 'Ort', 'Fahrzeug', 'Modell', 'Baujahr', 'Hubraum', 'Land']
-    : ['Start-Nr.', 'Vorname', 'Nachname', 'Ort', 'Fahrzeug', 'Modell', 'Baujahr', 'Hubraum', 'Land'];
+  const withCodriver = isClassSeven(className);
+  const cols = getClassHeaders(className);
   const colWidths = withCodriver
-    ? [10, 14, 16, 14, 16, 22, 16, 18, 10, 10, 8]
-    : [10, 14, 16, 22, 16, 18, 10, 10, 8];
+    ? [10, 14, 16, 14, 16, 10, 22, 16, 18, 10, 10, 8]
+    : [10, 14, 16, 10, 22, 16, 18, 10, 10, 8];
   const n = cols.length;
 
   // Row 1: Event title
@@ -317,37 +307,14 @@ const buildClassSheet = (
   // Data rows
   classRows.forEach((r, idx) => {
     const dataRow = ws.getRow(4 + idx);
-    const values: (string | number)[] = withCodriver
-      ? [
-          r.startNumber ?? '',
-          r.driverFirstName,
-          r.driverLastName,
-          r.codriverFirstName ?? '',
-          r.codriverLastName ?? '',
-          r.driverCity ?? '',
-          r.vehicleMake ?? '',
-          r.vehicleModel ?? '',
-          r.vehicleYear ?? '',
-          r.vehicleDisplacement ?? '',
-          r.driverCountry ?? ''
-        ]
-      : [
-          r.startNumber ?? '',
-          r.driverFirstName,
-          r.driverLastName,
-          r.driverCity ?? '',
-          r.vehicleMake ?? '',
-          r.vehicleModel ?? '',
-          r.vehicleYear ?? '',
-          r.vehicleDisplacement ?? '',
-          r.driverCountry ?? ''
-        ];
+    const values = getClassRowValues(r);
     values.forEach((v, i) => {
       dataRow.getCell(i + 1).value = v;
       if (idx % 2 === 1) {
         dataRow.getCell(i + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ZEBRA_BG } };
       }
     });
+    dataRow.getCell(withCodriver ? 6 : 4).numFmt = '@';
   });
 
   // Footer: starter count
@@ -398,9 +365,9 @@ export const createProgrammheftExport = async (
       .select({
         startNumber: entry.startNumberNorm,
         className: eventClass.name,
-        classAllowsCodriver: eventClass.allowsCodriver,
         driverFirstName: driverPerson.firstName,
         driverLastName: driverPerson.lastName,
+        driverZip: driverPerson.zip,
         driverCity: driverPerson.city,
         driverCountry: driverPerson.country,
         codriverFirstName: codriverPerson.firstName,
@@ -430,10 +397,10 @@ export const createProgrammheftExport = async (
       );
 
     // Group by class
-    const byClass = new Map<string, { allowsCodriver: boolean; rows: typeof rows }>();
+    const byClass = new Map<string, { rows: typeof rows }>();
     for (const row of rows) {
       if (!byClass.has(row.className)) {
-        byClass.set(row.className, { allowsCodriver: row.classAllowsCodriver, rows: [] });
+        byClass.set(row.className, { rows: [] });
       }
       byClass.get(row.className)!.rows.push(row);
     }
@@ -446,7 +413,7 @@ export const createProgrammheftExport = async (
     // Gesamtliste sheet
     const gesamtWs = workbook.addWorksheet('Gesamtliste');
     {
-      const allCols = ['Start-Nr.', 'Vorname', 'Nachname', 'Ort', 'Fahrzeug', 'Modell', 'Baujahr', 'Hubraum', 'Land', 'Klasse'];
+      const allCols = OVERALL_HEADERS;
       const n = allCols.length;
 
       gesamtWs.mergeCells(1, 1, 1, n);
@@ -468,35 +435,25 @@ export const createProgrammheftExport = async (
 
       rows.forEach((r, idx) => {
         const dr = gesamtWs.getRow(3 + idx);
-        const vals: (string | number)[] = [
-          r.startNumber ?? '',
-          r.driverFirstName,
-          r.driverLastName,
-          r.driverCity ?? '',
-          r.vehicleMake ?? '',
-          r.vehicleModel ?? '',
-          r.vehicleYear ?? '',
-          r.vehicleDisplacement ?? '',
-          r.driverCountry ?? '',
-          r.className
-        ];
+        const vals = getOverallRowValues(r);
         vals.forEach((v, i) => {
           dr.getCell(i + 1).value = v;
           if (idx % 2 === 1) {
             dr.getCell(i + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ZEBRA_BG } };
           }
         });
+        dr.getCell(4).numFmt = '@';
       });
 
-      [10, 14, 16, 22, 16, 18, 10, 10, 8, 40].forEach((w, i) => { gesamtWs.getColumn(i + 1).width = w; });
+      [12, 14, 16, 12, 22, 16, 18, 10, 10, 18, 40].forEach((w, i) => { gesamtWs.getColumn(i + 1).width = w; });
     }
 
     // Per-class sheets
-    for (const [className, { allowsCodriver, rows: classRows }] of byClass) {
+    for (const [className, { rows: classRows }] of byClass) {
       // Sheet names max 31 chars in Excel
       const sheetName = className.length > 31 ? className.slice(0, 31) : className;
       const ws = workbook.addWorksheet(sheetName);
-      buildClassSheet(ws, eventName, className, classRows, allowsCodriver);
+      buildClassSheet(ws, eventName, className, classRows);
     }
 
     // Write to buffer and upload

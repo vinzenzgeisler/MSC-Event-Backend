@@ -698,6 +698,7 @@ export const resetMarshalEventAssignments = async (eventId: string, actorUserId:
     if (participationIds.length) {
       await tx.update(marshalDayAssignment).set({
         commitmentStatus: 'not_asked',
+        role: null,
         sectionId: null,
         postId: null,
         functionCode: null,
@@ -1068,8 +1069,11 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
   if (!input.dayId) throw new Error('MARSHAL_DAY_REQUIRED');
   const filters = [eq(marshalEventParticipation.eventId, input.eventId), eq(marshalDayAssignment.dayId, input.dayId), eq(marshalDayAssignment.commitmentStatus, 'accepted')];
   if (input.sectionId) filters.push(eq(marshalDayAssignment.sectionId, input.sectionId));
+  const orderBy = input.type === 'section'
+    ? [sql`${marshalPost.sortOrder} asc nulls first`, asc(marshalPerson.lastName), asc(marshalPerson.firstName)]
+    : [asc(marshalPerson.lastName), asc(marshalPerson.firstName)];
   const rows = await db.select({ firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, zip: marshalPerson.zip, city: marshalPerson.city, shirt: marshalEventParticipation.shirtSizeSnapshot, post: marshalPost.code, functionCode: marshalDayAssignment.functionCode })
-    .from(marshalDayAssignment).innerJoin(marshalEventParticipation, eq(marshalDayAssignment.participationId, marshalEventParticipation.id)).innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id)).leftJoin(marshalPost, eq(marshalDayAssignment.postId, marshalPost.id)).where(and(...filters)).orderBy(asc(marshalPost.sortOrder), asc(marshalPerson.lastName));
+    .from(marshalDayAssignment).innerJoin(marshalEventParticipation, eq(marshalDayAssignment.participationId, marshalEventParticipation.id)).innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id)).leftJoin(marshalPost, eq(marshalDayAssignment.postId, marshalPost.id)).where(and(...filters)).orderBy(...orderBy);
   if (input.type === 'section') return { filename: 'Abschnittsliste.pdf', buffer: await renderPdf('Abschnittsliste', ['Vorname', 'Nachname', 'Posten/Funktion', 'Änderung'], rows.map((row) => [row.firstName, row.lastName, row.post ?? row.functionCode ?? '', '']), [140, 160, 150, 290]) };
   return { filename: 'Anwesenheitsliste.pdf', buffer: await renderPdf('Anwesenheitsliste', ['Vorname', 'Nachname', 'PLZ', 'Wohnort', 'Shirt', 'Posten', 'Unterschrift'], rows.map((row) => [row.firstName, row.lastName, row.zip ?? '', row.city ?? '', row.shirt ?? '', row.post ?? row.functionCode ?? '', '']), [95, 115, 55, 115, 60, 85, 215]) };
 };

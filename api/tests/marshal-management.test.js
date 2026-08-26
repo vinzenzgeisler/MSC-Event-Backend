@@ -204,13 +204,15 @@ async function run() {
   assert.match(routeSource, /marshalHelperArea\.id, input\.areaId[\s\S]*marshalHelperArea\.eventId, input\.eventId/);
   assert.match(routeSource, /marshalAreaShift\.id, input\.shiftId[\s\S]*marshalHelperArea\.eventId, input\.eventId[\s\S]*marshalHelperArea\.areaType, 'setup'/);
   assert.match(routeSource, /export const resetMarshalEventAssignments[\s\S]*marshalDayAssignment[\s\S]*marshalAreaAssignment[\s\S]*marshalShiftAssignment/);
+  assert.match(routeSource, /export const resetMarshalEventAssignments[\s\S]*commitmentStatus: 'not_asked',[\s\S]*role: null,[\s\S]*sectionId: null,[\s\S]*postId: null,[\s\S]*functionCode: null/);
   assert.match(routeSource, /export const replaceMarshalAreaConfig[\s\S]*db\.transaction/);
   assert.match(routeSource, /omittedCustomAreaIds/);
   assert.match(routeSource, /omittedShiftIds/);
   assert.match(routeSource, /LOCK TABLE marshal_person IN SHARE ROW EXCLUSIVE MODE/);
   assert.match(routeSource, /const allPeople = await tx\.select\(\)\.from\(marshalPerson\)/);
   assert.match(routeSource, /knownNamesNow = indexMarshalPeopleByNormalizedName\(allPeople\)/);
-  assert.match(routeSource, /orderBy\(asc\(marshalPost\.sortOrder\), asc\(marshalPerson\.lastName\)\)/);
+  assert.match(routeSource, /const orderBy = input\.type === 'section'\s*\? \[sql`\$\{marshalPost\.sortOrder\} asc nulls first`, asc\(marshalPerson\.lastName\), asc\(marshalPerson\.firstName\)\]\s*: \[asc\(marshalPerson\.lastName\), asc\(marshalPerson\.firstName\)\]/);
+  assert.match(routeSource, /\.where\(and\(\.\.\.filters\)\)\.orderBy\(\.\.\.orderBy\)/);
   assert.match(routeSource, /areas, areaShifts: areaShifts\.map[\s\S]*areaAssignments, shiftAssignments/);
 
   assert.match(schemaSource, /noDeployment: boolean\('no_deployment'\)/);

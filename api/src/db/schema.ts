@@ -4,12 +4,14 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid
 } from 'drizzle-orm/pg-core';
@@ -908,6 +910,7 @@ export const marshalPerson = pgTable(
     activityAreas: jsonb('activity_areas').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
     note: text('note'),
     isActive: boolean('is_active').notNull().default(true),
+    noDeployment: boolean('no_deployment').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
@@ -932,6 +935,7 @@ export const marshalEventParticipation = pgTable(
   },
   (table) => ({
     eventPersonUnique: uniqueIndex('marshal_event_participation_event_person_unique').on(table.eventId, table.personId),
+    idEventUnique: unique('marshal_event_participation_id_event_unique').on(table.id, table.eventId),
     eventIndex: index('marshal_event_participation_event_idx').on(table.eventId)
   })
 );
@@ -1093,6 +1097,110 @@ export const marshalImportRun = pgTable(
       .on(table.eventId, table.workbookSha256)
       .where(sql`${table.status} = 'completed'`),
     statusCheck: check('marshal_import_run_status_check', sql`${table.status} in ('preview', 'completed', 'failed')`)
+  })
+);
+
+export const marshalHelperArea = pgTable(
+  'marshal_helper_area',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    code: text('code').notNull(),
+    name: text('name').notNull(),
+    areaType: text('area_type').notNull(),
+    dayScope: text('day_scope'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    responsibleLabel: text('responsible_label'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    eventCodeUnique: uniqueIndex('marshal_helper_area_event_code_unique').on(table.eventId, table.code),
+    idEventUnique: unique('marshal_helper_area_id_event_unique').on(table.id, table.eventId),
+    eventSortIndex: index('marshal_helper_area_event_sort_idx').on(table.eventId, table.sortOrder),
+    areaTypeCheck: check('marshal_helper_area_type_check', sql`${table.areaType} in ('setup', 'general')`),
+    dayScopeCheck: check('marshal_helper_area_day_scope_check', sql`${table.dayScope} is null or ${table.dayScope} in ('saturday', 'sunday')`)
+  })
+);
+
+export const marshalAreaShift = pgTable(
+  'marshal_area_shift',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    areaId: uuid('area_id').notNull(),
+    label: text('label').notNull(),
+    shiftDate: date('shift_date').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    areaDateUnique: uniqueIndex('marshal_area_shift_area_date_unique').on(table.areaId, table.shiftDate),
+    idEventUnique: unique('marshal_area_shift_id_event_unique').on(table.id, table.eventId),
+    areaEventForeignKey: foreignKey({
+      columns: [table.areaId, table.eventId],
+      foreignColumns: [marshalHelperArea.id, marshalHelperArea.eventId],
+      name: 'marshal_area_shift_area_event_fk'
+    }).onDelete('cascade'),
+    areaSortIndex: index('marshal_area_shift_area_sort_idx').on(table.areaId, table.sortOrder)
+  })
+);
+
+export const marshalShiftAssignment = pgTable(
+  'marshal_shift_assignment',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    participationId: uuid('participation_id').notNull(),
+    shiftId: uuid('shift_id').notNull(),
+    commitmentStatus: text('commitment_status').notNull().default('not_asked'),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    participationShiftUnique: uniqueIndex('marshal_shift_assignment_unique').on(table.participationId, table.shiftId),
+    participationEventForeignKey: foreignKey({
+      columns: [table.participationId, table.eventId],
+      foreignColumns: [marshalEventParticipation.id, marshalEventParticipation.eventId],
+      name: 'marshal_shift_assignment_participation_event_fk'
+    }).onDelete('cascade'),
+    shiftEventForeignKey: foreignKey({
+      columns: [table.shiftId, table.eventId],
+      foreignColumns: [marshalAreaShift.id, marshalAreaShift.eventId],
+      name: 'marshal_shift_assignment_shift_event_fk'
+    }).onDelete('cascade'),
+    shiftIndex: index('marshal_shift_assignment_shift_idx').on(table.shiftId),
+    statusCheck: check('marshal_shift_assignment_status_check', sql`${table.commitmentStatus} in ('not_asked', 'pending', 'accepted', 'declined', 'tentative')`)
+  })
+);
+
+export const marshalAreaAssignment = pgTable(
+  'marshal_area_assignment',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    participationId: uuid('participation_id').notNull(),
+    areaId: uuid('area_id').notNull(),
+    commitmentStatus: text('commitment_status').notNull().default('not_asked'),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    participationAreaUnique: uniqueIndex('marshal_area_assignment_unique').on(table.participationId, table.areaId),
+    participationEventForeignKey: foreignKey({
+      columns: [table.participationId, table.eventId],
+      foreignColumns: [marshalEventParticipation.id, marshalEventParticipation.eventId],
+      name: 'marshal_area_assignment_participation_event_fk'
+    }).onDelete('cascade'),
+    areaEventForeignKey: foreignKey({
+      columns: [table.areaId, table.eventId],
+      foreignColumns: [marshalHelperArea.id, marshalHelperArea.eventId],
+      name: 'marshal_area_assignment_area_event_fk'
+    }).onDelete('cascade'),
+    areaIndex: index('marshal_area_assignment_area_idx').on(table.areaId),
+    statusCheck: check('marshal_area_assignment_status_check', sql`${table.commitmentStatus} in ('not_asked', 'pending', 'accepted', 'declined', 'tentative')`)
   })
 );
 

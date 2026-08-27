@@ -605,6 +605,15 @@ export const patchMarshalPerson = async (personId: string, input: z.infer<typeof
   return updated ?? null;
 };
 
+type MarshalParticipationPatch = Pick<z.infer<typeof assignmentInputSchema>, 'contactOwner' | 'wish' | 'note' | 'shirtSizeSnapshot'>;
+
+export const marshalParticipationUpdateValues = (input: MarshalParticipationPatch) => ({
+  ...(input.contactOwner !== undefined ? { contactOwner: input.contactOwner } : {}),
+  ...(input.wish !== undefined ? { wish: input.wish } : {}),
+  ...(input.note !== undefined ? { note: input.note } : {}),
+  ...(input.shirtSizeSnapshot !== undefined ? { shirtSizeSnapshot: input.shirtSizeSnapshot } : {})
+});
+
 export const upsertMarshalAssignment = async (personId: string, input: z.infer<typeof assignmentInputSchema>, actorUserId: string | null) => {
   const db = await getDb();
   return db.transaction(async (tx) => {
@@ -639,7 +648,7 @@ export const upsertMarshalAssignment = async (personId: string, input: z.infer<t
       eventId: input.eventId, personId, contactOwner: input.contactOwner, wish: input.wish, note: input.note,
       shirtSizeSnapshot: input.shirtSizeSnapshot ?? person.shirtSize
     }).onConflictDoUpdate({ target: [marshalEventParticipation.eventId, marshalEventParticipation.personId], set: {
-      contactOwner: input.contactOwner, wish: input.wish, note: input.note, shirtSizeSnapshot: input.shirtSizeSnapshot ?? person.shirtSize, updatedAt: new Date()
+      ...marshalParticipationUpdateValues(input), updatedAt: new Date()
     }}).returning();
     for (const day of normalizedDays) {
       await tx.insert(marshalDayAssignment).values({ participationId: participation.id, ...day }).onConflictDoUpdate({

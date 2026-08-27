@@ -6,6 +6,7 @@ const {
   findAmbiguousMarshalNameMatches,
   indexMarshalPeopleByNormalizedName,
   indexMarshalPeopleByNormalizedNameCandidates,
+  marshalParticipationUpdateValues,
   parseMarshalAssignmentCell,
   parseMarshalWorkbookBuffer,
   resolveMarshalEmergencyTargetStaff,
@@ -74,6 +75,21 @@ async function run() {
     eventId,
     days: [{ dayId, commitmentStatus: 'accepted' }]
   }).days[0].dayId, dayId);
+  assert.deepEqual(
+    marshalParticipationUpdateValues({}),
+    {},
+    'omitted participation fields must preserve the existing event snapshot'
+  );
+  assert.deepEqual(
+    marshalParticipationUpdateValues({ shirtSizeSnapshot: 'H-XL' }),
+    { shirtSizeSnapshot: 'H-XL' },
+    'an explicit shirt snapshot must remain updateable'
+  );
+  assert.deepEqual(
+    marshalParticipationUpdateValues({ contactOwner: null, wish: 'Posten 4', note: null, shirtSizeSnapshot: null }),
+    { contactOwner: null, wish: 'Posten 4', note: null, shirtSizeSnapshot: null },
+    'explicit nulls and participation updates must be retained'
+  );
   assert.throws(() => validateMarshalAssignmentInput({
     eventId,
     days: [{ dayId, commitmentStatus: 'accepted' }, { dayId, commitmentStatus: 'declined' }]

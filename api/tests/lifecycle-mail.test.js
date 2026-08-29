@@ -31,7 +31,14 @@ assert.equal(resolveQueueMailLocale({ explicitLocale: 'en', preferredLocale: 'pl
 const localizedContent = {
   localizedContent: {
     de: { subject: 'Informationen', bodyText: 'Deutscher Text', bodyHtml: '<p>Deutscher Text</p>' },
-    pl: { subject: 'Informacje', bodyText: 'Polski tekst', bodyHtml: '<p>Polski tekst</p>' }
+    pl: {
+      subject: 'Informacje',
+      bodyText: 'Polski tekst',
+      bodyHtml: '<p>Polski tekst</p>',
+      preheader: 'Ważne informacje',
+      heroSubtitle: 'Informacje dotyczące udziału.',
+      eventDateText: '12–13 września 2026'
+    }
   }
 };
 assert.deepEqual(resolveLocalizedMailContent(localizedContent, 'pl'), localizedContent.localizedContent.pl);

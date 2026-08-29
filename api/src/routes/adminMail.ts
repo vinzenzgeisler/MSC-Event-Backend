@@ -989,6 +989,9 @@ type LocalizedMailContent = {
   subject?: string;
   bodyText?: string;
   bodyHtml?: string;
+  preheader?: string;
+  heroSubtitle?: string;
+  eventDateText?: string;
 };
 
 export const resolveLocalizedMailContent = (
@@ -1008,7 +1011,10 @@ export const resolveLocalizedMailContent = (
   const resolved: LocalizedMailContent = {
     ...(isNonEmptyString(value.subject) ? { subject: value.subject } : {}),
     ...(isNonEmptyString(value.bodyText) ? { bodyText: value.bodyText } : {}),
-    ...(isNonEmptyString(value.bodyHtml) ? { bodyHtml: value.bodyHtml } : {})
+    ...(isNonEmptyString(value.bodyHtml) ? { bodyHtml: value.bodyHtml } : {}),
+    ...(isNonEmptyString(value.preheader) ? { preheader: value.preheader } : {}),
+    ...(isNonEmptyString(value.heroSubtitle) ? { heroSubtitle: value.heroSubtitle } : {}),
+    ...(isNonEmptyString(value.eventDateText) ? { eventDateText: value.eventDateText } : {})
   };
   return Object.keys(resolved).length > 0 ? resolved : null;
 };
@@ -1510,6 +1516,9 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
       templateData = {
         ...resolvedTemplateData,
         locale,
+        preheader: localizedContent?.preheader ?? resolvedTemplateData.preheader,
+        heroSubtitle: localizedContent?.heroSubtitle ?? resolvedTemplateData.heroSubtitle,
+        eventDateText: localizedContent?.eventDateText ?? resolvedTemplateData.eventDateText,
         bodyTextOverride: localizedContent?.bodyText ?? input.bodyOverride ?? null,
         bodyHtmlOverride: localizedContent?.bodyHtml ?? input.bodyHtmlOverride ?? null
       };
@@ -3244,6 +3253,15 @@ export const previewMailTemplate = async (input: TemplatePreviewInput) => {
   const renderOptions = normalizeRenderOptions(input.templateKey, input.renderOptions);
   const hasContentOverride = Boolean(localizedContent?.bodyText || localizedContent?.bodyHtml) ||
     (useDraftMode && Boolean(input.bodyOverride || input.bodyHtmlOverride));
+
+  if (localizedContent) {
+    data = {
+      ...data,
+      preheader: localizedContent.preheader ?? data.preheader,
+      heroSubtitle: localizedContent.heroSubtitle ?? data.heroSubtitle,
+      eventDateText: localizedContent.eventDateText ?? data.eventDateText
+    };
+  }
 
   const rendered = renderMailContract({
     templateKey: input.templateKey,

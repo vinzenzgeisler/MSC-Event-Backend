@@ -1,8 +1,14 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const { renderMailContract } = require('../dist/mail/rendering.js');
 const { getAcceptedOpenPaymentHeaderTitle, resolveMailLocale } = require('../dist/mail/i18n.js');
 const { buildAcceptedPaymentInstructionText } = require('../dist/routes/adminMail.js');
+
+const campaignDefinition = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, '../../scripts/campaigns/2026-08-teilnehmerinformationen.i18n.json'), 'utf8')
+);
 
 const buildBasePayload = () => ({
   eventName: '12. Oberlausitzer Dreieck',
@@ -55,12 +61,35 @@ const buildBasePayload = () => ({
     }
   });
   assert.match(rendered.htmlDocument, /<html lang="en">/);
-  assert.match(rendered.bodyTextRendered, /Kind regards/);
+  assert.equal(rendered.bodyTextRendered.includes('Kind regards'), false);
 }
 
 // Without an explicit locale, the caller default is used.
 {
   assert.equal(resolveMailLocale({ country: 'FR' }), 'de');
+}
+
+// The participant campaign is complete and renderable in every supported locale.
+{
+  for (const locale of ['de', 'en', 'cs', 'pl']) {
+    const content = campaignDefinition.localizedContent[locale];
+    const rendered = renderMailContract({
+      templateKey: campaignDefinition.templateKey,
+      subjectTemplate: content.subject,
+      bodyTextTemplate: content.bodyText,
+      bodyHtmlTemplate: content.bodyHtml,
+      data: {
+        ...buildBasePayload(),
+        locale
+      },
+      renderOptions: { includeEntryContext: false },
+      hasContentOverride: true
+    });
+    assert.equal(rendered.subjectRendered, content.subject);
+    assert.equal(rendered.missingPlaceholders.length, 0);
+    assert.equal(rendered.warnings.length, 0);
+    assert.match(rendered.htmlDocument, /\.mail-body h2\{[^}]*border-top:1px solid #CBD5E1/);
+  }
 }
 
 // Campaign default: badge hidden; entry context visible only when enabled.
@@ -167,7 +196,25 @@ const buildBasePayload = () => ({
   assert.match(rendered.htmlDocument, /Husqvarna WR/);
   assert.equal(rendered.htmlDocument.includes('verify?token='), false);
   assert.equal((rendered.bodyTextRendered.match(/Viele Grüße/g) ?? []).length, 0);
-  assert.equal((rendered.bodyTextRendered.match(/Mit freundlichen Grüßen/g) ?? []).length, 1);
+  assert.equal((rendered.bodyTextRendered.match(/Mit freundlichen Grüßen/g) ?? []).length, 0);
+}
+
+// Stored campaign copy owns its signoff; section headings get clear spacing and separators.
+{
+  const rendered = renderMailContract({
+    templateKey: 'event_update',
+    subjectTemplate: 'Informationen - {{eventName}}',
+    bodyTextTemplate: 'Bis bald!\n\nViele Grüße\n\nEuer Organisationsteam',
+    bodyHtmlTemplate: '<p>Einleitung</p><h2>Zeitplan</h2><p>Details</p><p>Viele Grüße<br>Euer Organisationsteam</p>',
+    data: {
+      ...buildBasePayload(),
+      locale: 'de'
+    },
+    renderOptions: { includeEntryContext: false }
+  });
+  assert.equal((rendered.bodyTextRendered.match(/Viele Grüße/g) ?? []).length, 1);
+  assert.equal(rendered.bodyTextRendered.includes('Mit freundlichen Grüßen'), false);
+  assert.match(rendered.htmlDocument, /\.mail-body h2\{margin:30px 0 14px 0;padding:24px 0 0 0;border-top:1px solid #CBD5E1/);
 }
 
 // Registration confirmation must show all entries for multi-entry registrations.

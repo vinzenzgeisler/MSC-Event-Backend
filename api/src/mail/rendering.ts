@@ -137,17 +137,6 @@ const normalizeHtmlTemplateSource = (value: string): string => {
     .trim();
 };
 
-const hasStandardSignoff = (value: string): boolean => {
-  const normalized = value.toLowerCase();
-  return (
-    normalized.includes('mit freundlichen grüßen') ||
-    normalized.includes('mit freundlichen gruessen') ||
-    normalized.includes('kind regards') ||
-    normalized.includes('s pozdravem') ||
-    normalized.includes('z pozdrowieniami')
-  );
-};
-
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const normalizeWhitespaceBlocks = (value: string): string =>
@@ -708,7 +697,6 @@ const buildHtmlDocument = (input: {
   data: TemplateData;
   renderOptions?: MailRenderOptions;
   hasContentOverride: boolean;
-  includeStandardSignoff: boolean;
   locale: SupportedMailLocale;
 }): string => {
   const copy = getMailChromeCopy(input.locale);
@@ -791,10 +779,6 @@ const buildHtmlDocument = (input: {
 
   const sectionsHtml = !input.hasContentOverride && isCampaignTemplate(input.templateKey) ? input.structuredSectionsHtml : '';
   const entryContextHtml = includeEntryContext ? input.entryContextHtml : '';
-  const signoffHtml = input.includeStandardSignoff
-    ? `<p style="margin:18px 0 0 0;color:#475569;font-size:15px;line-height:1.72;">${escapeHtml(copy.signoffLead)}</p><p style="margin:12px 0 0 0;color:#475569;font-size:15px;line-height:1.72;">${escapeHtml(copy.signoffLine1)}<br />${escapeHtml(copy.signoffLine2)}<br />${escapeHtml(copy.signoffLine3)}</p>`
-    : '';
-
   const logoHtml = logoUrl
     ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" width="28" style="display:block;width:28px;max-width:28px;height:auto;border:0;" />`
     : '';
@@ -833,6 +817,10 @@ const buildHtmlDocument = (input: {
     '  .mail-cta{display:block !important;width:100% !important;box-sizing:border-box !important;text-align:center !important;}',
     '}',
     '.mail-body,.mail-body p,.mail-body li,.mail-body td,.mail-body div,.mail-body span,.mail-body a{font-size:15px;line-height:1.72;color:#0F172A;}',
+    '.mail-body p{margin:0 0 14px 0;}',
+    '.mail-body ul,.mail-body ol{margin:0 0 18px 0;padding-left:24px;}',
+    '.mail-body h2{margin:30px 0 14px 0;padding:24px 0 0 0;border-top:1px solid #CBD5E1;color:#172554;font-size:19px;line-height:1.35;font-weight:700;}',
+    '.mail-body h2:first-child{margin-top:0;padding-top:0;border-top:0;}',
     '</style>',
     '</head>',
     '<body style="margin:0;padding:0;background:#F8FAFC;color:#0F172A;font-family:Segoe UI,Arial,sans-serif;">',
@@ -861,7 +849,6 @@ const buildHtmlDocument = (input: {
     ctaBlock,
     input.postCtaHtmlRendered ? buildSpacer(20) : '',
     input.postCtaHtmlRendered ? `<div class="mail-body">${input.postCtaHtmlRendered}</div>` : '',
-    signoffHtml,
     '</td></tr>',
     `<tr><td class="mail-footer" bgcolor="#F8FAFC" style="border-top:1px solid #E2E8F0;background:#F8FAFC;background-color:#F8FAFC;padding:14px 26px;font-size:12px;line-height:1.5;color:#64748B;">${dateHtml}${contactHtml}${replyHintHtml}${legalLinks}</td></tr>`,
     '</table>',
@@ -1095,14 +1082,6 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
     }
   }
 
-  const includeStandardSignoff = !hasStandardSignoff(bodyTextRendered);
-  if (includeStandardSignoff) {
-    bodyTextRendered = `${bodyTextRendered}\n\n${chromeCopy.signoffLead}\n\n${[
-      chromeCopy.signoffLine1,
-      chromeCopy.signoffLine2,
-      chromeCopy.signoffLine3
-    ].join('\n')}`.trim();
-  }
   bodyTextRendered = `${bodyTextRendered}\n\n${chromeCopy.replyHint}`.trim();
 
   const logoWarning = resolveLogoUrl(templateData).warning;
@@ -1127,7 +1106,6 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
     data: templateData,
     renderOptions: input.renderOptions,
     hasContentOverride: input.hasContentOverride ?? false,
-    includeStandardSignoff,
     locale
   });
 

@@ -502,6 +502,9 @@ export const handler = async () => {
 
       const bodyTextOverride = typeof row.template_data?.bodyTextOverride === 'string' ? row.template_data.bodyTextOverride : null;
       const bodyHtmlOverride = typeof row.template_data?.bodyHtmlOverride === 'string' ? row.template_data.bodyHtmlOverride : null;
+      const bccEmails = Array.isArray(row.template_data?.bccEmails)
+        ? row.template_data.bccEmails.filter((value): value is string => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
+        : [];
       const renderOptions =
         row.template_data?.renderOptions && typeof row.template_data.renderOptions === 'object'
           ? (row.template_data.renderOptions as { showBadge?: boolean; mailLabel?: string | null; includeEntryContext?: boolean })
@@ -558,7 +561,8 @@ export const handler = async () => {
         rendered.subjectRendered,
         rendered.bodyTextRendered,
         rendered.htmlDocument,
-        attachments
+        attachments,
+        bccEmails
       );
       await markSent(row.id, response.MessageId ?? null, response);
     } catch (error) {

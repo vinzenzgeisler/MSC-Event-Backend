@@ -675,6 +675,7 @@ export const emailOutbox = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     eventId: uuid('event_id').references(() => event.id, { onDelete: 'set null' }),
+    batchId: uuid('batch_id'),
     toEmail: text('to_email').notNull(),
     subject: text('subject').notNull(),
     templateId: text('template_id').notNull(),
@@ -692,6 +693,7 @@ export const emailOutbox = pgTable(
   (table) => ({
     statusCheck: check('email_outbox_status_check', sql`${table.status} in ('queued', 'sending', 'sent', 'failed')`),
     statusSendAfterIndex: index('email_outbox_status_send_after_idx').on(table.status, table.sendAfter),
+    eventBatchIndex: index('email_outbox_event_batch_idx').on(table.eventId, table.batchId),
     idempotencyUnique: uniqueIndex('email_outbox_idempotency_unique')
       .on(table.idempotencyKey)
       .where(sql`${table.idempotencyKey} is not null`)

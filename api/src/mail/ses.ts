@@ -105,12 +105,14 @@ export const sendEmail = async (
   subject: string,
   bodyText: string,
   bodyHtml?: string,
-  attachments: EmailAttachment[] = []
+  attachments: EmailAttachment[] = [],
+  bccEmails: string[] = []
 ) => {
   const client = getSesClient();
   if (attachments.length > 0) {
     const raw = buildRawMessage(to, subject, bodyText, bodyHtml, attachments);
     const command = new SendRawEmailCommand({
+      Destinations: [to, ...bccEmails],
       RawMessage: {
         Data: raw
       }
@@ -120,7 +122,8 @@ export const sendEmail = async (
   const command = new SendEmailCommand({
     Source: getSender(),
     Destination: {
-      ToAddresses: [to]
+      ToAddresses: [to],
+      ...(bccEmails.length > 0 ? { BccAddresses: bccEmails } : {})
     },
     Message: {
       Subject: { Data: subject },

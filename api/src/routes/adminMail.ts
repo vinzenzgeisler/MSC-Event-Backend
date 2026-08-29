@@ -87,6 +87,7 @@ const queueMailSchema = z
     attachmentUploadIds: z.array(z.string().uuid()).max(MAX_CAMPAIGN_ATTACHMENTS).optional(),
     renderOptions: renderOptionsSchema,
     sendAfter: z.string().datetime().optional(),
+    bccEmails: z.array(z.string().email()).max(5).optional(),
     recipientEmails: z.array(z.string().email()).optional(),
     additionalEmails: z.array(z.string().email()).optional(),
     driverPersonIds: z.array(z.string().uuid()).optional(),
@@ -232,6 +233,7 @@ const communicationSendSchema = z
     attachmentUploadIds: z.array(z.string().uuid()).max(MAX_CAMPAIGN_ATTACHMENTS).optional(),
     renderOptions: renderOptionsSchema,
     sendAfter: z.string().datetime().optional(),
+    bccEmails: z.array(z.string().email()).max(5).optional(),
     additionalEmails: z.array(z.string().email()).optional(),
     driverPersonIds: z.array(z.string().uuid()).optional(),
     entryIds: z.array(z.string().uuid()).optional(),
@@ -983,6 +985,34 @@ export const resolveQueueMailLocale = (input: {
     input.defaultLocale ?? 'de'
   );
 
+type LocalizedMailContent = {
+  subject?: string;
+  bodyText?: string;
+  bodyHtml?: string;
+};
+
+export const resolveLocalizedMailContent = (
+  templateData: Record<string, unknown>,
+  locale: SupportedMailLocale
+): LocalizedMailContent | null => {
+  const collection = templateData.localizedContent;
+  if (!collection || typeof collection !== 'object' || Array.isArray(collection)) {
+    return null;
+  }
+  const variants = collection as Record<string, unknown>;
+  const candidate = variants[locale] ?? variants.de;
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    return null;
+  }
+  const value = candidate as Record<string, unknown>;
+  const resolved: LocalizedMailContent = {
+    ...(isNonEmptyString(value.subject) ? { subject: value.subject } : {}),
+    ...(isNonEmptyString(value.bodyText) ? { bodyText: value.bodyText } : {}),
+    ...(isNonEmptyString(value.bodyHtml) ? { bodyHtml: value.bodyHtml } : {})
+  };
+  return Object.keys(resolved).length > 0 ? resolved : null;
+};
+
 const resolveRecipientPreferredLocale = async (eventId: string, target: RecipientTarget): Promise<string | null> => {
   const db = await getDb();
 
@@ -1360,10 +1390,12 @@ const insertOutboxRows = async (
   eventId: string,
   templateKey: string,
   templateVersion: number,
+  batchId: string,
   subject: string,
   sendAfter: Date,
   rows: Array<{
     toEmail: string;
+    subject?: string;
     templateData: Record<string, unknown>;
     idempotencyKey: string;
     attachments?: QueuedAttachmentRef[];
@@ -1378,8 +1410,9 @@ const insertOutboxRows = async (
     const inserted = await db.insert(emailOutbox).values(
       rows.map((row) => ({
         eventId,
+        batchId,
         toEmail: row.toEmail,
-        subject,
+        subject: row.subject ?? subject,
         templateId: templateKey,
         templateVersion,
         templateData: row.templateData,
@@ -1433,6 +1466,7 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
     throw new Error('TEMPLATE_NOT_FOUND');
   }
   const template = await resolveTemplate(templateKey, input.templateVersion, input.subjectOverride ?? input.subject);
+  const batchId = randomUUID();
   const sendAfter = toIsoDate(input.sendAfter);
   const eventMailDefaults = await getEventMailDefaults(input.eventId);
   const paymentDeadlineDefault =
@@ -1446,10 +1480,9 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
       ? await resolveUploadAttachments(input.eventId, input.attachmentUploadIds)
       : [];
   const renderOptions = normalizeRenderOptions(template.templateKey, input.renderOptions);
-  const hasContentOverride = Boolean(input.bodyOverride || input.bodyHtmlOverride);
 
   const outboxRows = await Promise.all(
-    targets.map(async (target) => {
+    targets.map(async (target, targetIndex) => {
       let templateData: Record<string, unknown> = {
         ...eventMailDefaults,
         ...(input.templateData ?? {}),
@@ -1459,6 +1492,7 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         renderOptions,
         driverPersonId: target.driverPersonId,
         entryId: target.entryId,
+        bccEmails: targetIndex === 0 ? input.bccEmails ?? [] : [],
         bodyTextOverride: input.bodyOverride ?? null,
         bodyHtmlOverride: input.bodyHtmlOverride ?? null
       };
@@ -1469,9 +1503,15 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         preferredLocale,
         defaultLocale: input.defaultLocale
       });
+      const localizedContent = templateContract.scope === 'campaign'
+        ? resolveLocalizedMailContent(templateData, locale)
+        : null;
+      const { localizedContent: _localizedContent, ...resolvedTemplateData } = templateData;
       templateData = {
-        ...templateData,
-        locale
+        ...resolvedTemplateData,
+        locale,
+        bodyTextOverride: localizedContent?.bodyText ?? input.bodyOverride ?? null,
+        bodyHtmlOverride: localizedContent?.bodyHtml ?? input.bodyHtmlOverride ?? null
       };
 
       templateData = await enrichEntryContextTemplateData(input.eventId, templateData, target);
@@ -1528,11 +1568,17 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         }
       }
 
+      const subjectTemplate = localizedContent?.subject ?? template.subjectTemplate;
+      const bodyTextTemplate = localizedContent?.bodyText ?? input.bodyOverride ?? template.bodyTextTemplate;
+      const bodyHtmlTemplate = localizedContent?.bodyHtml ?? input.bodyHtmlOverride ?? template.bodyHtmlTemplate;
+      const hasContentOverride = Boolean(
+        localizedContent?.bodyText || localizedContent?.bodyHtml || input.bodyOverride || input.bodyHtmlOverride
+      );
       const renderValidation = renderMailContract({
         templateKey: template.templateKey,
-        subjectTemplate: template.subjectTemplate,
-        bodyTextTemplate: input.bodyOverride ?? template.bodyTextTemplate,
-        bodyHtmlTemplate: input.bodyHtmlOverride ?? template.bodyHtmlTemplate,
+        subjectTemplate,
+        bodyTextTemplate,
+        bodyHtmlTemplate,
         data: templateData,
         renderOptions,
         hasContentOverride
@@ -1543,6 +1589,7 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
 
       return {
         toEmail: target.email,
+        subject: subjectTemplate,
         templateData,
         attachments: uploadAttachments,
         idempotencyKey: buildDedupeKey(
@@ -1567,6 +1614,7 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
     input.eventId,
     template.templateKey,
     template.templateVersion,
+    batchId,
     template.subjectTemplate,
     sendAfter,
     outboxRows
@@ -1579,12 +1627,13 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
     entityType: 'email_outbox_batch',
     payload: {
       queued: outboxRows.length,
+      batchId,
       templateId: template.templateKey,
       templateVersion: template.templateVersion
     }
   });
 
-  return { queued: outboxRows.length };
+  return { queued: outboxRows.length, batchId };
 };
 
 export const queuePaymentReminders = async (input: ReminderInput, actorUserId: string | null) => {
@@ -2348,6 +2397,7 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
   const template = await resolveTemplate(input.templateKey, input.templateVersion, input.subjectOverride);
   assertCampaignTemplateAllowed(template.templateKey);
   const sendAfter = toIsoDate(input.sendAfter);
+  const batchId = randomUUID();
 
   const conditions: SQL<unknown>[] = [
     eq(entry.eventId, input.eventId),
@@ -2446,6 +2496,7 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
     input.eventId,
     template.templateKey,
     template.templateVersion,
+    batchId,
     template.subjectTemplate,
     sendAfter,
     outboxRows
@@ -2458,12 +2509,13 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
     entityType: 'email_outbox_batch',
     payload: {
       queued: outboxRows.length,
+      batchId,
       templateId: template.templateKey,
       templateVersion: template.templateVersion
     }
   });
 
-  return { queued: outboxRows.length };
+  return { queued: outboxRows.length, batchId };
 };
 
 export const listOutbox = async (input: ListOutboxInput) => {
@@ -2476,6 +2528,7 @@ export const listOutbox = async (input: ListOutboxInput) => {
     .select({
       id: emailOutbox.id,
       eventId: emailOutbox.eventId,
+      batchId: emailOutbox.batchId,
       toEmail: emailOutbox.toEmail,
       subject: emailOutbox.subject,
       templateId: emailOutbox.templateId,
@@ -2588,6 +2641,7 @@ export const listEntryMailHistory = async (entryId: string, query: EntryMailHist
     .select({
       id: entry.id,
       eventId: entry.eventId,
+      driverPersonId: entry.driverPersonId,
       registrationGroupId: entry.registrationGroupId
     })
     .from(entry)
@@ -2625,6 +2679,7 @@ export const listEntryMailHistory = async (entryId: string, query: EntryMailHist
       d.provider_response as "providerResponse",
       case
         when o.template_data->>'entryId' = ${target.id}::text then 'entry'
+        when o.template_data->>'driverPersonId' = ${target.driverPersonId}::text then 'driver'
         when ${target.registrationGroupId}::text is not null and o.template_data->>'registrationGroupId' = ${target.registrationGroupId}::text then 'registration_group'
         else 'unknown'
       end as "relation"
@@ -2639,6 +2694,7 @@ export const listEntryMailHistory = async (entryId: string, query: EntryMailHist
     where o.event_id = ${target.eventId}
       and (
         o.template_data->>'entryId' = ${target.id}::text
+        or o.template_data->>'driverPersonId' = ${target.driverPersonId}::text
         or (
           ${target.registrationGroupId}::text is not null
           and o.template_data->>'registrationGroupId' = ${target.registrationGroupId}::text
@@ -3176,13 +3232,18 @@ export const previewMailTemplate = async (input: TemplatePreviewInput) => {
   }
 
   const useDraftMode = input.previewMode === 'draft';
-  const subjectTemplate = useDraftMode ? input.subjectOverride ?? template.subjectTemplate : template.subjectTemplate;
-  const bodyTextTemplate = useDraftMode ? input.bodyOverride ?? template.bodyTextTemplate : template.bodyTextTemplate;
-  const bodyHtmlTemplate = useDraftMode
-    ? input.bodyHtmlOverride ?? template.bodyHtmlTemplate
-    : template.bodyHtmlTemplate;
+  const localizedContent = contract.scope === 'campaign'
+    ? resolveLocalizedMailContent(data, resolveMailLocale(data, 'de'))
+    : null;
+  const subjectTemplate = localizedContent?.subject ??
+    (useDraftMode ? input.subjectOverride ?? template.subjectTemplate : template.subjectTemplate);
+  const bodyTextTemplate = localizedContent?.bodyText ??
+    (useDraftMode ? input.bodyOverride ?? template.bodyTextTemplate : template.bodyTextTemplate);
+  const bodyHtmlTemplate = localizedContent?.bodyHtml ??
+    (useDraftMode ? input.bodyHtmlOverride ?? template.bodyHtmlTemplate : template.bodyHtmlTemplate);
   const renderOptions = normalizeRenderOptions(input.templateKey, input.renderOptions);
-  const hasContentOverride = useDraftMode && Boolean(input.bodyOverride || input.bodyHtmlOverride);
+  const hasContentOverride = Boolean(localizedContent?.bodyText || localizedContent?.bodyHtml) ||
+    (useDraftMode && Boolean(input.bodyOverride || input.bodyHtmlOverride));
 
   const rendered = renderMailContract({
     templateKey: input.templateKey,
@@ -3507,6 +3568,7 @@ export const queueCommunicationSend = async (input: CommunicationSendInput, acto
         attachmentUploadIds: input.attachmentUploadIds,
         renderOptions: input.renderOptions,
         sendAfter: input.sendAfter,
+        bccEmails: input.bccEmails,
         recipientEmails: input.additionalEmails,
         driverPersonIds: input.driverPersonIds,
         entryIds: input.entryIds,

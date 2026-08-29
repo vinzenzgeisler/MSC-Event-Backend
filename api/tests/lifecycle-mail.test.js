@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 const {
   LifecycleMailError,
   hasRequiredRegistrationReceivedVariables,
+  resolveLocalizedMailContent,
   resolveQueueMailLocale,
-  toLifecycleApiError
+  toLifecycleApiError,
+  validateCommunicationSendInput
 } = require('../dist/routes/adminMail.js');
 
 const successCase = hasRequiredRegistrationReceivedVariables({
@@ -25,6 +27,24 @@ assert.equal(resolveQueueMailLocale({}), 'de');
 assert.equal(resolveQueueMailLocale({ defaultLocale: 'cs' }), 'cs');
 assert.equal(resolveQueueMailLocale({ preferredLocale: 'pl', defaultLocale: 'cs' }), 'pl');
 assert.equal(resolveQueueMailLocale({ explicitLocale: 'en', preferredLocale: 'pl', defaultLocale: 'cs' }), 'en');
+
+const localizedContent = {
+  localizedContent: {
+    de: { subject: 'Informationen', bodyText: 'Deutscher Text', bodyHtml: '<p>Deutscher Text</p>' },
+    pl: { subject: 'Informacje', bodyText: 'Polski tekst', bodyHtml: '<p>Polski tekst</p>' }
+  }
+};
+assert.deepEqual(resolveLocalizedMailContent(localizedContent, 'pl'), localizedContent.localizedContent.pl);
+assert.deepEqual(resolveLocalizedMailContent(localizedContent, 'cs'), localizedContent.localizedContent.de);
+assert.equal(resolveLocalizedMailContent({}, 'de'), null);
+
+const campaignSendInput = validateCommunicationSendInput({
+  eventId: 'e5dc0ac8-3a6f-4ee3-9a1c-45e2057d2a28',
+  templateKey: 'event_update',
+  filters: { acceptanceStatus: 'accepted' },
+  bccEmails: ['nennung@msc-oberlausitzer-dreilaendereck.eu']
+});
+assert.deepEqual(campaignSendInput.bccEmails, ['nennung@msc-oberlausitzer-dreilaendereck.eu']);
 
 const cases = [
   ['NO_RECIPIENT', 409, 'No recipient email available'],

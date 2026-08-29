@@ -96,7 +96,9 @@ export class ApiStack extends Stack {
       handler: 'handler',
       functionName: `${props.config.prefix}-api-handler`,
       memorySize: 256,
-      timeout: cdk.Duration.seconds(10),
+      // Campaign preparation resolves and renders several hundred personalized
+      // recipients before atomically inserting the outbox batch.
+      timeout: cdk.Duration.seconds(25),
       depsLockFilePath,
       environment: {
         STAGE: props.config.stage,

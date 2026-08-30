@@ -14,6 +14,7 @@ import {
 } from '../db/schema';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import type { AuthContext } from '../http/auth';
+import { sendEmail } from '../mail/ses';
 import { resolveIamUserDisplayNames } from './adminIam';
 
 // Standalone build keeps Lambda PDF rendering independent from host font files.
@@ -66,6 +67,74 @@ type InspectionSearchInput = z.infer<typeof inspectionSearchSchema>;
 type InspectionDecisionInput = z.infer<typeof inspectionDecisionSchema>;
 type InspectionNoteInput = z.infer<typeof inspectionNoteSchema>;
 type InspectorAssignmentInput = z.infer<typeof inspectorAssignmentSchema>;
+
+type InspectionDecisionEmailInput = {
+  techStatus: 'pending' | 'passed' | 'failed';
+  target: 'primary' | 'backup';
+  note: string | null;
+  driverEmail: string | null;
+  driverFirstName: string;
+  driverLastName: string;
+  vehicleMake: string | null;
+  vehicleModel: string | null;
+  startNumber: string | null;
+  eventName: string | null;
+};
+
+async function sendInspectionDecisionEmail(input: InspectionDecisionEmailInput): Promise<void> {
+  if (!input.driverEmail || input.techStatus === 'pending') {
+    return;
+  }
+  const vehicleName =
+    [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || 'Ihr Fahrzeug';
+  const vehicleLabel =
+    input.target === 'backup' ? `${vehicleName} (Ersatzfahrzeug)` : vehicleName;
+  const driverName = `${input.driverFirstName} ${input.driverLastName}`.trim();
+  const startInfo = input.startNumber ? ` · Startnummer #${input.startNumber}` : '';
+  const eventInfo = input.eventName ?? 'MSC Oberlausitzer Dreiländereck';
+
+  if (input.techStatus === 'passed') {
+    const subject = `Technische Abnahme bestätigt – ${eventInfo}`;
+    const bodyText = [
+      `Hallo ${driverName},`,
+      '',
+      `Ihr Fahrzeug ${vehicleLabel} wurde bei der technischen Abnahme zugelassen.${startInfo}`,
+      '',
+      ...(input.note ? [`Hinweis des Prüfers: ${input.note}`, ''] : []),
+      'Wir freuen uns auf Sie bei der Veranstaltung.',
+      '',
+      'Mit freundlichen Grüßen',
+      'Ihr Organisationsteam',
+      'MSC Oberlausitzer Dreiländereck e.V.'
+    ].join('\n');
+    const bodyHtml = `<p>Hallo ${driverName},</p>
+<p>Ihr Fahrzeug <strong>${vehicleLabel}</strong> wurde bei der technischen Abnahme <strong style="color:#15803d">zugelassen</strong>.${startInfo}</p>
+${input.note ? `<p><em>Hinweis des Prüfers:</em> ${input.note}</p>` : ''}
+<p>Wir freuen uns auf Sie bei der Veranstaltung.</p>
+<p>Mit freundlichen Grüßen<br>Ihr Organisationsteam<br>MSC Oberlausitzer Dreiländereck e.V.</p>`;
+    await sendEmail(input.driverEmail, subject, bodyText, bodyHtml);
+  } else {
+    const subject = `Technische Abnahme: Fahrzeug nicht zugelassen – ${eventInfo}`;
+    const bodyText = [
+      `Hallo ${driverName},`,
+      '',
+      `Ihr Fahrzeug ${vehicleLabel} wurde bei der technischen Abnahme leider nicht zugelassen.${startInfo}`,
+      '',
+      ...(input.note ? [`Ablehnungsgrund: ${input.note}`, ''] : []),
+      'Bitte wenden Sie sich bei Fragen an das Organisationsteam.',
+      '',
+      'Mit freundlichen Grüßen',
+      'Ihr Organisationsteam',
+      'MSC Oberlausitzer Dreiländereck e.V.'
+    ].join('\n');
+    const bodyHtml = `<p>Hallo ${driverName},</p>
+<p>Ihr Fahrzeug <strong>${vehicleLabel}</strong> wurde bei der technischen Abnahme leider <strong style="color:#dc2626">nicht zugelassen</strong>.${startInfo}</p>
+${input.note ? `<blockquote style="border-left:3px solid #dc2626;margin:1em 0;padding:0.5em 1em;color:#7f1d1d"><strong>Ablehnungsgrund:</strong><br>${input.note}</blockquote>` : ''}
+<p>Bitte wenden Sie sich bei Fragen an das Organisationsteam.</p>
+<p>Mit freundlichen Grüßen<br>Ihr Organisationsteam<br>MSC Oberlausitzer Dreiländereck e.V.</p>`;
+    await sendEmail(input.driverEmail, subject, bodyText, bodyHtml);
+  }
+}
 
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
 
@@ -181,6 +250,9 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
       acceptanceStatus: entry.acceptanceStatus,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      driverEmail: person.email,
+      driverPhone: person.phone,
+      eventName: event.name,
       codriverPersonId: entry.codriverPersonId,
       backupVehicleId: entry.backupVehicleId,
       className: eventClass.name,
@@ -207,6 +279,7 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
     .innerJoin(person, eq(entry.driverPersonId, person.id))
     .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
     .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .innerJoin(event, eq(entry.eventId, event.id))
     .where(
       and(
         eq(entry.id, entryId),
@@ -295,7 +368,7 @@ export const updateInspectionDecision = async (
     throw new Error('INSPECTION_BACKUP_VEHICLE_REQUIRED');
   }
   const now = new Date();
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const [updated] = await tx
       .update(entry)
       .set(
@@ -346,6 +419,25 @@ export const updateInspectionDecision = async (
     });
     return { entry: updated, decision };
   });
+
+  void sendInspectionDecisionEmail({
+    techStatus: input.techStatus,
+    target: input.target,
+    note: note ?? null,
+    driverEmail: existing.driverEmail,
+    driverFirstName: existing.driverFirstName,
+    driverLastName: existing.driverLastName,
+    vehicleMake:
+      input.target === 'backup' ? (existing.backupVehicle?.make ?? null) : existing.vehicleMake,
+    vehicleModel:
+      input.target === 'backup' ? (existing.backupVehicle?.model ?? null) : existing.vehicleModel,
+    startNumber: existing.startNumber,
+    eventName: existing.eventName ?? null
+  }).catch((mailError) => {
+    console.error('[inspection-mail] Failed to send decision email:', mailError);
+  });
+
+  return result;
 };
 
 export const updateInspectionNote = async (

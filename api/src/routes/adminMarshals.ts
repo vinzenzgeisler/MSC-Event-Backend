@@ -158,7 +158,7 @@ const configInputSchema = z.object({
   eventId: z.string().uuid(),
   sections: z.array(z.object({
     id: z.string().uuid().optional(), code: z.string().trim().min(1).max(20), name: z.string().trim().min(1).max(100),
-    leaderCode: z.string().trim().min(1).max(20), sortOrder: z.number().int().min(1).max(100)
+    leaderCode: z.string().trim().min(1).max(20), leaderTargetStaff: z.number().int().min(1).max(20).default(2), sortOrder: z.number().int().min(1).max(100)
   })).min(1).max(10),
   posts: z.array(configPostInputSchema).max(200)
 });
@@ -879,8 +879,8 @@ export const replaceMarshalAreaConfig = async (
 export const replaceMarshalConfig = async (input: z.infer<typeof configInputSchema>, actorUserId: string | null) => {
   const db = await getDb();
   for (const section of input.sections) {
-    await db.insert(marshalSection).values({ eventId: input.eventId, code: section.code, name: section.name, leaderCode: section.leaderCode, sortOrder: section.sortOrder })
-      .onConflictDoUpdate({ target: [marshalSection.eventId, marshalSection.code], set: { name: section.name, leaderCode: section.leaderCode, sortOrder: section.sortOrder, updatedAt: new Date() } });
+    await db.insert(marshalSection).values({ eventId: input.eventId, code: section.code, name: section.name, leaderCode: section.leaderCode, leaderTargetStaff: section.leaderTargetStaff, sortOrder: section.sortOrder })
+      .onConflictDoUpdate({ target: [marshalSection.eventId, marshalSection.code], set: { name: section.name, leaderCode: section.leaderCode, leaderTargetStaff: section.leaderTargetStaff, sortOrder: section.sortOrder, updatedAt: new Date() } });
   }
   const sections = await db.select().from(marshalSection).where(eq(marshalSection.eventId, input.eventId));
   const sectionByCode = new Map(sections.map((section) => [section.code, section.id]));

@@ -114,7 +114,7 @@ async function run() {
 
   const config = {
     eventId,
-    sections: [{ code: '1', name: 'Abschnitt 1', leaderCode: 'AL1', sortOrder: 1 }],
+    sections: [{ code: '1', name: 'Abschnitt 1', leaderCode: 'AL1', leaderTargetStaff: 2, sortOrder: 1 }],
     posts: [{ sectionCode: '1', code: '1/1', targetStaff: 3, emergencyTargetStaff: 2, mapX: 0, mapY: 1000, isActive: true, sortOrder: 1 }]
   };
   assert.deepEqual(validateMarshalConfigInput(config), config);
@@ -132,6 +132,9 @@ async function run() {
   }));
   assert.throws(() => validateMarshalConfigInput({
     ...config, posts: [{ ...config.posts[0], mapY: 1001 }]
+  }));
+  assert.throws(() => validateMarshalConfigInput({
+    ...config, sections: [{ ...config.sections[0], leaderTargetStaff: 21 }]
   }));
   const legacyConfig = {
     ...config,

@@ -967,13 +967,15 @@ export const marshalSection = pgTable(
     code: text('code').notNull(),
     name: text('name').notNull(),
     leaderCode: text('leader_code').notNull(),
+    leaderTargetStaff: integer('leader_target_staff').notNull().default(2),
     sortOrder: integer('sort_order').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
   (table) => ({
     eventCodeUnique: uniqueIndex('marshal_section_event_code_unique').on(table.eventId, table.code),
-    eventSortIndex: index('marshal_section_event_sort_idx').on(table.eventId, table.sortOrder)
+    eventSortIndex: index('marshal_section_event_sort_idx').on(table.eventId, table.sortOrder),
+    leaderTargetStaffCheck: check('marshal_section_leader_target_staff_check', sql`${table.leaderTargetStaff} > 0 and ${table.leaderTargetStaff} <= 20`)
   })
 );
 

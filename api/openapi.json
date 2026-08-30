@@ -22,6 +22,42 @@
     }
   ],
   "paths": {
+    "/admin/marshals/persons": {
+      "post": {
+        "operationId": "post_admin_marshals_person",
+        "tags": ["admin"],
+        "summary": "Create a marshal person with an atomically assigned helper number",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["firstName", "lastName"],
+                "properties": {
+                  "firstName": { "type": "string", "minLength": 1, "maxLength": 100 },
+                  "lastName": { "type": "string", "minLength": 1, "maxLength": 100 },
+                  "street": { "type": ["string", "null"], "maxLength": 200 },
+                  "zip": { "type": ["string", "null"], "maxLength": 20 },
+                  "city": { "type": ["string", "null"], "maxLength": 100 },
+                  "birthdate": { "type": ["string", "null"], "format": "date" },
+                  "phone": { "type": ["string", "null"], "maxLength": 200 },
+                  "email": { "type": ["string", "null"], "format": "email" },
+                  "shirtSize": { "type": ["string", "null"], "maxLength": 30 },
+                  "activityAreas": { "type": "array", "items": { "type": "string" }, "maxItems": 30 },
+                  "note": { "type": ["string", "null"], "maxLength": 4000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Person created; response person contains the backend-assigned helperNumber." },
+          "400": { "description": "Validation failed." }
+        },
+        "security": [{ "bearerAuth": [] }]
+      }
+    },
     "/inspection/context": {
       "get": {
         "operationId": "get_inspection_context",

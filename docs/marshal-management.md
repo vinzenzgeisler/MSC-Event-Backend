@@ -21,7 +21,7 @@ Der im Frontend ausgewählte Plan (regulär oder Notbesetzung) bestimmt ausschli
 ## API
 
 - `GET /admin/marshals/workspace?eventId=...`
-- `POST /admin/marshals/persons`
+- `POST /admin/marshals/persons` (die Helfernummer wird atomar und fortlaufend vom Backend vergeben; ein mitgesendeter Wert wird ignoriert)
 - `PATCH /admin/marshals/persons/{id}`
 - `PUT /admin/marshals/assignments/{personId}`
 - `PUT /admin/marshals/config`

@@ -16,6 +16,7 @@ const {
   validateMarshalAreaConfigInput,
   validateMarshalAssignmentInput,
   validateMarshalConfigInput,
+  validateMarshalPersonInput,
   validateMarshalPersonPatch,
   validateMarshalResetInput,
   validateMarshalShiftAssignmentInput
@@ -35,6 +36,10 @@ async function run() {
   assert.equal(hasPermission(admin, 'marshals.export'), true);
   const editor = getAuthContext(eventWithClaims({ sub: 'editor', 'cognito:groups': '["editor"]' }));
   assert.equal(hasPermission(editor, 'marshals.read'), false);
+
+  assert.deepEqual(validateMarshalPersonInput({ firstName: ' Lina ', lastName: ' Läufer ' }), { firstName: 'Lina', lastName: 'Läufer' });
+  assert.deepEqual(validateMarshalPersonInput({ helperNumber: 999, firstName: 'Lina', lastName: 'Läufer' }), { firstName: 'Lina', lastName: 'Läufer' }, 'client helper numbers must be ignored');
+  assert.throws(() => validateMarshalPersonInput({ firstName: '', lastName: 'Läufer' }));
 
   const normalizedPeople = indexMarshalPeopleByNormalizedName([
     { id: 'higher', helperNumber: 20, firstName: ' Lina ', lastName: 'Läufer' },

@@ -24,7 +24,6 @@ import {
 } from '../db/schema';
 
 const personInputSchema = z.object({
-  helperNumber: z.number().int().positive(),
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
   street: z.string().trim().max(200).nullable().optional(),
@@ -43,7 +42,7 @@ const personInputSchema = z.object({
   noDeployment: z.boolean().optional()
 });
 
-const personPatchSchema = personInputSchema.omit({ helperNumber: true }).partial();
+const personPatchSchema = personInputSchema.partial();
 const assignmentInputSchema = z.object({
   eventId: z.string().uuid(),
   contactOwner: z.string().trim().max(100).nullable().optional(),
@@ -292,7 +291,7 @@ export const resolveMarshalAssignmentSectionId = (
   return postSectionId ?? sectionId;
 };
 
-type ImportedPerson = z.infer<typeof personInputSchema> & { source: string };
+type ImportedPerson = z.infer<typeof personInputSchema> & { helperNumber: number; source: string };
 type ImportedParticipation = { helperNumber: number; contactOwner: string | null; wish: string | null; note: string | null; saturday: string; sunday: string };
 type ParsedWorkbook = {
   people: ImportedPerson[];
@@ -593,9 +592,16 @@ export const getMarshalWorkspace = async (eventId: string, search?: string, area
 
 export const createMarshalPerson = async (input: z.infer<typeof personInputSchema>, actorUserId: string | null) => {
   const db = await getDb();
-  const [created] = await db.insert(marshalPerson).values(input).returning();
-  await writeAuditLog(db as never, { actorUserId, action: 'marshal_person_created', entityType: 'marshal_person', entityId: created.id });
-  return created;
+  return db.transaction(async (tx) => {
+    // Person creation and Excel imports share this lock. The next helper number is
+    // therefore assigned atomically even when several managers create people at once.
+    await tx.execute(sql`LOCK TABLE marshal_person IN SHARE ROW EXCLUSIVE MODE`);
+    const [maximum] = await tx.select({ value: sql<number>`coalesce(max(${marshalPerson.helperNumber}), 0)` }).from(marshalPerson);
+    const helperNumber = Number(maximum?.value ?? 0) + 1;
+    const [created] = await tx.insert(marshalPerson).values({ ...input, helperNumber }).returning();
+    await writeAuditLog(tx as never, { actorUserId, action: 'marshal_person_created', entityType: 'marshal_person', entityId: created.id });
+    return created;
+  });
 };
 
 export const patchMarshalPerson = async (personId: string, input: z.infer<typeof personPatchSchema>, actorUserId: string | null) => {

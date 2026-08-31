@@ -41,7 +41,7 @@ const listEntriesQuerySchema = z.object({
   classId: z.string().uuid().optional(),
   acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
   registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
-  paymentStatus: z.enum(['due', 'paid']).optional(),
+  paymentStatus: z.enum(['due', 'paid', 'not_required']).optional(),
   q: z.string().min(1).optional(),
   checkinIdVerified: z.boolean().optional(),
   techStatus: z.enum(['pending', 'passed', 'failed']).optional(),
@@ -503,7 +503,8 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
   const pageRows = filteredRows.slice(offset, offset + paginationQuery.limit);
 
   const mapped = await Promise.all(pageRows.map(async ({ row, paymentStatus }) => {
-    const completed = row.acceptanceStatus === 'accepted' && paymentStatus === 'paid';
+    const completed =
+      row.acceptanceStatus === 'accepted' && (paymentStatus === 'paid' || paymentStatus === 'not_required');
     const vehicleLabel = toVehicleLabel(row.vehicleMake, row.vehicleModel, row.startNumberNorm);
     const vehicleThumbUrl = await getVehicleThumbUrl(row.vehicleImageS3Key);
     const shouldRedactSensitiveFields = redactSensitiveFields || row.driverProcessingRestricted || row.driverObjectionFlag;
@@ -2025,7 +2026,7 @@ export const patchEntryPaymentStatus = async (
           source: 'entry_payment_status_patch',
           entryId: current.id
         },
-        paymentStatus: 'due',
+        paymentStatus: deriveInvoicePaymentStatus(current.entryFeeCents ?? 0, 0),
         paidAmountCents: 0,
         updatedAt: now
       })
@@ -2247,7 +2248,11 @@ export const patchEntryPaymentAmounts = async (
     }
   }
 
-  const paymentStatus = deriveInvoicePaymentStatus(nextTotalCents, nextPaidAmountCents);
+  const paymentStatus = deriveInvoicePaymentStatus(
+    nextTotalCents,
+    nextPaidAmountCents,
+    recalculatedInvoice.paymentStatus === 'not_required'
+  );
   const amountOpenCents = Math.max(0, nextTotalCents - nextPaidAmountCents);
 
   await db

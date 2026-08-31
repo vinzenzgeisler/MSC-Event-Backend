@@ -44,7 +44,7 @@ import { getEntryConfirmationDefaults } from './adminConfig';
 type RecipientFilter = {
   acceptanceStatus?: 'pending' | 'shortlist' | 'accepted' | 'rejected' | 'withdrawn';
   registrationStatus?: 'submitted_unverified' | 'submitted_verified';
-  paymentStatus?: 'due' | 'paid';
+  paymentStatus?: 'due' | 'paid' | 'not_required';
   classId?: string;
   allEntries?: boolean;
 };
@@ -97,7 +97,7 @@ const queueMailSchema = z
         allEntries: z.boolean().optional(),
         acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
         registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
-        paymentStatus: z.enum(['due', 'paid']).optional(),
+        paymentStatus: z.enum(['due', 'paid', 'not_required']).optional(),
         classId: z.string().uuid().optional()
       })
       .optional()
@@ -150,7 +150,7 @@ const broadcastSchema = z.object({
   classId: z.string().uuid().optional(),
   acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
   registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
-  paymentStatus: z.enum(['due', 'paid']).optional(),
+  paymentStatus: z.enum(['due', 'paid', 'not_required']).optional(),
   subjectOverride: z.string().min(1).optional()
 });
 
@@ -242,7 +242,7 @@ const communicationSendSchema = z
         allEntries: z.boolean().optional(),
         acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
         registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
-        paymentStatus: z.enum(['due', 'paid']).optional(),
+        paymentStatus: z.enum(['due', 'paid', 'not_required']).optional(),
         classId: z.string().uuid().optional()
       })
       .optional()
@@ -267,7 +267,7 @@ const resolveRecipientsSchema = z.object({
   classId: z.string().uuid().optional(),
   acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
   registrationStatus: z.enum(['submitted_unverified', 'submitted_verified']).optional(),
-  paymentStatus: z.enum(['due', 'paid']).optional(),
+  paymentStatus: z.enum(['due', 'paid', 'not_required']).optional(),
   driverPersonIds: z.array(z.string().uuid()).optional(),
   entryIds: z.array(z.string().uuid()).optional(),
   additionalEmails: z.array(z.string().email()).optional()
@@ -278,7 +278,7 @@ const searchRecipientsSchema = z.object({
   q: z.string().trim().optional(),
   classId: z.string().uuid().optional(),
   acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected', 'withdrawn']).optional(),
-  paymentStatus: z.enum(['due', 'paid']).optional(),
+  paymentStatus: z.enum(['due', 'paid', 'not_required']).optional(),
   limit: z.number().int().min(1).max(100).optional().default(20)
 });
 
@@ -1701,7 +1701,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     return { queued: 0, skipped: 1, reason: 'not_allowed', outboxIds: [] as string[] };
   }
 
-  if (current.paymentStatus === 'paid') {
+  if (current.paymentStatus !== 'due') {
     return { queued: 0, skipped: 1, reason: 'not_allowed', outboxIds: [] as string[] };
   }
 
@@ -2443,7 +2443,14 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
   if (input.paymentStatus) {
     conditions.push(eq(invoice.paymentStatus, input.paymentStatus));
   } else {
-    conditions.push(or(eq(invoice.paymentStatus, 'due'), eq(invoice.paymentStatus, 'paid'), isNull(invoice.paymentStatus)) as SQL<unknown>);
+    conditions.push(
+      or(
+        eq(invoice.paymentStatus, 'due'),
+        eq(invoice.paymentStatus, 'paid'),
+        eq(invoice.paymentStatus, 'not_required'),
+        isNull(invoice.paymentStatus)
+      ) as SQL<unknown>
+    );
   }
 
   const rows = await query.where(and(...conditions));

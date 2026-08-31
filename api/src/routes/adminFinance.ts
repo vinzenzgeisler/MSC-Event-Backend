@@ -27,7 +27,7 @@ const recalcSchema = z.object({
 
 const listInvoiceFiltersSchema = z.object({
   eventId: z.string().uuid(),
-  paymentStatus: z.enum(['due', 'paid']).optional(),
+  paymentStatus: z.enum(['due', 'paid', 'not_required']).optional(),
   driverPersonId: z.string().uuid().optional(),
   cursor: z.string().optional(),
   limit: z.number().int().min(1).max(100).optional(),
@@ -348,7 +348,7 @@ const recalculateInvoicesUsing = async (
         driverPersonId: row.driverPersonId,
         totalCents: row.totalCents,
         pricingSnapshot: row.snapshot,
-        paymentStatus: 'due',
+        paymentStatus: deriveInvoicePaymentStatus(row.totalCents, 0, row.snapshot.lines.length > 0),
         updatedAt: now
       })
       .onConflictDoUpdate({
@@ -356,7 +356,13 @@ const recalculateInvoicesUsing = async (
         set: {
           totalCents: row.totalCents,
           pricingSnapshot: row.snapshot,
-          paymentStatus: sql`case when ${row.totalCents} > 0 and ${invoice.paidAmountCents} >= ${row.totalCents} then 'paid' else 'due' end`,
+          paymentStatus: sql`case
+            when ${row.totalCents} = 0
+              and ${row.snapshot.lines.length > 0}
+              and coalesce(${invoice.paidAmountCents}, 0) = 0 then 'not_required'
+            when ${row.totalCents} > 0 and ${invoice.paidAmountCents} >= ${row.totalCents} then 'paid'
+            else 'due'
+          end`,
           paidAt: sql`case when ${row.totalCents} > 0 and ${invoice.paidAmountCents} >= ${row.totalCents} then ${invoice.paidAt} else null end`,
           updatedAt: now
         }

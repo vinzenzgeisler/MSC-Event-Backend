@@ -1,12 +1,18 @@
+export type PaymentStatus = 'due' | 'paid' | 'not_required';
+
 export const deriveInvoicePaymentStatus = (
   totalCents: number | null | undefined,
-  paidAmountCents: number | null | undefined
-): 'due' | 'paid' => {
+  paidAmountCents: number | null | undefined,
+  hasAcceptedEntries = true
+): PaymentStatus => {
+  if (totalCents === null || totalCents === undefined) {
+    return 'due';
+  }
   const effectiveTotalCents = Math.max(0, totalCents ?? 0);
   const effectivePaidAmountCents = Math.max(0, paidAmountCents ?? 0);
 
   if (effectiveTotalCents === 0) {
-    return 'due';
+    return hasAcceptedEntries && effectivePaidAmountCents === 0 ? 'not_required' : 'due';
   }
 
   return effectivePaidAmountCents >= effectiveTotalCents ? 'paid' : 'due';
@@ -16,7 +22,7 @@ export const deriveEntryPaymentStatus = (
   entryTotalCents: number | null | undefined,
   acceptanceStatus: string | null | undefined,
   invoicePaymentStatus: string | null | undefined
-): 'due' | 'paid' | null => {
+): PaymentStatus | null => {
   if (acceptanceStatus === 'rejected' || acceptanceStatus === 'withdrawn') {
     return null;
   }
@@ -24,7 +30,7 @@ export const deriveEntryPaymentStatus = (
     return 'due';
   }
   if (Math.max(0, entryTotalCents ?? 0) === 0) {
-    return 'paid';
+    return 'not_required';
   }
   if (acceptanceStatus !== 'accepted') {
     return 'due';

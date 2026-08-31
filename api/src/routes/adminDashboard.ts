@@ -488,7 +488,7 @@ export const getDashboardSummary = async (eventId: string) => {
       .select({
         eligibleTotal: sql<number>`count(${entry.id})::int`,
         paidTotal: sql<number>`count(${entry.id}) filter (where ${invoice.paymentStatus} = 'paid')::int`,
-        dueTotal: sql<number>`count(${entry.id}) filter (where ${invoice.id} is null or ${invoice.paymentStatus} != 'paid')::int`
+        dueTotal: sql<number>`count(${entry.id}) filter (where ${invoice.id} is null or ${invoice.paymentStatus} = 'due')::int`
       })
       .from(entry)
       .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))

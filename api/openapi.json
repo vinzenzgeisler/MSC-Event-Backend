@@ -1915,7 +1915,8 @@
                         "type": "string",
                         "enum": [
                           "due",
-                          "paid"
+                          "paid",
+                          "not_required"
                         ]
                       },
                       "classId": {
@@ -5467,7 +5468,8 @@
                       "type": "string",
                       "enum": [
                         "paid",
-                        "due"
+                        "due",
+                        "not_required"
                       ]
                     },
                     "paidAmountCents": {
@@ -6780,7 +6782,8 @@
                       "type": "string",
                       "enum": [
                         "due",
-                        "paid"
+                        "paid",
+                        "not_required"
                       ]
                     },
                     "totalCents": {
@@ -8154,7 +8157,8 @@
               "type": "string",
               "enum": [
                 "due",
-                "paid"
+                "paid",
+                "not_required"
               ]
             }
           },
@@ -8635,7 +8639,8 @@
                         "type": "string",
                         "enum": [
                           "due",
-                          "paid"
+                          "paid",
+                          "not_required"
                         ]
                       },
                       "classId": {
@@ -10772,7 +10777,8 @@
             "type": "string",
             "enum": [
               "due",
-              "paid"
+              "paid",
+              "not_required"
             ]
           },
           "driverPersonIds": {

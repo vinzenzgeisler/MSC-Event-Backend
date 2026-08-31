@@ -796,11 +796,17 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     invoiceTotalCents: current.invoiceTotalCents,
     provisionalTotalCents
   });
-  const isPaymentApplicable = current.acceptanceStatus !== 'rejected' && current.acceptanceStatus !== 'withdrawn';
-  const totalCents = isPaymentApplicable ? (resolvedTotalCents ?? 0) : null;
+  const isInactiveEntry = current.acceptanceStatus === 'rejected' || current.acceptanceStatus === 'withdrawn';
+  const hasRecordedPayment = (current.invoicePaidAmountCents ?? 0) > 0;
+  const isPaymentApplicable = !isInactiveEntry || hasRecordedPayment;
+  const totalCents = isPaymentApplicable
+    ? resolvedTotalCents ?? current.invoiceTotalCents ?? current.invoicePaidAmountCents ?? 0
+    : null;
   const paidAmountCents =
     !isPaymentApplicable
       ? null
+      : isInactiveEntry
+      ? current.invoicePaidAmountCents ?? 0
       : current.acceptanceStatus !== 'accepted'
       ? 0
       : current.invoicePaymentStatus === 'paid'

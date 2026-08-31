@@ -4,7 +4,7 @@ import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { classPricingRule, entry, event, eventClass, eventPricingRule, invoice, invoicePayment } from '../db/schema';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
-import { deriveInvoicePaymentStatus } from '../domain/invoiceStatus';
+import { deriveInvoicePaymentStatus, resolveRecalculatedInvoiceTotal } from '../domain/invoiceStatus';
 import { listManualEntryTotalOverrides } from '../domain/pricingSnapshot';
 import { parseListQuery, paginateAndSortRows } from '../http/pagination';
 
@@ -304,6 +304,8 @@ const recalculateInvoicesUsing = async (
   const existingInvoices = await db
     .select({
       driverPersonId: invoice.driverPersonId,
+      totalCents: invoice.totalCents,
+      paidAmountCents: invoice.paidAmountCents,
       pricingSnapshot: invoice.pricingSnapshot
     })
     .from(invoice)
@@ -311,6 +313,7 @@ const recalculateInvoicesUsing = async (
   const manualOverridesByDriver = new Map(
     existingInvoices.map((row) => [row.driverPersonId, listManualEntryTotalOverrides(row.pricingSnapshot)])
   );
+  const existingInvoiceByDriver = new Map(existingInvoices.map((row) => [row.driverPersonId, row]));
 
   const pricingRows = await loadPricingInputs(eventId, driverPersonId, db);
   const computed = buildPricingSnapshot(
@@ -338,9 +341,34 @@ const recalculateInvoicesUsing = async (
           }
         ]
       : computed;
+  const reconciledComputed = normalizedComputed.map((row) => {
+    const previous = existingInvoiceByDriver.get(row.driverPersonId);
+    const totalCents = resolveRecalculatedInvoiceTotal(
+      row.totalCents,
+      previous?.totalCents,
+      previous?.paidAmountCents
+    );
+    if (totalCents === row.totalCents) {
+      return row;
+    }
+    return {
+      ...row,
+      totalCents,
+      snapshot: {
+        ...row.snapshot,
+        computedTotalCents: row.totalCents,
+        totalCents,
+        settlementPreserved: {
+          reason: 'recorded_payments_exceed_recalculated_total',
+          previousTotalCents: previous?.totalCents ?? 0,
+          paidAmountCents: previous?.paidAmountCents ?? 0
+        }
+      }
+    };
+  });
 
   const now = new Date();
-  for (const row of normalizedComputed) {
+  for (const row of reconciledComputed) {
     await db
       .insert(invoice)
       .values({
@@ -375,12 +403,12 @@ const recalculateInvoicesUsing = async (
     action: 'invoices_recalculated',
     entityType: 'invoice_batch',
     payload: {
-      recalculated: normalizedComputed.length,
+      recalculated: reconciledComputed.length,
       scopedDriverPersonId: driverPersonId ?? null
     }
   });
 
-  return { recalculated: normalizedComputed.length };
+  return { recalculated: reconciledComputed.length };
 };
 
 export const recalculateInvoices = async (eventId: string, input: RecalcInput, actorUserId: string | null) => {

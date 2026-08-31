@@ -1,5 +1,17 @@
 export type PaymentStatus = 'due' | 'paid' | 'not_required';
 
+export const resolveRecalculatedInvoiceTotal = (
+  computedTotalCents: number,
+  previousTotalCents: number | null | undefined,
+  paidAmountCents: number | null | undefined
+): number => {
+  const computedTotal = Math.max(0, computedTotalCents);
+  const previousTotal = Math.max(0, previousTotalCents ?? 0);
+  const paidAmount = Math.max(0, paidAmountCents ?? 0);
+
+  return paidAmount > computedTotal && previousTotal > computedTotal ? previousTotal : computedTotal;
+};
+
 export const deriveInvoicePaymentStatus = (
   totalCents: number | null | undefined,
   paidAmountCents: number | null | undefined,
@@ -23,8 +35,11 @@ export const deriveEntryPaymentStatus = (
   acceptanceStatus: string | null | undefined,
   invoicePaymentStatus: string | null | undefined
 ): PaymentStatus | null => {
-  if (acceptanceStatus === 'rejected' || acceptanceStatus === 'withdrawn') {
+  if (acceptanceStatus === 'rejected') {
     return null;
+  }
+  if (acceptanceStatus === 'withdrawn') {
+    return invoicePaymentStatus === 'paid' ? 'paid' : null;
   }
   if (entryTotalCents === null || entryTotalCents === undefined) {
     return 'due';

@@ -3,8 +3,14 @@ const assert = require('node:assert/strict');
 const {
   deriveEntryPaymentStatus,
   deriveInvoicePaymentStatus,
+  resolveRecalculatedInvoiceTotal,
   resolveEntryTotalCents
 } = require('../dist/domain/invoiceStatus.js');
+
+assert.equal(resolveRecalculatedInvoiceTotal(0, 15000, 15000), 15000);
+assert.equal(resolveRecalculatedInvoiceTotal(8000, 23000, 15000), 23000);
+assert.equal(resolveRecalculatedInvoiceTotal(15000, 15000, 0), 15000);
+assert.equal(resolveRecalculatedInvoiceTotal(0, 0, 15000), 0);
 
 assert.equal(deriveInvoicePaymentStatus(15000, 0), 'due');
 assert.equal(deriveInvoicePaymentStatus(15000, 14999), 'due');
@@ -21,8 +27,8 @@ assert.equal(deriveEntryPaymentStatus(0, 'accepted', 'due'), 'not_required');
 assert.equal(deriveEntryPaymentStatus(0, 'accepted', 'not_required'), 'not_required');
 assert.equal(deriveEntryPaymentStatus(0, 'rejected', 'paid'), null);
 assert.equal(deriveEntryPaymentStatus(15000, 'rejected', 'paid'), null);
-assert.equal(deriveEntryPaymentStatus(0, 'withdrawn', 'paid'), null);
-assert.equal(deriveEntryPaymentStatus(15000, 'withdrawn', 'paid'), null);
+assert.equal(deriveEntryPaymentStatus(0, 'withdrawn', 'paid'), 'paid');
+assert.equal(deriveEntryPaymentStatus(15000, 'withdrawn', 'paid'), 'paid');
 assert.equal(deriveEntryPaymentStatus(null, 'pending', 'due'), 'due');
 assert.equal(deriveEntryPaymentStatus(undefined, 'accepted', 'paid'), 'due');
 assert.equal(deriveEntryPaymentStatus(7000, 'pending', 'paid'), 'due');

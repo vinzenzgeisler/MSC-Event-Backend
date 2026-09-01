@@ -998,8 +998,12 @@ export const renderMailContract = (input: RenderMailContractInput): RenderMailCo
   const required = REQUIRED_PLACEHOLDERS_BY_TEMPLATE[input.templateKey] ?? [];
   const missing = required.filter((name) => !isPresentValue(templateData[name]));
 
-  const subjectTemplate = adjustedProcessCopy?.subjectTemplate ?? input.subjectTemplate;
-  const bodyTextTemplate = adjustedProcessCopy?.bodyTextTemplate ?? input.bodyTextTemplate;
+  const subjectTemplate = input.hasContentOverride
+    ? input.subjectTemplate
+    : adjustedProcessCopy?.subjectTemplate ?? input.subjectTemplate;
+  const bodyTextTemplate = input.hasContentOverride
+    ? input.bodyTextTemplate
+    : adjustedProcessCopy?.bodyTextTemplate ?? input.bodyTextTemplate;
   const subject = renderString(subjectTemplate, templateData, false);
   const bodyText = renderString(bodyTextTemplate, templateData, false);
   const htmlTemplateRaw = (input.bodyHtmlTemplate ?? '').trim();

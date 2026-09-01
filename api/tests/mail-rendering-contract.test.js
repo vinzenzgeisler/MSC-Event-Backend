@@ -199,6 +199,26 @@ const buildBasePayload = () => ({
   assert.equal((rendered.bodyTextRendered.match(/Mit freundlichen Grüßen/g) ?? []).length, 0);
 }
 
+// Explicit process-mail content must not be replaced by the localized default copy.
+{
+  const rendered = renderMailContract({
+    templateKey: 'accepted_paid_completed',
+    subjectTemplate: 'Klassenwechsel bestätigt - {{eventName}}',
+    bodyTextTemplate: 'Hallo {{driverName}},\n\nKlasse 6 wurde durch Klasse 5 ersetzt.',
+    bodyHtmlTemplate: null,
+    data: {
+      ...buildBasePayload(),
+      locale: 'de',
+      entryCount: 2,
+      entrySummaries: ['Klasse 1 · Startnummer 77', 'Klasse 5 · Startnummer 67']
+    },
+    hasContentOverride: true
+  });
+  assert.equal(rendered.subjectRendered, 'Klassenwechsel bestätigt - 12. Oberlausitzer Dreieck');
+  assert.match(rendered.bodyTextRendered, /Klasse 6 wurde durch Klasse 5 ersetzt/);
+  assert.equal(rendered.bodyTextRendered.includes('Zahlung ist eingegangen'), false);
+}
+
 // Stored campaign copy owns its signoff; section headings get clear spacing and separators.
 {
   const rendered = renderMailContract({

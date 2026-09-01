@@ -90,3 +90,27 @@ const second = row({
   assert.match(source, /inner join "class" ec on ec\.id = e\.class_id/);
   assert.equal(source.includes('inner join event_class ec'), false);
 }
+
+{
+  const migration = fs.readFileSync(
+    require.resolve('../migrations/0072_merge_hartmann_weck_registrations.sql'),
+    'utf8'
+  );
+  assert.match(migration, /hartmann-class8-class6/);
+  assert.match(migration, /weck-class6-to-class5/);
+  assert.match(migration, /update "entry_run_group_reservation"/);
+  assert.match(migration, /delete from "entry_start_number_reservation"/);
+  assert.match(migration, /update "registration_invitation"/);
+  assert.match(migration, /'doublestarter_migration_notice'/);
+  assert.match(migration, /'accepted_paid_completed'/);
+
+  for (const excludedMichaelIdentifier of [
+    '5fcc90e1-60d6-4ec5-95f5-ec970c95aeaf',
+    '76186944-6d48-4d19-ba0a-8bcf6a12ab4e',
+    '78534a31-30ac-43b1-b375-81e365325828',
+    'e3c899f3-f8a5-4da7-af5e-a1d0f23ce12e',
+    '3b026f6b-ca01-4848-a560-dbb641f57378'
+  ]) {
+    assert.equal(migration.includes(excludedMichaelIdentifier), false);
+  }
+}

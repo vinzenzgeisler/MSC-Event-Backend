@@ -260,7 +260,7 @@ const getDeviceTokenFromHeaders = (headers: Record<string, string | undefined>):
   return match?.[1]?.trim() ?? null;
 };
 
-const resolveDeviceByToken = async (deviceToken: string) => {
+export const resolveDeviceByToken = async (deviceToken: string) => {
   const db = await getDb();
   const tokenHash = hashToken(deviceToken);
   const rows = await db
@@ -282,7 +282,13 @@ const resolveDeviceByToken = async (deviceToken: string) => {
 const expireOpenSigningSessions = async (db: Awaited<ReturnType<typeof getDb>>, now = new Date()) => {
   await db
     .update(signingSession)
-    .set({ status: 'cancelled', updatedAt: now, errorLast: 'SIGNING_SESSION_EXPIRED' })
+    .set({
+      status: 'cancelled',
+      workflowStage: 'cancelled',
+      draftPayload: null,
+      updatedAt: now,
+      errorLast: 'SIGNING_SESSION_EXPIRED'
+    })
     .where(and(sql`${signingSession.status} in ('pending', 'displayed')`, sql`${signingSession.expiresAt} <= ${now}`));
 };
 
@@ -748,7 +754,7 @@ export const cancelSigningSession = async (sessionId: string, actorUserId: strin
   const db = await getDb();
   const [updated] = await db
     .update(signingSession)
-    .set({ status: 'cancelled', updatedAt: new Date() })
+    .set({ status: 'cancelled', workflowStage: 'cancelled', draftPayload: null, updatedAt: new Date() })
     .where(and(eq(signingSession.id, sessionId), sql`${signingSession.status} in ('pending', 'displayed')`))
     .returning();
   if (!updated) {
@@ -818,7 +824,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
   if (current.expiresAt <= now) {
     await db
       .update(signingSession)
-      .set({ status: 'cancelled', updatedAt: now, errorLast: 'SIGNING_SESSION_EXPIRED' })
+      .set({ status: 'cancelled', workflowStage: 'cancelled', draftPayload: null, updatedAt: now, errorLast: 'SIGNING_SESSION_EXPIRED' })
       .where(eq(signingSession.id, current.id));
     throw new Error('SIGNING_SESSION_EXPIRED');
   }
@@ -936,6 +942,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     .update(signingSession)
     .set({
       status: 'completed',
+      workflowStage: 'completed',
       displayedAt: new Date(input.displayedAt),
       signedAt,
       documentId: docRow?.id ?? null,
@@ -992,7 +999,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
   return updated;
 };
 
-const queueWaiverSignedMail = async (
+export const queueWaiverSignedMail = async (
   db: Awaited<ReturnType<typeof getDb>>,
   input: {
     toEmail: string;

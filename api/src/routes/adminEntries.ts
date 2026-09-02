@@ -9,6 +9,7 @@ import {
   document,
   emailOutbox,
   entry,
+  entryCharityCodriver,
   event,
   eventClass,
   eventPricingRule,
@@ -671,6 +672,22 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
           .where(eq(person.id, current.codriverPersonId))
           .limit(1);
   const codriver = codriverRows[0] ?? null;
+  const charityCodriverRows = await db
+    .select({
+      registrationId: entryCharityCodriver.id,
+      personId: person.id,
+      firstName: person.firstName,
+      lastName: person.lastName,
+      email: person.email,
+      birthdate: person.birthdate,
+      processingRestricted: person.processingRestricted,
+      objectionFlag: person.objectionFlag,
+      createdAt: entryCharityCodriver.createdAt
+    })
+    .from(entryCharityCodriver)
+    .innerJoin(person, eq(entryCharityCodriver.personId, person.id))
+    .where(and(eq(entryCharityCodriver.entryId, current.id), eq(entryCharityCodriver.status, 'active')))
+    .orderBy(asc(entryCharityCodriver.createdAt));
   const backupVehicleRows =
     current.backupVehicleId === null
       ? []
@@ -745,7 +762,10 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .where(and(eq(entry.eventId, current.eventId), eq(entry.driverPersonId, current.driverPersonId), sql`${entry.deletedAt} is null`))
     .orderBy(asc(entry.createdAt), asc(entry.id));
 
-  const relatedEntryIds = driverEntryRows.map((row) => row.id).filter((id) => id !== entryId);
+  const relatedEntryIds = driverEntryRows
+    .filter((row) => row.acceptanceStatus === 'accepted')
+    .map((row) => row.id)
+    .filter((id) => id !== entryId);
   const activeDriverEntryRows = driverEntryRows.filter(
     (row) => row.acceptanceStatus !== 'rejected' && row.acceptanceStatus !== 'withdrawn'
   );
@@ -897,6 +917,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         },
         codriver: codriver
           ? {
+              id: codriver.id,
               firstName: codriverRestricted ? null : codriver.firstName,
               lastName: codriverRestricted ? null : codriver.lastName,
               email: codriverRestricted ? null : codriver.email,
@@ -912,7 +933,19 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
               emergencyContactPhone: codriverRestricted ? null : codriver.emergencyContactPhone,
               motorsportHistory: codriverRestricted ? null : codriver.motorsportHistory
             }
-          : null
+          : null,
+        charityCodrivers: charityCodriverRows.map((item) => {
+          const restricted = redactSensitiveFields || item.processingRestricted || item.objectionFlag;
+          return {
+            registrationId: item.registrationId,
+            personId: item.personId,
+            firstName: restricted ? null : item.firstName,
+            lastName: restricted ? null : item.lastName,
+            email: restricted ? null : item.email,
+            birthdate: restricted ? null : item.birthdate,
+            createdAt: item.createdAt
+          };
+        })
       },
       vehicle: {
         vehicleType: current.vehicleType,

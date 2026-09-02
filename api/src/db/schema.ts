@@ -31,6 +31,7 @@ export const event = pgTable(
     paymentDueAt: timestamp('payment_due_at', { withTimezone: true }),
     contactEmail: text('contact_email'),
     websiteUrl: text('website_url'),
+    stampCardAccentColor: text('stamp_card_accent_color').notNull().default('#0F6B65'),
     entryConfirmationConfig: jsonb('entry_confirmation_config').$type<EntryConfirmationConfig>().notNull().default(sql`'{}'::jsonb`),
     openedAt: timestamp('opened_at', { withTimezone: true }),
     closedAt: timestamp('closed_at', { withTimezone: true }),
@@ -42,7 +43,11 @@ export const event = pgTable(
     statusCheck: check('event_status_check', sql`${table.status} in ('draft', 'open', 'closed', 'archived')`),
     singleCurrentEvent: uniqueIndex('event_single_current_unique')
       .on(table.isCurrent)
-      .where(sql`${table.isCurrent} = true`)
+      .where(sql`${table.isCurrent} = true`),
+    stampCardAccentColorCheck: check(
+      'event_stamp_card_accent_color_check',
+      sql`${table.stampCardAccentColor} ~ '^#[0-9A-Fa-f]{6}$'`
+    )
   })
 );
 
@@ -446,6 +451,9 @@ export const consentEvidence = pgTable(
     entryId: uuid('entry_id')
       .notNull()
       .references(() => entry.id, { onDelete: 'cascade' }),
+    personId: uuid('person_id').references(() => person.id, { onDelete: 'set null' }),
+    participantRole: text('participant_role'),
+    terminalSessionId: uuid('terminal_session_id'),
     consentVersion: text('consent_version').notNull(),
     consentTextHash: text('consent_text_hash').notNull(),
     locale: text('locale').notNull(),
@@ -458,6 +466,7 @@ export const consentEvidence = pgTable(
     guardianFullName: text('guardian_full_name'),
     guardianEmail: text('guardian_email'),
     guardianPhone: text('guardian_phone'),
+    guardianRelationship: text('guardian_relationship'),
     guardianConsentAccepted: boolean('guardian_consent_accepted').notNull().default(false),
     capturedAt: timestamp('captured_at', { withTimezone: true }).notNull(),
     isLegacy: boolean('is_legacy').notNull().default(false),
@@ -465,7 +474,12 @@ export const consentEvidence = pgTable(
   },
   (table) => ({
     entryIndex: index('consent_evidence_entry_idx').on(table.entryId, table.createdAt),
-    sourceCheck: check('consent_evidence_source_check', sql`${table.consentSource} in ('public_form', 'admin_ui')`)
+    personIndex: index('consent_evidence_person_event_idx').on(table.personId, table.capturedAt),
+    sourceCheck: check('consent_evidence_source_check', sql`${table.consentSource} in ('public_form', 'admin_ui')`),
+    participantRoleCheck: check(
+      'consent_evidence_participant_role_check',
+      sql`${table.participantRole} is null or ${table.participantRole} in ('driver', 'codriver', 'charity_codriver')`
+    )
   })
 );
 
@@ -869,13 +883,19 @@ export const signingSession = pgTable(
       .notNull()
       .references(() => person.id),
     sourceEntryId: uuid('source_entry_id').references(() => entry.id, { onDelete: 'set null' }),
+    workflowType: text('workflow_type').notNull().default('waiver_signature'),
+    workflowStage: text('workflow_stage').notNull().default('ready_to_sign'),
     status: text('status').notNull().default('pending'),
     sessionPayload: jsonb('session_payload').notNull(),
     precheckPayload: jsonb('precheck_payload').notNull(),
     signerPayload: jsonb('signer_payload').notNull(),
+    draftPayload: jsonb('draft_payload'),
+    resultPayload: jsonb('result_payload'),
     operatorUserId: text('operator_user_id'),
     operatorDisplay: text('operator_display'),
     displayedAt: timestamp('displayed_at', { withTimezone: true }),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
     signedAt: timestamp('signed_at', { withTimezone: true }),
     documentId: uuid('document_id').references(() => document.id, { onDelete: 'set null' }),
     evidenceAuditS3Key: text('evidence_audit_s3_key'),
@@ -888,7 +908,69 @@ export const signingSession = pgTable(
     deviceStatusIndex: index('signing_session_device_status_idx').on(table.deviceSessionId, table.status, table.createdAt),
     driverIndex: index('signing_session_driver_idx').on(table.eventId, table.driverPersonId, table.createdAt),
     statusExpiresIndex: index('signing_session_status_expires_idx').on(table.status, table.expiresAt),
-    statusCheck: check('signing_session_status_check', sql`${table.status} in ('pending', 'displayed', 'completed', 'cancelled', 'failed')`)
+    statusCheck: check('signing_session_status_check', sql`${table.status} in ('pending', 'displayed', 'completed', 'cancelled', 'failed')`),
+    workflowTypeCheck: check(
+      'signing_session_workflow_type_check',
+      sql`${table.workflowType} in ('waiver_signature', 'regular_codriver_registration', 'charity_codriver_registration')`
+    ),
+    workflowStageCheck: check(
+      'signing_session_workflow_stage_check',
+      sql`${table.workflowStage} in ('collecting_data', 'awaiting_operator_approval', 'ready_to_sign', 'completed', 'cancelled', 'failed')`
+    )
+  })
+);
+
+export const entryCharityCodriver = pgTable(
+  'entry_charity_codriver',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => entry.id, { onDelete: 'cascade' }),
+    personId: uuid('person_id')
+      .notNull()
+      .references(() => person.id),
+    terminalSessionId: uuid('terminal_session_id').references(() => signingSession.id, { onDelete: 'set null' }),
+    status: text('status').notNull().default('active'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    activeUnique: uniqueIndex('entry_charity_codriver_active_unique')
+      .on(table.eventId, table.entryId, table.personId)
+      .where(sql`${table.status} = 'active'`),
+    entryIndex: index('entry_charity_codriver_entry_idx').on(table.entryId, table.status, table.createdAt),
+    statusCheck: check('entry_charity_codriver_status_check', sql`${table.status} in ('active', 'revoked')`)
+  })
+);
+
+export const codriverInvitation = pgTable(
+  'codriver_invitation',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    sourceEntryId: uuid('source_entry_id').notNull().references(() => entry.id, { onDelete: 'cascade' }),
+    entryIds: uuid('entry_ids').array().notNull(),
+    tokenHash: text('token_hash').notNull(),
+    recipientName: text('recipient_name'),
+    recipientEmailNorm: text('recipient_email_norm'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedBy: text('revoked_by'),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    codriverPersonId: uuid('codriver_person_id').references(() => person.id, { onDelete: 'set null' }),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex('codriver_invitation_token_hash_unique').on(table.tokenHash),
+    sourceEntryIndex: index('codriver_invitation_source_entry_idx').on(table.sourceEntryId, table.createdAt),
+    entryIdsNotEmpty: check('codriver_invitation_entry_ids_not_empty_check', sql`cardinality(${table.entryIds}) > 0`)
   })
 );
 

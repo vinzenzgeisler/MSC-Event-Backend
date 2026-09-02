@@ -210,6 +210,128 @@
         }
       }
     },
+    "/inspection/participants/{eventId}/{personId}": {
+      "get": {
+        "operationId": "get_inspection_participant",
+        "tags": ["admin"],
+        "summary": "Load all accepted starts for one driver within an assigned event",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "eventId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "personId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": { "200": { "description": "Participant and accepted inspection entries" }, "404": { "description": "Participant not found" } }
+      }
+    },
+    "/admin/stamp-cards/export": {
+      "post": {
+        "operationId": "post_admin_stamp_cards_export",
+        "tags": ["admin"],
+        "summary": "Generate the 2 by 5 pre-cut A4 stamp-card PDF",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "Base64 encoded PDF plus card and page counts" }, "400": { "description": "Invalid slot or subject selection" } }
+      }
+    },
+    "/admin/entries/{id}/codriver-invitations": {
+      "get": {
+        "operationId": "get_admin_entry_codriver_invitations",
+        "tags": ["admin"],
+        "summary": "List remote regular co-driver invitations created for an entry",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Invitation history" } }
+      },
+      "post": {
+        "operationId": "post_admin_entry_codriver_invitation",
+        "tags": ["admin"],
+        "summary": "Create a personal data-entry link for a regular co-driver; waiver signing remains onsite",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "201": { "description": "Invitation and one-time URL created" }, "409": { "description": "Selected entries are not eligible" } }
+      }
+    },
+    "/admin/codriver-invitations/{id}/revoke": {
+      "post": {
+        "operationId": "post_admin_codriver_invitation_revoke",
+        "tags": ["admin"],
+        "summary": "Revoke an unused regular co-driver invitation",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Invitation revoked" }, "404": { "description": "Active invitation not found" } }
+      }
+    },
+    "/public/codriver-invitations/{token}": {
+      "get": {
+        "operationId": "get_public_codriver_invitation",
+        "tags": ["public"],
+        "summary": "Load an active personal regular co-driver invitation",
+        "parameters": [{ "name": "token", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Event, driver and selected starts" }, "404": { "description": "Invitation invalid" }, "409": { "description": "Invitation unavailable" } }
+      }
+    },
+    "/public/codriver-invitations/{token}/complete": {
+      "post": {
+        "operationId": "post_public_codriver_invitation_complete",
+        "tags": ["public"],
+        "summary": "Store regular co-driver contact data and link all selected starts without accepting or signing the waiver",
+        "parameters": [{ "name": "token", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Co-driver assigned; waiverRequiredOnSite is true" }, "400": { "description": "Invalid participant data" }, "409": { "description": "Invitation no longer usable" } }
+      }
+    },
+    "/admin/terminal/sessions": {
+      "post": {
+        "operationId": "post_admin_terminal_participant_session",
+        "tags": ["admin"],
+        "summary": "Start a regular or charity co-driver registration on a paired terminal",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "Terminal session created" } }
+      }
+    },
+    "/admin/terminal/sessions/{id}": {
+      "get": {
+        "operationId": "get_admin_terminal_session",
+        "tags": ["admin"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Terminal session state" } }
+      }
+    },
+    "/admin/terminal/sessions/{id}/approve": {
+      "post": {
+        "operationId": "post_admin_terminal_session_approve",
+        "tags": ["admin"],
+        "summary": "Approve operator prechecks and release the waiver for signing",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Session released for signing" } }
+      }
+    },
+    "/terminal/device/current-session": {
+      "get": {
+        "operationId": "get_terminal_device_current_session",
+        "tags": ["public"],
+        "summary": "Poll the active workflow for an authenticated paired terminal",
+        "responses": { "200": { "description": "Current session or null" }, "401": { "description": "Invalid device token" } }
+      }
+    },
+    "/terminal/sessions/{id}/draft": {
+      "put": {
+        "operationId": "put_terminal_participant_draft",
+        "tags": ["public"],
+        "summary": "Submit customer-entered co-driver data for operator review",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Draft submitted" }, "400": { "description": "Invalid participant data" } }
+      }
+    },
+    "/terminal/sessions/{id}/complete": {
+      "post": {
+        "operationId": "post_terminal_participant_complete",
+        "tags": ["public"],
+        "summary": "Persist the participant and signed waiver after operator approval",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Registration completed" }, "409": { "description": "Session is not ready" } }
+      }
+    },
     "/health": {
       "get": {
         "operationId": "get_health",

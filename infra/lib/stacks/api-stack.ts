@@ -440,7 +440,43 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/terminal/device/claim',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/terminal/device/current-session',
+      methods: [apigwv2.HttpMethod.GET],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/terminal/sessions/{id}/draft',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/terminal/sessions/{id}/complete',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
       path: '/signing/sessions/{id}/complete',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/codriver-invitations/{token}',
+      methods: [apigwv2.HttpMethod.GET],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/codriver-invitations/{token}/complete',
       methods: [apigwv2.HttpMethod.POST],
       integration
     });
@@ -781,6 +817,76 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/signing/sessions/{id}/cancel',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/terminal/sessions',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/terminal/devices/pairing-code',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/terminal/devices',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/terminal/devices/{id}',
+      methods: [apigwv2.HttpMethod.DELETE],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/terminal/sessions/{id}',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/terminal/sessions/{id}/approve',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/terminal/sessions/{id}/return-to-form',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/terminal/sessions/{id}/cancel',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/entries/{id}/codriver-invitations',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/codriver-invitations/{id}/revoke',
       methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
@@ -1186,6 +1292,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/inspection/participants/{eventId}/{personId}',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/entries/{id}/inspection-qr',
       methods: [apigwv2.HttpMethod.GET],
       integration,
@@ -1194,6 +1307,20 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/admin/events/{id}/inspection-qr-export',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{eventId}/participants/{personId}/inspection-qr',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/stamp-cards/export',
       methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer

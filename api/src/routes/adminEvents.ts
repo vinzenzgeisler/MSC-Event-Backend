@@ -8,6 +8,15 @@ import { entryConfirmationConfigSchema } from '../domain/entryConfirmationConfig
 import { buildOrgaCode } from '../domain/orgaCode';
 
 const eventStatusSchema = z.enum(['draft', 'open', 'closed', 'archived']);
+const stampCardAccentColorSchema = z.string().regex(/^#[0-9A-Fa-f]{6}$/).transform((value) => value.toUpperCase());
+
+const defaultStampCardAccentColor = (startsAt: string): string => {
+  const year = Number(startsAt.slice(0, 4));
+  const palette = ['#0F6B65', '#8B1E3F', '#2F6B3C', '#6B4E9B', '#9A5B13', '#244A78'];
+  if (year === 2025) return '#365F91';
+  if (year === 2026) return '#0F6B65';
+  return palette[Math.abs(year || 0) % palette.length];
+};
 
 const createEventSchema = z.object({
   name: z.string().min(1),
@@ -18,6 +27,7 @@ const createEventSchema = z.object({
   paymentDueAt: z.string().datetime().optional(),
   contactEmail: z.string().email().optional(),
   websiteUrl: z.string().url().optional(),
+  stampCardAccentColor: stampCardAccentColorSchema.optional(),
   entryConfirmationConfig: entryConfirmationConfigSchema.optional(),
   status: eventStatusSchema.default('draft')
 });
@@ -41,6 +51,7 @@ const updateEventSchema = z
     paymentDueAt: z.string().datetime().nullable().optional(),
     contactEmail: z.string().email().nullable().optional(),
     websiteUrl: z.string().url().nullable().optional(),
+    stampCardAccentColor: stampCardAccentColorSchema.optional(),
     entryConfirmationConfig: entryConfirmationConfigSchema.optional()
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'Provide at least one field to update.' });
@@ -119,6 +130,7 @@ export const listEvents = async (input: ListEventsInput) => {
       paymentDueAt: event.paymentDueAt,
       contactEmail: event.contactEmail,
       websiteUrl: event.websiteUrl,
+      stampCardAccentColor: event.stampCardAccentColor,
       entryConfirmationConfig: event.entryConfirmationConfig,
       openedAt: event.openedAt,
       closedAt: event.closedAt,
@@ -159,6 +171,7 @@ export const getCurrentEvent = async () => {
       paymentDueAt: event.paymentDueAt,
       contactEmail: event.contactEmail,
       websiteUrl: event.websiteUrl,
+      stampCardAccentColor: event.stampCardAccentColor,
       entryConfirmationConfig: event.entryConfirmationConfig,
       openedAt: event.openedAt,
       closedAt: event.closedAt,
@@ -186,6 +199,7 @@ export const getEventById = async (eventId: string) => {
       paymentDueAt: event.paymentDueAt,
       contactEmail: event.contactEmail,
       websiteUrl: event.websiteUrl,
+      stampCardAccentColor: event.stampCardAccentColor,
       entryConfirmationConfig: event.entryConfirmationConfig,
       openedAt: event.openedAt,
       closedAt: event.closedAt,
@@ -218,6 +232,7 @@ export const createEvent = async (input: CreateEventInput, actorUserId: string |
       paymentDueAt: input.paymentDueAt ? new Date(input.paymentDueAt) : null,
       contactEmail: input.contactEmail ?? null,
       websiteUrl: input.websiteUrl ?? null,
+      stampCardAccentColor: input.stampCardAccentColor ?? defaultStampCardAccentColor(input.startsAt),
       entryConfirmationConfig: nextEntryConfirmationConfig,
       openedAt: status === 'open' ? now : null,
       closedAt: status === 'closed' ? now : null,
@@ -410,6 +425,7 @@ export const updateEvent = async (eventId: string, input: UpdateEventInput, acto
           : input.websiteUrl === null
             ? null
             : input.websiteUrl,
+      stampCardAccentColor: input.stampCardAccentColor ?? existing.stampCardAccentColor,
       entryConfirmationConfig:
         nextEntryConfirmationConfig,
       updatedAt: now

@@ -118,9 +118,11 @@ import {
 } from './routes/adminIam';
 import {
   createInspectionQrDownload,
+  createParticipantInspectionQrDownload,
   createInspectionQrSheet,
   getInspectionContext,
   getInspectionEntry,
+  getInspectionParticipant,
   listInspectionHistory,
   listInspectorAssignments,
   searchInspectionEntries,
@@ -245,6 +247,27 @@ import {
   validateCreateSigningSessionInput,
   validatePairingClaimInput
 } from './routes/adminSigning';
+import { createStampCardExport, validateStampCardExportInput } from './routes/stampCards';
+import {
+  completePublicCodriverInvitation,
+  createCodriverInvitation,
+  getPublicCodriverInvitation,
+  listCodriverInvitations,
+  revokeCodriverInvitation,
+  validateCompleteCodriverInvitation,
+  validateCreateCodriverInvitation
+} from './routes/codriverInvitations';
+import {
+  approveParticipantTerminalSession,
+  completeParticipantTerminalSession,
+  createParticipantTerminalSession,
+  returnParticipantSessionToForm,
+  submitParticipantDraft,
+  validateCreateParticipantTerminalSession,
+  validateParticipantApproval,
+  validateParticipantCompletion,
+  validateParticipantDraft
+} from './routes/terminalWorkflows';
 import {
   getPublicLegalCurrent,
   validatePublicLegalCurrentQuery
@@ -408,7 +431,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
-  if (method === 'POST' && path === '/signing/device/claim') {
+  if (method === 'POST' && (path === '/signing/device/claim' || path === '/terminal/device/claim')) {
     try {
       const payload = parseJsonBody(event);
       const input = validatePairingClaimInput(payload);
@@ -428,7 +451,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
-  if (method === 'GET' && path === '/signing/device/current-session') {
+  if (method === 'GET' && (path === '/signing/device/current-session' || path === '/terminal/device/current-session')) {
     try {
       const deviceToken = extractSigningDeviceToken(event.headers);
       if (!deviceToken) {
@@ -441,6 +464,95 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(401, 'Signing device unauthorized', undefined, 'SIGNING_DEVICE_UNAUTHORIZED');
       }
       return errorJson(500, 'Get signing device session failed');
+    }
+  }
+
+  const publicCodriverInvitationMatch = path.match(/^\/public\/codriver-invitations\/([^/]+)$/);
+  if (method === 'GET' && publicCodriverInvitationMatch) {
+    try {
+      const rateLimited = await enforcePublicRequestRateLimit(event, { scope: 'codriver-invitation-read', limit: 60, windowSeconds: 300 }, [publicCodriverInvitationMatch[1]]);
+      if (rateLimited) return rateLimited;
+      const result = await getPublicCodriverInvitation(decodeURIComponent(publicCodriverInvitationMatch[1]));
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('CODRIVER_INVITATION_')) {
+        const status = error.message === 'CODRIVER_INVITATION_INVALID' ? 404 : 409;
+        return errorJson(status, error.message, undefined, error.message);
+      }
+      return errorJson(500, 'Load codriver invitation failed');
+    }
+  }
+
+  const publicCodriverInvitationCompleteMatch = path.match(/^\/public\/codriver-invitations\/([^/]+)\/complete$/);
+  if (method === 'POST' && publicCodriverInvitationCompleteMatch) {
+    try {
+      const rateLimited = await enforcePublicRequestRateLimit(event, { scope: 'codriver-invitation-complete', limit: 10, windowSeconds: 900 }, [publicCodriverInvitationCompleteMatch[1]]);
+      if (rateLimited) return rateLimited;
+      const input = validateCompleteCodriverInvitation(parseJsonBody(event));
+      const result = await completePublicCodriverInvitation(decodeURIComponent(publicCodriverInvitationCompleteMatch[1]), input.participant);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues }, 'VALIDATION_ERROR');
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message.startsWith('CODRIVER_INVITATION_')) {
+        const status = error.message === 'CODRIVER_INVITATION_INVALID' ? 404 : 409;
+        return errorJson(status, error.message, undefined, error.message);
+      }
+      if (error instanceof Error && ['CODRIVER_EMAIL_MUST_DIFFER', 'BIRTHDATE_OUT_OF_RANGE', 'GUARDIAN_REQUIRED', 'EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON', 'CODRIVER_ALREADY_ASSIGNED'].includes(error.message)) {
+        return errorJson(409, error.message, undefined, error.message);
+      }
+      if (isPgUniqueViolation(error)) return errorJson(409, 'This email address is already in use', undefined, 'EMAIL_ALREADY_USED');
+      return errorJson(500, 'Complete codriver invitation failed');
+    }
+  }
+
+  const terminalDraftMatch = path.match(/^\/terminal\/sessions\/([^/]+)\/draft$/);
+  if (method === 'PUT' && terminalDraftMatch) {
+    try {
+      const deviceToken = extractSigningDeviceToken(event.headers);
+      if (!deviceToken) {
+        return errorJson(401, 'Terminal device token required', undefined, 'SIGNING_DEVICE_TOKEN_REQUIRED');
+      }
+      const draft = validateParticipantDraft(parseJsonBody(event));
+      const session = await submitParticipantDraft(terminalDraftMatch[1], draft, deviceToken);
+      return json(200, { ok: true, session });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'SIGNING_DEVICE_UNAUTHORIZED') {
+        return errorJson(401, 'Terminal device unauthorized', undefined, error.message);
+      }
+      if (error instanceof Error && error.message.startsWith('PARTICIPANT_')) {
+        return errorJson(409, error.message, undefined, error.message);
+      }
+      return errorJson(500, 'Save participant data failed');
+    }
+  }
+
+  const terminalCompleteMatch = path.match(/^\/terminal\/sessions\/([^/]+)\/complete$/);
+  if (method === 'POST' && terminalCompleteMatch) {
+    try {
+      const deviceToken = extractSigningDeviceToken(event.headers);
+      if (!deviceToken) {
+        return errorJson(401, 'Terminal device token required', undefined, 'SIGNING_DEVICE_TOKEN_REQUIRED');
+      }
+      const payload = parseJsonBody(event);
+      const current = await getSigningSession(terminalCompleteMatch[1]);
+      const session = current?.workflowType === 'waiver_signature'
+        ? await completeDeviceSigningSession(terminalCompleteMatch[1], validateCompleteSigningSessionInput(payload), deviceToken)
+        : await completeParticipantTerminalSession(terminalCompleteMatch[1], validateParticipantCompletion(payload), deviceToken);
+      return json(200, { ok: true, session });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'SIGNING_DEVICE_UNAUTHORIZED') {
+        return errorJson(401, 'Terminal device unauthorized', undefined, error.message);
+      }
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_'))) {
+        return errorJson(409, error.message, undefined, error.message);
+      }
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Complete participant registration failed', details);
     }
   }
 
@@ -1436,7 +1548,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
-  if (method === 'POST' && path === '/admin/signing/devices/pairing-code') {
+  if (method === 'POST' && (path === '/admin/signing/devices/pairing-code' || path === '/admin/terminal/devices/pairing-code')) {
     const auth = getAuthContext(event);
     if (!hasPermission(auth, 'entries.checkin.write')) {
       return errorJson(403, 'Forbidden');
@@ -1449,7 +1561,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
-  if (method === 'GET' && path === '/admin/signing/devices') {
+  if (method === 'GET' && (path === '/admin/signing/devices' || path === '/admin/terminal/devices')) {
     const auth = getAuthContext(event);
     if (!hasPermission(auth, 'entries.checkin.write')) {
       return errorJson(403, 'Forbidden');
@@ -1462,7 +1574,88 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
-  const adminSigningDeviceMatch = path.match(/^\/admin\/signing\/devices\/([^/]+)$/);
+  if (method === 'POST' && path === '/admin/terminal/sessions') {
+    const auth = getAuthContext(event);
+    try {
+      const payload = parseJsonBody(event) as Record<string, unknown>;
+      if (payload.workflowType === 'waiver_signature') {
+        if (!hasPermission(auth, 'entries.checkin.write')) return errorJson(403, 'Forbidden');
+        const created = await createSigningSession(validateCreateSigningSessionInput(payload), auth.sub, getAdminDisplayEmail(event, auth.email ?? auth.sub));
+        if (!created) return errorJson(404, 'Entry not found');
+        return json(200, { ok: true, session: created.session, signingCase: created.signingCase });
+      }
+      if (!hasPermission(auth, 'entries.participants.write')) return errorJson(403, 'Forbidden');
+      const input = validateCreateParticipantTerminalSession(payload);
+      const session = await createParticipantTerminalSession(input, auth.sub, getAdminDisplayEmail(event, auth.email ?? auth.sub));
+      return json(200, { ok: true, session });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_'))) {
+        return errorJson(409, error.message, undefined, error.message);
+      }
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Create participant terminal session failed', details);
+    }
+  }
+
+  const adminTerminalSessionMatch = path.match(/^\/admin\/terminal\/sessions\/([^/]+)$/);
+  if (method === 'GET' && adminTerminalSessionMatch) {
+    const auth = getAuthContext(event);
+    const session = await getSigningSession(adminTerminalSessionMatch[1]);
+    const permitted = session?.workflowType === 'waiver_signature'
+      ? hasPermission(auth, 'entries.checkin.write')
+      : hasPermission(auth, 'entries.participants.write');
+    if (!permitted) return errorJson(403, 'Forbidden');
+    return session ? json(200, { ok: true, session }) : errorJson(404, 'Terminal session not found');
+  }
+
+  const adminTerminalApproveMatch = path.match(/^\/admin\/terminal\/sessions\/([^/]+)\/approve$/);
+  if (method === 'POST' && adminTerminalApproveMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.participants.write')) return errorJson(403, 'Forbidden');
+    try {
+      const input = validateParticipantApproval(parseJsonBody(event));
+      const session = await approveParticipantTerminalSession(adminTerminalApproveMatch[1], input, auth.sub);
+      return json(200, { ok: true, session });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_'))) {
+        return errorJson(409, error.message, undefined, error.message);
+      }
+      return errorJson(500, 'Approve participant registration failed');
+    }
+  }
+
+  const adminTerminalReturnMatch = path.match(/^\/admin\/terminal\/sessions\/([^/]+)\/return-to-form$/);
+  if (method === 'POST' && adminTerminalReturnMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.participants.write')) return errorJson(403, 'Forbidden');
+    try {
+      const session = await returnParticipantSessionToForm(adminTerminalReturnMatch[1], auth.sub);
+      return json(200, { ok: true, session });
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('PARTICIPANT_')) {
+        return errorJson(409, error.message, undefined, error.message);
+      }
+      return errorJson(500, 'Return participant registration failed');
+    }
+  }
+
+  const adminTerminalCancelMatch = path.match(/^\/admin\/terminal\/sessions\/([^/]+)\/cancel$/);
+  if (method === 'POST' && adminTerminalCancelMatch) {
+    const auth = getAuthContext(event);
+    const existing = await getSigningSession(adminTerminalCancelMatch[1]);
+    const permitted = existing?.workflowType === 'waiver_signature'
+      ? hasPermission(auth, 'entries.checkin.write')
+      : hasPermission(auth, 'entries.participants.write');
+    if (!permitted) return errorJson(403, 'Forbidden');
+    const session = await cancelSigningSession(adminTerminalCancelMatch[1], auth.sub);
+    return session ? json(200, { ok: true, session }) : errorJson(404, 'Active terminal session not found');
+  }
+
+  const adminSigningDeviceMatch = path.match(/^\/admin\/(?:signing|terminal)\/devices\/([^/]+)$/);
   if (method === 'DELETE' && adminSigningDeviceMatch) {
     const auth = getAuthContext(event);
     if (!hasPermission(auth, 'entries.checkin.write')) {
@@ -2766,6 +2959,53 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  const entryCodriverInvitationsMatch = path.match(/^\/admin\/entries\/([^/]+)\/codriver-invitations$/);
+  if (method === 'GET' && entryCodriverInvitationsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.participants.write')) return errorJson(403, 'Forbidden');
+    try {
+      return json(200, { ok: true, invitations: await listCodriverInvitations(entryCodriverInvitationsMatch[1]) });
+    } catch {
+      return errorJson(500, 'List codriver invitations failed');
+    }
+  }
+
+  if (method === 'POST' && entryCodriverInvitationsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.participants.write')) return errorJson(403, 'Forbidden');
+    try {
+      const payload = parseJsonBody(event) as Record<string, unknown>;
+      const input = validateCreateCodriverInvitation({ ...payload, entryIds: payload.entryIds ?? [entryCodriverInvitationsMatch[1]] });
+      if (!input.entryIds.includes(entryCodriverInvitationsMatch[1])) {
+        return errorJson(400, 'Source entry must be included', undefined, 'CODRIVER_INVITATION_SOURCE_REQUIRED');
+      }
+      const result = await createCodriverInvitation(input, auth.sub);
+      return json(201, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues }, 'VALIDATION_ERROR');
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message.startsWith('CODRIVER_INVITATION_')) {
+        return errorJson(409, error.message, undefined, error.message);
+      }
+      if (error instanceof Error && error.message === 'PUBLIC_URL_NOT_CONFIGURED') {
+        return errorJson(500, 'Public frontend URL is not configured', undefined, error.message);
+      }
+      return errorJson(500, 'Create codriver invitation failed');
+    }
+  }
+
+  const codriverInvitationRevokeMatch = path.match(/^\/admin\/codriver-invitations\/([^/]+)\/revoke$/);
+  if (method === 'POST' && codriverInvitationRevokeMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.participants.write')) return errorJson(403, 'Forbidden');
+    try {
+      const revoked = await revokeCodriverInvitation(codriverInvitationRevokeMatch[1], auth.sub);
+      return revoked ? json(200, { ok: true, invitation: revoked }) : errorJson(404, 'Active codriver invitation not found', undefined, 'CODRIVER_INVITATION_NOT_FOUND');
+    } catch {
+      return errorJson(500, 'Revoke codriver invitation failed');
+    }
+  }
+
   const entryMailHistoryMatch = path.match(/^\/admin\/entries\/([^/]+)\/mail-history$/);
   if (method === 'GET' && entryMailHistoryMatch) {
     const auth = getAuthContext(event);
@@ -3764,6 +4004,21 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  const inspectionParticipantMatch = path.match(/^\/inspection\/participants\/([^/]+)\/([^/]+)$/);
+  if (method === 'GET' && inspectionParticipantMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'inspection.read')) return errorJson(403, 'Forbidden');
+    try {
+      const result = await getInspectionParticipant(auth, inspectionParticipantMatch[1], inspectionParticipantMatch[2]);
+      return result ? json(200, { ok: true, participant: result }) : errorJson(404, 'Participant not found');
+    } catch (error) {
+      if (error instanceof Error && error.message === 'INSPECTION_ASSIGNMENT_REQUIRED') {
+        return errorJson(403, 'No active technical inspection assignment');
+      }
+      return errorJson(500, 'Inspection participant failed');
+    }
+  }
+
   if (method === 'PATCH' && inspectionEntryMatch) {
     const auth = getAuthContext(event);
     if (!hasPermission(auth, 'inspection.write')) {
@@ -3813,6 +4068,41 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(500, 'Inspection public URL is not configured');
       }
       return errorJson(500, 'Inspection QR generation failed');
+    }
+  }
+
+  const participantQrMatch = path.match(/^\/admin\/events\/([^/]+)\/participants\/([^/]+)\/inspection-qr$/);
+  if (method === 'GET' && participantQrMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'stamp_cards.print')) return errorJson(403, 'Forbidden');
+    try {
+      const format = event.queryStringParameters?.format === 'png' ? 'png' : 'svg';
+      const download = await createParticipantInspectionQrDownload(participantQrMatch[1], participantQrMatch[2], format);
+      return json(200, { ok: true, filename: download.filename, mimeType: download.mimeType, dataBase64: download.data.toString('base64') });
+    } catch (error) {
+      return errorJson(500, 'Participant QR generation failed');
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/stamp-cards/export') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'stamp_cards.print')) return errorJson(403, 'Forbidden');
+    try {
+      const input = validateStampCardExportInput(parseJsonBody(event));
+      const download = await createStampCardExport(input, auth.sub);
+      return json(200, {
+        ok: true,
+        filename: `stempelkarten-${download.year}.pdf`,
+        mimeType: 'application/pdf',
+        dataBase64: download.data.toString('base64'),
+        cardCount: download.cardCount,
+        pageCount: download.pageCount
+      });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Stamp-card export failed', details);
     }
   }
 

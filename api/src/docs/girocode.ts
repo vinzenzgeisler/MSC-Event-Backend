@@ -14,6 +14,8 @@ export type QrCodeMatrix = {
   modules: boolean[];
 };
 
+export type QrErrorCorrectionLevel = 'L' | 'M' | 'Q' | 'H';
+
 const normalize = (value: string | null | undefined): string => (value ?? '').trim();
 
 const normalizeIban = (value: string): string => value.replace(/\s+/g, '').toUpperCase();
@@ -53,8 +55,8 @@ export const buildGiroCodePayload = (input: GiroCodeInput): string | null => {
   ].join('\n');
 };
 
-export const buildGiroCodeMatrix = (payload: string): QrCodeMatrix => {
-  const qr = QRCode.create(payload, { errorCorrectionLevel: 'M' });
+export const buildQrCodeMatrix = (payload: string, errorCorrectionLevel: QrErrorCorrectionLevel = 'M'): QrCodeMatrix => {
+  const qr = QRCode.create(payload, { errorCorrectionLevel });
   const size = qr.modules.size;
   const data = Array.from(qr.modules.data, (value) => Boolean(value));
   return {
@@ -62,6 +64,8 @@ export const buildGiroCodeMatrix = (payload: string): QrCodeMatrix => {
     modules: data
   };
 };
+
+export const buildGiroCodeMatrix = (payload: string): QrCodeMatrix => buildQrCodeMatrix(payload, 'M');
 
 export const renderGiroCodePng = async (payload: string): Promise<Buffer> => {
   const dataUrl = await QRCode.toDataURL(payload, {

@@ -1,7 +1,7 @@
-import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
-import { buildGiroCodeMatrix, renderGiroCodePng } from '../docs/girocode';
+import { buildGiroCodeMatrix, buildQrCodeMatrix, renderGiroCodePng } from '../docs/girocode';
 import { getDb } from '../db/client';
 import {
   entry,
@@ -349,6 +349,34 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
   };
 };
 
+export const getInspectionParticipant = async (auth: AuthContext, eventId: string, personId: string) => {
+  const assignedEvent = await resolveAssignedEvent(auth, eventId);
+  if (!assignedEvent) throw new Error('INSPECTION_ASSIGNMENT_REQUIRED');
+  const db = await getDb();
+  const rows = await db
+    .select({ id: entry.id })
+    .from(entry)
+    .where(and(
+      eq(entry.eventId, eventId),
+      eq(entry.driverPersonId, personId),
+      eq(entry.acceptanceStatus, 'accepted'),
+      sql`${entry.deletedAt} is null`
+    ))
+    .orderBy(asc(entry.startNumberNorm));
+  const entries = (await Promise.all(rows.map((row) => getInspectionEntry(auth, row.id))))
+    .filter((item): item is NonNullable<Awaited<ReturnType<typeof getInspectionEntry>>> => item !== null);
+  if (entries.length === 0) return null;
+  return {
+    event: assignedEvent,
+    driver: {
+      personId,
+      firstName: entries[0].driverFirstName,
+      lastName: entries[0].driverLastName
+    },
+    entries
+  };
+};
+
 export const updateInspectionDecision = async (
   auth: AuthContext,
   entryId: string,
@@ -573,6 +601,29 @@ const svgFromMatrix = (matrix: ReturnType<typeof buildGiroCodeMatrix>) => {
     }
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-4 -4 ${matrix.size + 8} ${matrix.size + 8}" shape-rendering="crispEdges"><rect x="-4" y="-4" width="${matrix.size + 8}" height="${matrix.size + 8}" fill="white"/><g fill="black">${modules.join('')}</g></svg>`;
+};
+
+export const createParticipantInspectionQrDownload = async (eventId: string, personId: string, format: 'svg' | 'png') => {
+  const url = (() => {
+    const baseUrl = (process.env.MAIL_PUBLIC_BASE_URL ?? '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(baseUrl)) throw new Error('INSPECTION_PUBLIC_URL_NOT_CONFIGURED');
+    return `${baseUrl}/inspection/participant/${encodeURIComponent(eventId)}/${encodeURIComponent(personId)}`;
+  })();
+  if (format === 'png') {
+    const QRCode = require('qrcode');
+    const dataUrl = await QRCode.toDataURL(url, {
+      errorCorrectionLevel: 'H',
+      margin: 4,
+      color: { dark: '#000000', light: '#FFFFFF' },
+      width: 512
+    });
+    return { filename: `abnahme-fahrer-${personId}.png`, mimeType: 'image/png', data: Buffer.from(dataUrl.split(',', 2)[1], 'base64') };
+  }
+  return {
+    filename: `abnahme-fahrer-${personId}.svg`,
+    mimeType: 'image/svg+xml',
+    data: Buffer.from(svgFromMatrix(buildQrCodeMatrix(url, 'H')), 'utf8')
+  };
 };
 
 export const createInspectionQrDownload = async (entryId: string, format: 'svg' | 'png') => {

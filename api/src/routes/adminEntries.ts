@@ -227,6 +227,10 @@ const entryDeleteSchema = z
   .nullable()
   .optional();
 
+const charityCodriverRevocationSchema = z.object({
+  reason: z.string().trim().min(1).max(500)
+});
+
 type ListEntriesQuery = z.infer<typeof listEntriesQuerySchema>;
 type EntryStatusPatch = z.infer<typeof entryStatusPatchSchema>;
 type TechStatusPatch = z.infer<typeof techStatusPatchSchema>;
@@ -237,6 +241,7 @@ type DriverEmailPatch = z.infer<typeof driverEmailPatchSchema>;
 type EntryPaymentStatusPatch = z.infer<typeof entryPaymentStatusPatchSchema>;
 type EntryPaymentAmountsPatch = z.infer<typeof entryPaymentAmountsPatchSchema>;
 type EntryDeleteInput = z.infer<typeof entryDeleteSchema>;
+type CharityCodriverRevocationInput = z.infer<typeof charityCodriverRevocationSchema>;
 
 const toVehicleLabel = (make: string | null, model: string | null, startNumberNorm: string | null): string => {
   const label = [make, model].filter((part) => !!part && part.trim().length > 0).join(' ');
@@ -381,6 +386,8 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       techCheckedBy: entry.techCheckedBy,
       waiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
       waiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      codriverWaiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.codriverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      codriverWaiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.codriverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
       startNumberNorm: entry.startNumberNorm,
       orgaCode: entry.orgaCode,
       confirmationMailSentAt: entry.confirmationMailSentAt,
@@ -395,6 +402,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       internalNote: entry.internalNote,
       driverNote: entry.driverNote,
       driverPersonId: entry.driverPersonId,
+      codriverPersonId: entry.codriverPersonId,
       driverProcessingRestricted: person.processingRestricted,
       driverObjectionFlag: person.objectionFlag,
       driverFirstName: person.firstName,
@@ -514,6 +522,8 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       invoicePaymentStatus: _invoicePaymentStatus,
       waiverSignedDocumentId: _waiverSignedDocumentId,
       waiverSignedAt: _waiverSignedAt,
+      codriverWaiverSignedDocumentId: _codriverWaiverSignedDocumentId,
+      codriverWaiverSignedAt: _codriverWaiverSignedAt,
       ...publicRow
     } = row;
     return {
@@ -528,6 +538,20 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
         signed: Boolean(row.waiverSignedDocumentId),
         signedAt: row.waiverSignedAt,
         documentId: row.waiverSignedDocumentId
+      },
+      waiverSigners: {
+        driver: {
+          signed: Boolean(row.waiverSignedDocumentId),
+          signedAt: row.waiverSignedAt,
+          documentId: row.waiverSignedDocumentId
+        },
+        codriver: row.codriverPersonId
+          ? {
+              signed: Boolean(row.codriverWaiverSignedDocumentId),
+              signedAt: row.codriverWaiverSignedAt,
+              documentId: row.codriverWaiverSignedDocumentId
+            }
+          : null
       },
       deletedAt: row.deletedAt,
       deletedBy: row.deletedBy,
@@ -682,11 +706,16 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       birthdate: person.birthdate,
       processingRestricted: person.processingRestricted,
       objectionFlag: person.objectionFlag,
+      terminalSessionId: entryCharityCodriver.terminalSessionId,
+      status: entryCharityCodriver.status,
+      revokedAt: entryCharityCodriver.revokedAt,
+      revokedBy: entryCharityCodriver.revokedBy,
+      revocationReason: entryCharityCodriver.revocationReason,
       createdAt: entryCharityCodriver.createdAt
     })
     .from(entryCharityCodriver)
     .innerJoin(person, eq(entryCharityCodriver.personId, person.id))
-    .where(and(eq(entryCharityCodriver.entryId, current.id), eq(entryCharityCodriver.status, 'active')))
+    .where(eq(entryCharityCodriver.entryId, current.id))
     .orderBy(asc(entryCharityCodriver.createdAt));
   const backupVehicleRows =
     current.backupVehicleId === null
@@ -742,6 +771,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       type: document.type,
       status: document.status,
       driverPersonId: document.driverPersonId,
+      signingSessionId: document.signingSessionId,
       createdAt: document.createdAt
     })
     .from(document)
@@ -751,6 +781,11 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
   const driverSignedWaiverDocument = documentRows.find(
     (row) => row.type === 'waiver_signed' && row.status === 'generated' && row.driverPersonId === current.driverPersonId
   ) ?? null;
+  const codriverSignedWaiverDocument = current.codriverPersonId
+    ? documentRows.find(
+        (row) => row.type === 'waiver_signed' && row.status === 'generated' && row.driverPersonId === current.codriverPersonId
+      ) ?? null
+    : null;
 
   const driverEntryRows = await db
     .select({
@@ -898,6 +933,22 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         signedAt: driverSignedWaiverDocument?.createdAt ?? null,
         documentId: driverSignedWaiverDocument?.id ?? null
       },
+      waiverSigners: {
+        driver: {
+          signed: Boolean(driverSignedWaiverDocument),
+          signedAt: driverSignedWaiverDocument?.createdAt ?? null,
+          documentId: driverSignedWaiverDocument?.id ?? null,
+          signingSessionId: driverSignedWaiverDocument?.signingSessionId ?? null
+        },
+        codriver: codriver
+          ? {
+              signed: Boolean(codriverSignedWaiverDocument),
+              signedAt: codriverSignedWaiverDocument?.createdAt ?? null,
+              documentId: codriverSignedWaiverDocument?.id ?? null,
+              signingSessionId: codriverSignedWaiverDocument?.signingSessionId ?? null
+            }
+          : null
+      },
       person: {
         driver: {
           firstName: driverRestricted ? null : current.driverFirstName,
@@ -943,7 +994,26 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
             lastName: restricted ? null : item.lastName,
             email: restricted ? null : item.email,
             birthdate: restricted ? null : item.birthdate,
-            createdAt: item.createdAt
+            createdAt: item.createdAt,
+            status: item.status,
+            terminalSessionId: item.terminalSessionId,
+            revokedAt: item.revokedAt,
+            revokedBy: item.revokedBy,
+            revocationReason: item.revocationReason,
+            waiverSigned: (() => {
+              const signedDocument = documentRows.find(
+                (row) => row.type === 'waiver_signed'
+                  && row.status === 'generated'
+                  && row.driverPersonId === item.personId
+                  && (!item.terminalSessionId || row.signingSessionId === item.terminalSessionId)
+              ) ?? null;
+              return {
+                signed: Boolean(signedDocument),
+                signedAt: signedDocument?.createdAt ?? null,
+                documentId: signedDocument?.id ?? null,
+                signingSessionId: signedDocument?.signingSessionId ?? item.terminalSessionId ?? null
+              };
+            })()
           };
         })
       },
@@ -2515,6 +2585,45 @@ export const deleteEntry = async (
   };
 };
 
+export const revokeCharityCodriver = async (
+  entryId: string,
+  registrationId: string,
+  input: CharityCodriverRevocationInput,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const now = new Date();
+  const [updated] = await db
+    .update(entryCharityCodriver)
+    .set({
+      status: 'revoked',
+      revokedAt: now,
+      revokedBy: actorUserId,
+      revocationReason: input.reason,
+      updatedAt: now
+    })
+    .where(
+      and(
+        eq(entryCharityCodriver.id, registrationId),
+        eq(entryCharityCodriver.entryId, entryId),
+        eq(entryCharityCodriver.status, 'active')
+      )
+    )
+    .returning();
+  if (!updated) {
+    return null;
+  }
+  await writeAuditLog(db as never, {
+    eventId: updated.eventId,
+    actorUserId,
+    action: 'charity_codriver_revoked',
+    entityType: 'entry_charity_codriver',
+    entityId: updated.id,
+    payload: { entryId, personId: updated.personId, reason: input.reason }
+  });
+  return updated;
+};
+
 export const restoreEntry = async (entryId: string, actorUserId: string | null) => {
   const db = await getDb();
   const rows = await db
@@ -2635,3 +2744,4 @@ export const validateDriverEmailPatchInput = (payload: unknown): DriverEmailPatc
 export const validateEntryPaymentStatusPatchInput = (payload: unknown) => entryPaymentStatusPatchSchema.parse(payload);
 export const validateEntryPaymentAmountsPatchInput = (payload: unknown) => entryPaymentAmountsPatchSchema.parse(payload);
 export const validateEntryDeleteInput = (payload: unknown) => entryDeleteSchema.parse(payload);
+export const validateCharityCodriverRevocationInput = (payload: unknown) => charityCodriverRevocationSchema.parse(payload);

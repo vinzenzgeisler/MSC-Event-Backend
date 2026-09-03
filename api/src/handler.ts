@@ -68,6 +68,7 @@ import {
   listCheckinEntries,
   listDeletedEntries,
   listEntries,
+  revokeCharityCodriver,
   restoreEntry,
   getEntryDetail,
   patchEntryAssignment,
@@ -89,6 +90,7 @@ import {
   validateEntryPaymentStatusPatchInput,
   validateEntryPaymentAmountsPatchInput,
   validateEntryDeleteInput,
+  validateCharityCodriverRevocationInput,
   validateListEntriesQuery
 } from './routes/adminEntries';
 import {
@@ -242,6 +244,7 @@ import {
   listSigningDevices,
   getSignedWaiverDocument,
   listSigningSessions,
+  resendSignedWaiverMail,
   revokeSigningDevice,
   validateCompleteSigningSessionInput,
   validateCreateSigningSessionInput,
@@ -548,7 +551,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'SIGNING_DEVICE_UNAUTHORIZED') {
         return errorJson(401, 'Terminal device unauthorized', undefined, error.message);
       }
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_'))) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
@@ -1591,7 +1594,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     } catch (error) {
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_'))) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
@@ -1621,7 +1624,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     } catch (error) {
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_'))) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       return errorJson(500, 'Approve participant registration failed');
@@ -1653,6 +1656,28 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     if (!permitted) return errorJson(403, 'Forbidden');
     const session = await cancelSigningSession(adminTerminalCancelMatch[1], auth.sub);
     return session ? json(200, { ok: true, session }) : errorJson(404, 'Active terminal session not found');
+  }
+
+  const adminCharityCodriverRevokeMatch = path.match(/^\/admin\/entries\/([^/]+)\/charity-codrivers\/([^/]+)\/revoke$/);
+  if (method === 'POST' && adminCharityCodriverRevokeMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.participants.write')) return errorJson(403, 'Forbidden');
+    try {
+      const input = validateCharityCodriverRevocationInput(parseJsonBody(event));
+      const updated = await revokeCharityCodriver(
+        adminCharityCodriverRevokeMatch[1],
+        adminCharityCodriverRevokeMatch[2],
+        input,
+        auth.sub
+      );
+      return updated
+        ? json(200, { ok: true, charityCodriver: updated })
+        : errorJson(404, 'Active charity co-driver registration not found', undefined, 'CHARITY_CODRIVER_NOT_FOUND');
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      return errorJson(500, 'Revoke charity co-driver failed');
+    }
   }
 
   const adminSigningDeviceMatch = path.match(/^\/admin\/(?:signing|terminal)\/devices\/([^/]+)$/);
@@ -2967,6 +2992,24 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, invitations: await listCodriverInvitations(entryCodriverInvitationsMatch[1]) });
     } catch {
       return errorJson(500, 'List codriver invitations failed');
+    }
+  }
+
+  const resendSignedWaiverMailMatch = path.match(/^\/admin\/documents\/([^/]+)\/resend-waiver-mail$/);
+  if (method === 'POST' && resendSignedWaiverMailMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'communication.write')) return errorJson(403, 'Forbidden');
+    try {
+      const queued = await resendSignedWaiverMail(resendSignedWaiverMailMatch[1], auth.sub);
+      return queued
+        ? json(200, { ok: true, ...queued })
+        : errorJson(404, 'Signed waiver document not found', undefined, 'SIGNED_WAIVER_NOT_FOUND');
+    } catch (error) {
+      if (error instanceof Error && error.message === 'WAIVER_MAIL_RECIPIENT_MISSING') {
+        return errorJson(422, 'No recipient email is available', undefined, error.message);
+      }
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Resend signed waiver mail failed', details);
     }
   }
 

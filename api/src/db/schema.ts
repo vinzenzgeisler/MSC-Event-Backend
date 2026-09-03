@@ -822,6 +822,7 @@ export const document = pgTable(
     eventId: uuid('event_id').references(() => event.id, { onDelete: 'set null' }),
     entryId: uuid('entry_id').references(() => entry.id, { onDelete: 'set null' }),
     driverPersonId: uuid('driver_person_id').references(() => person.id, { onDelete: 'set null' }),
+    signingSessionId: uuid('signing_session_id'),
     type: text('type').notNull(),
     templateVariant: text('template_variant'),
     templateVersion: text('template_version').notNull(),
@@ -841,7 +842,8 @@ export const document = pgTable(
       'document_template_variant_check',
       sql`${table.type} != 'tech_check' or ${table.templateVariant} in ('auto', 'moto')`
     ),
-    eventTypeIndex: index('document_event_type_idx').on(table.eventId, table.type)
+    eventTypeIndex: index('document_event_type_idx').on(table.eventId, table.type),
+    signingSessionIndex: index('document_signing_session_idx').on(table.signingSessionId, table.createdAt)
   })
 );
 
@@ -936,6 +938,9 @@ export const entryCharityCodriver = pgTable(
     terminalSessionId: uuid('terminal_session_id').references(() => signingSession.id, { onDelete: 'set null' }),
     status: text('status').notNull().default('active'),
     createdBy: text('created_by'),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedBy: text('revoked_by'),
+    revocationReason: text('revocation_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
@@ -944,7 +949,11 @@ export const entryCharityCodriver = pgTable(
       .on(table.eventId, table.entryId, table.personId)
       .where(sql`${table.status} = 'active'`),
     entryIndex: index('entry_charity_codriver_entry_idx').on(table.entryId, table.status, table.createdAt),
-    statusCheck: check('entry_charity_codriver_status_check', sql`${table.status} in ('active', 'revoked')`)
+    statusCheck: check('entry_charity_codriver_status_check', sql`${table.status} in ('active', 'revoked')`),
+    revocationReasonCheck: check(
+      'entry_charity_codriver_revocation_reason_check',
+      sql`${table.status} != 'revoked' or length(trim(coalesce(${table.revocationReason}, ''))) between 1 and 500`
+    )
   })
 );
 

@@ -893,6 +893,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/entries/{id}/charity-codrivers/{registrationId}/revoke',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/documents/waiver',
       methods: [apigwv2.HttpMethod.POST],
       integration,
@@ -1287,6 +1294,13 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/inspection/entries/{id}/history',
       methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/documents/{id}/resend-waiver-mail',
+      methods: [apigwv2.HttpMethod.POST],
       integration,
       authorizer: jwtAuthorizer
     });

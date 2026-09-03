@@ -146,8 +146,8 @@ export const createParticipantTerminalSession = async (
   if (!device) throw new Error('SIGNING_DEVICE_NOT_CONNECTED');
   const context = await loadWorkflowContext(input.entryIds);
   if (input.workflowType === 'charity_codriver_registration' && input.entryIds.length !== 1) throw new Error('CHARITY_SINGLE_ENTRY_REQUIRED');
+  if (context.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
   if (input.workflowType === 'regular_codriver_registration') {
-    if (context.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
     if (context.rows.some((row) => row.codriverPersonId)) throw new Error('CODRIVER_ALREADY_ASSIGNED');
   }
   const now = new Date();
@@ -208,6 +208,12 @@ export const approveParticipantTerminalSession = async (sessionId: string, prech
   if (session.workflowStage !== 'awaiting_operator_approval' || !session.draftPayload) throw new Error('TERMINAL_SESSION_NOT_AWAITING_APPROVAL');
   const draft = session.draftPayload as ParticipantDraft;
   const context = session.sessionPayload as any;
+  const entryIds = (context.entries as Array<{ id: string }>).map((item) => item.id);
+  const liveContext = await loadWorkflowContext(entryIds);
+  if (liveContext.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
+  if (session.workflowType === 'regular_codriver_registration' && liveContext.rows.some((row) => row.codriverPersonId)) {
+    throw new Error('CODRIVER_ALREADY_ASSIGNED');
+  }
   const age = ageAt(draft.birthdate, context.event.startsAt);
   if (session.workflowType === 'regular_codriver_registration' && age >= 70 && !prechecks.medicalCertificateCheckedAt) throw new Error('SIGNING_PRECHECK_INCOMPLETE');
   if (age < 18 && (!prechecks.guardianPresentAt || !prechecks.guardianAuthorityCheckedAt)) throw new Error('SIGNING_PRECHECK_INCOMPLETE');
@@ -246,10 +252,27 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   const draft = session.draftPayload as ParticipantDraft;
   const context = session.sessionPayload as any;
   const entryIds = (context.entries as Array<{ id: string }>).map((item) => item.id);
+  const liveContext = await loadWorkflowContext(entryIds);
+  if (liveContext.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
+  if (session.workflowType === 'regular_codriver_registration' && liveContext.rows.some((row) => row.codriverPersonId)) {
+    throw new Error('CODRIVER_ALREADY_ASSIGNED');
+  }
   const existingPeople = await db.select().from(person).where(sql`lower(${person.email}) = ${draft.email}`).limit(1);
   const existingPerson = existingPeople[0] ?? null;
   if (existingPerson && (`${existingPerson.firstName} ${existingPerson.lastName}`.trim().toLowerCase() !== `${draft.firstName} ${draft.lastName}`.trim().toLowerCase())) throw new Error('EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
   const participantId = existingPerson?.id ?? randomUUID();
+  if (session.workflowType === 'charity_codriver_registration' && existingPerson) {
+    const [activeRegistration] = await db
+      .select({ id: entryCharityCodriver.id })
+      .from(entryCharityCodriver)
+      .where(and(
+        eq(entryCharityCodriver.entryId, entryIds[0]),
+        eq(entryCharityCodriver.personId, participantId),
+        eq(entryCharityCodriver.status, 'active')
+      ))
+      .limit(1);
+    if (activeRegistration) throw new Error('CHARITY_CODRIVER_ALREADY_ACTIVE');
+  }
   const payload = {
     ...context,
     id: `terminal-case:${session.id}`,
@@ -278,7 +301,7 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   await uploadPdf(documentS3Key, pdf);
   await uploadFile(auditS3Key, Buffer.from(JSON.stringify({ auditSchemaVersion: 'terminal-participant-v1', sessionId, workflowType: session.workflowType, eventId: session.eventId, entryIds, participantId, signedAt: input.signedAt, privacyAcceptedAt: input.privacyAcceptedAt, waiverAcceptedAt: input.waiverAcceptedAt, documentSha256 }, null, 2)), 'application/json; charset=utf-8');
 
-  return db.transaction(async (tx) => {
+  const updatedSession = await db.transaction(async (tx) => {
     const now = new Date();
     if (existingPerson) {
       await tx.update(person).set({ birthdate: draft.birthdate, country: draft.country, street: draft.street, zip: draft.zip, city: draft.city, phone: draft.phone, emergencyContactFirstName: draft.emergencyContactFirstName, emergencyContactLastName: draft.emergencyContactLastName, emergencyContactPhone: draft.emergencyContactPhone, motorsportHistory: draft.motorsportHistory ?? null, updatedAt: now }).where(eq(person.id, participantId));
@@ -294,17 +317,47 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
     if (session.workflowType === 'charity_codriver_registration') {
       const [created] = await tx.insert(entryCharityCodriver).values({ eventId: session.eventId, entryId: entryIds[0], personId: participantId, terminalSessionId: sessionId, status: 'active', createdBy: session.operatorUserId, createdAt: now, updatedAt: now }).onConflictDoNothing().returning();
       if (!created) {
-        const [existing] = await tx.select().from(entryCharityCodriver).where(and(eq(entryCharityCodriver.eventId, session.eventId), eq(entryCharityCodriver.entryId, entryIds[0]), eq(entryCharityCodriver.personId, participantId), eq(entryCharityCodriver.status, 'active'))).limit(1);
-        charityRegistrationId = existing?.id ?? null;
+        throw new Error('CHARITY_CODRIVER_ALREADY_ACTIVE');
       } else charityRegistrationId = created.id;
     }
-    const documents = await tx.insert(document).values(entryIds.map((entryId) => ({ eventId: session.eventId, entryId, driverPersonId: participantId, type: 'waiver_signed', templateVariant: draft.locale, templateVersion: context.contract.version, sha256: documentSha256, s3Key: documentS3Key, status: 'generated', createdBy: session.operatorUserId }))).returning();
+    const documents = await tx.insert(document).values(entryIds.map((entryId) => ({ eventId: session.eventId, entryId, driverPersonId: participantId, signingSessionId: sessionId, type: 'waiver_signed', templateVariant: draft.locale, templateVersion: context.contract.version, sha256: documentSha256, s3Key: documentS3Key, status: 'generated', createdBy: session.operatorUserId }))).returning();
     await tx.insert(consentEvidence).values(entryIds.map((entryId) => ({ entryId, personId: participantId, participantRole: session.workflowType === 'charity_codriver_registration' ? 'charity_codriver' : 'codriver', terminalSessionId: sessionId, consentVersion: context.contract.version, consentTextHash: context.contract.textHash, locale: draft.locale, consentSource: 'admin_ui', termsAccepted: false, privacyAccepted: true, waiverAccepted: true, mediaAccepted: false, clubInfoAccepted: false, guardianFullName: draft.guardianFullName ?? null, guardianEmail: draft.guardianEmail ?? null, guardianPhone: draft.guardianPhone ?? null, guardianRelationship: draft.guardianRelationship ?? null, guardianConsentAccepted: context.isMinor === true, capturedAt: new Date(input.signedAt), createdAt: now })));
-    await queueWaiverSignedMail(tx as any, { toEmail: draft.email, driverName: `${draft.firstName} ${draft.lastName}`, signerName: `${draft.firstName} ${draft.lastName}`, signerRole: session.workflowType === 'charity_codriver_registration' ? 'Charity-Beifahrer' : 'Beifahrer', eventId: session.eventId, eventName: context.event.name, eventDates: `${context.event.startsAt} - ${context.event.endsAt}`, signedAt: input.signedAt, documentS3Key, sessionId });
     const [updated] = await tx.update(signingSession).set({ status: 'completed', workflowStage: 'completed', signedAt: new Date(input.signedAt), documentId: documents[0]?.id ?? null, evidenceAuditS3Key: auditS3Key, resultPayload: { participantId, charityRegistrationId, entryIds }, draftPayload: null, updatedAt: now }).where(eq(signingSession.id, sessionId)).returning();
     await writeAuditLog(tx as never, { eventId: session.eventId, actorUserId: session.operatorUserId, action: 'terminal_participant_session_completed', entityType: 'signing_session', entityId: sessionId, payload: { workflowType: session.workflowType, participantId, charityRegistrationId, entryIds, documentIds: documents.map((item) => item.id) } });
     return updated;
   });
+
+  try {
+    const terminalSigner = session.signerPayload as { type?: string; guardianName?: string | null };
+    await queueWaiverSignedMail(db, {
+      toEmail: terminalSigner.type === 'guardian' && draft.guardianEmail?.trim()
+        ? draft.guardianEmail.trim().toLowerCase()
+        : draft.email,
+      driverName: `${draft.firstName} ${draft.lastName}`,
+      signerName: terminalSigner.type === 'guardian' && terminalSigner.guardianName?.trim()
+        ? terminalSigner.guardianName.trim()
+        : `${draft.firstName} ${draft.lastName}`,
+      signerRole: terminalSigner.type === 'guardian'
+        ? 'Erziehungsberechtigte Person'
+        : session.workflowType === 'charity_codriver_registration' ? 'Charity-Beifahrer' : 'Beifahrer',
+      eventId: session.eventId,
+      eventName: context.event.name,
+      eventDates: `${context.event.startsAt} - ${context.event.endsAt}`,
+      signedAt: input.signedAt,
+      documentS3Key,
+      sessionId,
+      entryId: entryIds[0],
+      documentId: updatedSession?.documentId ?? undefined,
+      signingSessionId: sessionId
+    });
+  } catch (error) {
+    await db.update(signingSession).set({
+      errorLast: error instanceof Error ? `WAIVER_MAIL_QUEUE_FAILED:${error.message}` : 'WAIVER_MAIL_QUEUE_FAILED',
+      updatedAt: new Date()
+    }).where(eq(signingSession.id, sessionId));
+  }
+
+  return updatedSession;
 };
 
 export const validateCreateParticipantTerminalSession = (payload: unknown) => createSessionSchema.parse(payload);

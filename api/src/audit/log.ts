@@ -28,6 +28,7 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   entry_payment_amounts_set: ['invoiceId', 'totalCents', 'paidAmountCents', 'amountOpenCents', 'paymentStatus'],
   entry_soft_deleted: ['classId', 'driverPersonId', 'registrationStatus', 'acceptanceStatus', 'startNumberNorm', 'deleteReason'],
   entry_restored: [],
+  charity_codriver_revoked: ['entryId', 'personId', 'reason'],
   event_created: ['status'],
   event_activated: ['isCurrent'],
   event_closed: ['status'],
@@ -52,7 +53,8 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   ,
   signing_session_started: ['entryIds', 'deviceSessionId'],
   signing_session_completed: ['documentId', 'documentSha256', 'auditS3Key', 'entryIds'],
-  signing_session_cancelled: ['deviceSessionId']
+  signing_session_cancelled: ['deviceSessionId'],
+  waiver_signed_mail_resent: ['signingSessionId', 'outboxId', 'recipient']
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

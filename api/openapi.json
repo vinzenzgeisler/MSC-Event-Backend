@@ -260,6 +260,41 @@
         "responses": { "200": { "description": "Invitation revoked" }, "404": { "description": "Active invitation not found" } }
       }
     },
+    "/admin/entries/{id}/charity-codrivers/{registrationId}/revoke": {
+      "post": {
+        "operationId": "post_admin_charity_codriver_revoke",
+        "tags": ["admin"],
+        "summary": "Revoke an active charity co-driver card while retaining its signed evidence",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "registrationId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["reason"],
+                "properties": { "reason": { "type": "string", "minLength": 1, "maxLength": 500 } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Charity co-driver card revoked" }, "400": { "description": "A revocation reason is required" }, "404": { "description": "Active registration not found" } }
+      }
+    },
+    "/admin/documents/{id}/resend-waiver-mail": {
+      "post": {
+        "operationId": "post_admin_document_resend_waiver_mail",
+        "tags": ["admin"],
+        "summary": "Queue another delivery of an existing signed-waiver PDF",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Mail with the existing PDF queued" }, "404": { "description": "Signed waiver document not found" }, "422": { "description": "No recipient email available" } }
+      }
+    },
     "/public/codriver-invitations/{token}": {
       "get": {
         "operationId": "get_public_codriver_invitation",

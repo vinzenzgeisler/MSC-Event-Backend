@@ -5,7 +5,7 @@ import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { entry, event as eventTable, eventClass, exportJob, invoice, person, vehicle } from '../db/schema';
+import { entry, entryCharityCodriver, event as eventTable, eventClass, exportJob, invoice, person, vehicle } from '../db/schema';
 import { getPresignedDownloadUrl, uploadFile } from '../docs/storage';
 import {
   getClassHeaders,
@@ -69,6 +69,7 @@ export const createEntriesExport = async (
   }
 
   try {
+    const codriverPerson = alias(person, 'export_codriver_person');
     const conditions: SQL<unknown>[] = [
       eq(entry.eventId, input.eventId),
       sql`${entry.deletedAt} is null`,
@@ -102,11 +103,23 @@ export const createEntriesExport = async (
         startNumberNorm: entry.startNumberNorm,
         driverFirstName: person.firstName,
         driverLastName: person.lastName,
-        driverEmail: person.email
+        driverEmail: person.email,
+        driverPersonId: person.id,
+        driverBirthdate: person.birthdate,
+        codriverPersonId: entry.codriverPersonId,
+        codriverFirstName: codriverPerson.firstName,
+        codriverLastName: codriverPerson.lastName,
+        codriverEmail: codriverPerson.email,
+        codriverBirthdate: codriverPerson.birthdate,
+        codriverProcessingRestricted: codriverPerson.processingRestricted,
+        codriverObjectionFlag: codriverPerson.objectionFlag,
+        driverWaiverSigned: sql<boolean>`exists(select 1 from "document" d where d."entry_id" = ${entry.id} and d."driver_person_id" = ${entry.driverPersonId} and d."type" = 'waiver_signed' and d."status" = 'generated')`,
+        codriverWaiverSigned: sql<boolean>`exists(select 1 from "document" d where d."entry_id" = ${entry.id} and d."driver_person_id" = ${entry.codriverPersonId} and d."type" = 'waiver_signed' and d."status" = 'generated')`
       })
       .from(entry)
       .innerJoin(eventClass, eq(entry.classId, eventClass.id))
       .innerJoin(person, eq(entry.driverPersonId, person.id))
+      .leftJoin(codriverPerson, eq(entry.codriverPersonId, codriverPerson.id))
       .leftJoin(invoice, and(eq(invoice.eventId, entry.eventId), eq(invoice.driverPersonId, entry.driverPersonId)))
       .where(and(...conditions))
       .orderBy(asc(eventClass.name), asc(entry.createdAt));
@@ -124,8 +137,81 @@ export const createEntriesExport = async (
       driverEmail: redactSensitiveFields ? '' : (row.driverEmail ?? '')
     }));
 
-    const typedRows =
-      input.type === 'startlist_csv'
+    let typedRows: Array<Record<string, unknown>>;
+    if (input.type === 'participants_csv') {
+      const regularParticipantRows = rows.flatMap((row) => {
+        const driverRow = {
+          entryId: row.entryId,
+          className: row.className,
+          startNumber: row.startNumberNorm ?? '',
+          participantRole: 'driver',
+          personId: row.driverPersonId,
+          firstName: redactSensitiveFields ? '' : row.driverFirstName,
+          lastName: redactSensitiveFields ? '' : row.driverLastName,
+          email: redactSensitiveFields ? '' : (row.driverEmail ?? ''),
+          birthdate: redactSensitiveFields ? '' : (row.driverBirthdate ?? ''),
+          waiverSigned: row.driverWaiverSigned ? 'true' : 'false',
+          registeredAt: ''
+        };
+        if (!row.codriverPersonId) return [driverRow];
+        const codriverRestricted = redactSensitiveFields || row.codriverProcessingRestricted || row.codriverObjectionFlag;
+        return [driverRow, {
+          entryId: row.entryId,
+          className: row.className,
+          startNumber: row.startNumberNorm ?? '',
+          participantRole: 'codriver',
+          personId: row.codriverPersonId,
+          firstName: codriverRestricted ? '' : (row.codriverFirstName ?? ''),
+          lastName: codriverRestricted ? '' : (row.codriverLastName ?? ''),
+          email: codriverRestricted ? '' : (row.codriverEmail ?? ''),
+          birthdate: codriverRestricted ? '' : (row.codriverBirthdate ?? ''),
+          waiverSigned: row.codriverWaiverSigned ? 'true' : 'false',
+          registeredAt: ''
+        }];
+      });
+      const exportedEntryIds = rows.map((row) => row.entryId);
+      const charityPerson = alias(person, 'export_charity_person');
+      const charityRows = exportedEntryIds.length === 0
+        ? []
+        : await db
+            .select({
+              entryId: entryCharityCodriver.entryId,
+              className: eventClass.name,
+              startNumber: entry.startNumberNorm,
+              personId: entryCharityCodriver.personId,
+              firstName: charityPerson.firstName,
+              lastName: charityPerson.lastName,
+              email: charityPerson.email,
+              birthdate: charityPerson.birthdate,
+              processingRestricted: charityPerson.processingRestricted,
+              objectionFlag: charityPerson.objectionFlag,
+              registeredAt: entryCharityCodriver.createdAt,
+              waiverSigned: sql<boolean>`exists(select 1 from "document" d where d."entry_id" = ${entryCharityCodriver.entryId} and d."driver_person_id" = ${entryCharityCodriver.personId} and d."type" = 'waiver_signed' and d."status" = 'generated')`
+            })
+            .from(entryCharityCodriver)
+            .innerJoin(entry, eq(entryCharityCodriver.entryId, entry.id))
+            .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+            .innerJoin(charityPerson, eq(entryCharityCodriver.personId, charityPerson.id))
+            .where(and(eq(entryCharityCodriver.status, 'active'), inArray(entryCharityCodriver.entryId, exportedEntryIds)))
+            .orderBy(asc(eventClass.name), asc(entry.startNumberNorm), asc(entryCharityCodriver.createdAt));
+      typedRows = [...regularParticipantRows, ...charityRows.map((row) => {
+        const restricted = redactSensitiveFields || row.processingRestricted || row.objectionFlag;
+        return {
+          entryId: row.entryId,
+          className: row.className,
+          startNumber: row.startNumber ?? '',
+          participantRole: 'charity_codriver',
+          personId: row.personId,
+          firstName: restricted ? '' : row.firstName,
+          lastName: restricted ? '' : row.lastName,
+          email: restricted ? '' : (row.email ?? ''),
+          birthdate: restricted ? '' : (row.birthdate ?? ''),
+          waiverSigned: row.waiverSigned ? 'true' : 'false',
+          registeredAt: row.registeredAt.toISOString()
+        };
+      })];
+    } else {
+      typedRows = input.type === 'startlist_csv'
         ? mappedRowsBase.map((row) => ({
             className: row.className,
             startNumber: row.startNumber,
@@ -151,6 +237,7 @@ export const createEntriesExport = async (
                 acceptanceStatus: row.acceptanceStatus
               }))
             : mappedRowsBase;
+    }
 
     const headers = Object.keys(typedRows[0] ?? { entryId: '', className: '', driverName: '' });
     const csv = toCsv(headers, typedRows);

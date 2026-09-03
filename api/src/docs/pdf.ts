@@ -348,11 +348,11 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     kv('Fahrer', `${driver.firstName} ${driver.lastName}${driver.birthdate ? `, geb. ${driver.birthdate}` : ''}`);
     const signer = payload.payload.signer;
     if (signer) {
-      kv('Unterzeichner', `${signer.firstName} ${signer.lastName}${signer.birthdate ? `, geb. ${signer.birthdate}` : ''}`);
+      kv(payload.signer.type === 'guardian' ? 'Teilnehmer' : 'Unterzeichner', `${signer.firstName} ${signer.lastName}${signer.birthdate ? `, geb. ${signer.birthdate}` : ''}`);
       kv('Rolle', signer.label);
     }
     if (payload.signer.type === 'guardian' && payload.signer.guardianName) {
-      kv('Erziehungsberechtigte/r', `${payload.signer.guardianName} (${payload.signer.guardianRelationship ?? '—'})`);
+      kv('Unterzeichner (erziehungsberechtigt)', `${payload.signer.guardianName} (${payload.signer.guardianRelationship ?? '—'})`);
     }
     const flags: string[] = [];
     if (payload.payload.isMinor) flags.push('Minderjährig');
@@ -440,9 +440,11 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
 
     rule(RULE);
     doc.y += 4;
-    const signerDisplay = signer
-      ? `${signer.firstName} ${signer.lastName}`
-      : `${driver.firstName} ${driver.lastName}`;
+    const signerDisplay = payload.signer.type === 'guardian' && payload.signer.guardianName
+      ? payload.signer.guardianName
+      : signer
+        ? `${signer.firstName} ${signer.lastName}`
+        : `${driver.firstName} ${driver.lastName}`;
     doc.font('Helvetica').fontSize(7).fillColor(DIM)
       .text(
         `Diese Erklärung wurde am ${payload.signedAt} durch ${signerDisplay} digital unterzeichnet.  ` +

@@ -24,6 +24,7 @@ assert.throws(() => validateStampCardExportInput({ eventId, startSlot: 1, select
 const routeSource = fs.readFileSync(path.join(__dirname, '../src/routes/stampCards.ts'), 'utf8');
 const handlerSource = fs.readFileSync(path.join(__dirname, '../src/handler.ts'), 'utf8');
 const apiStackSource = fs.readFileSync(path.join(__dirname, '../../infra/lib/stacks/api-stack.ts'), 'utf8');
+const storageStackSource = fs.readFileSync(path.join(__dirname, '../../infra/lib/stacks/storage-stack.ts'), 'utf8');
 const stampCardHandlerBlock = handlerSource.slice(
   handlerSource.indexOf("path === '/admin/stamp-cards/export'"),
   handlerSource.indexOf('const inspectionQrExportMatch')
@@ -31,6 +32,11 @@ const stampCardHandlerBlock = handlerSource.slice(
 assert.match(routeSource, /await uploadPdf\(s3Key, data\)/);
 assert.match(routeSource, /getPresignedDownloadUrl\(s3Key, 300, filename\)/);
 assert.match(routeSource, /for \(let row = 0; row < matrix\.size; row \+= 1\)/);
+assert.match(routeSource, /const shortYear = year\.slice\(-2\)/);
+assert.match(routeSource, /fillColor\(accentColor\)\.roundedRect\(bx, by, badge, badge/);
+assert.match(routeSource, /getAssetObjectBuffer\(STAMP_CARD_LOGO_KEY\)/);
+assert.match(routeSource, /opacity\(0\.42\)\.image\(logoImage/);
+assert.match(storageStackSource, /destinationKeyPrefix: 'public\/stamp-cards'/);
 assert.match(stampCardHandlerBlock, /downloadUrl: download\.downloadUrl/);
 assert.doesNotMatch(stampCardHandlerBlock, /dataBase64: download\.data\.toString\('base64'\)/);
 assert.match(stampCardHandlerBlock, /console\.error\('stamp_card_export_failed'/);

@@ -58,6 +58,14 @@ export class StorageStack extends Stack {
       retainOnDelete: true
     });
 
+    new s3deploy.BucketDeployment(this, 'StampCardLogoDeployment', {
+      destinationBucket: this.assetsBucket,
+      destinationKeyPrefix: 'public/stamp-cards',
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../../assets/stamp-cards'))],
+      prune: false,
+      retainOnDelete: true
+    });
+
     new s3deploy.BucketDeployment(this, 'MailAttachmentsDeployment', {
       destinationBucket: this.assetsBucket,
       destinationKeyPrefix: 'public/mail/attachments',

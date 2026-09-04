@@ -297,7 +297,10 @@ export const createStampCardExport = async (input: StampCardExportInput, actorUs
   const logoBuffer = await loadStampCardLogo();
   const data = await new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 0, autoFirstPage: true, info: { Title: `Stempelkarten ${resolved.year}` } });
-    const logoImage = logoBuffer ? doc.openImage(logoBuffer) : null;
+    // The standalone PDFKit build uses its own browser-compatible Buffer shim,
+    // which does not recognize a native Node.js Buffer and otherwise treats it
+    // as a file path. A data URL is supported consistently in Lambda and tests.
+    const logoImage = logoBuffer ? doc.openImage(`data:image/png;base64,${logoBuffer.toString('base64')}`) : null;
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('end', () => resolve(Buffer.concat(chunks)));

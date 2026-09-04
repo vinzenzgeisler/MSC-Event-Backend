@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const PDFDocument = require('pdfkit/js/pdfkit.standalone');
 const { validateStampCardExportInput } = require('../dist/routes/stampCards');
 
 const eventId = '11111111-1111-4111-8111-111111111111';
@@ -36,11 +37,21 @@ assert.match(routeSource, /const shortYear = year\.slice\(-2\)/);
 assert.match(routeSource, /fillColor\(accentColor\)\.roundedRect\(bx, by, badge, badge/);
 assert.match(routeSource, /getAssetObjectBuffer\(STAMP_CARD_LOGO_KEY\)/);
 assert.match(routeSource, /opacity\(0\.42\)\.image\(logoImage/);
+assert.match(routeSource, /data:image\/png;base64/);
 assert.match(storageStackSource, /destinationKeyPrefix: 'public\/stamp-cards'/);
 assert.match(stampCardHandlerBlock, /downloadUrl: download\.downloadUrl/);
 assert.doesNotMatch(stampCardHandlerBlock, /dataBase64: download\.data\.toString\('base64'\)/);
 assert.match(stampCardHandlerBlock, /console\.error\('stamp_card_export_failed'/);
 assert.match(apiStackSource, /memorySize: 1024/);
 assert.match(apiStackSource, /timeout: cdk\.Duration\.seconds\(29\)/);
+
+const logoBuffer = fs.readFileSync(path.join(__dirname, '../../infra/assets/stamp-cards/msc-wordmark.png'));
+const previewDocument = new PDFDocument({ size: [243.8, 155.65], margin: 0 });
+const previewLogo = previewDocument.openImage(`data:image/png;base64,${logoBuffer.toString('base64')}`);
+assert.equal(previewLogo.width, 320);
+assert.equal(previewLogo.height, 267);
+assert.doesNotThrow(() => previewDocument.image(previewLogo, 8, 4, { fit: [39, 27] }));
+previewDocument.on('data', () => {});
+previewDocument.end();
 
 console.log('stamp-card contract tests passed');

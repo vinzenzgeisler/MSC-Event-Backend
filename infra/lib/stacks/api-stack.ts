@@ -95,10 +95,13 @@ export class ApiStack extends Stack {
       entry: path.join(__dirname, '../../../api/src/handler.ts'),
       handler: 'handler',
       functionName: `${props.config.prefix}-api-handler`,
-      memorySize: 256,
+      // Bulk stamp-card PDFs render many personalized QR codes. More memory also
+      // assigns proportionally more CPU and keeps the synchronous API below the gateway
+      // integration timeout without moving the user-facing download async.
+      memorySize: 1024,
       // Campaign preparation resolves and renders several hundred personalized
       // recipients before atomically inserting the outbox batch.
-      timeout: cdk.Duration.seconds(25),
+      timeout: cdk.Duration.seconds(29),
       depsLockFilePath,
       environment: {
         STAGE: props.config.stage,

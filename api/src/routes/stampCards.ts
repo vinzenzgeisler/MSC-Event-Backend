@@ -178,12 +178,27 @@ const drawQr = (doc: any, matrix: QrCodeMatrix, x: number, y: number, size: numb
   const module = size / (matrix.size + quiet * 2);
   doc.save().fillColor('#FFFFFF').rect(x, y, size, size).fill();
   doc.fillColor('#000000');
-  matrix.modules.forEach((filled, index) => {
-    if (!filled) return;
-    const column = index % matrix.size;
-    const row = Math.floor(index / matrix.size);
-    doc.rect(x + (column + quiet) * module, y + (row + quiet) * module, module + 0.08, module + 0.08).fill();
-  });
+  // Merge adjacent modules into horizontal runs and fill them in one operation.
+  // A bulk sheet otherwise emits hundreds of thousands of individual PDF fill
+  // commands and can exhaust the synchronous API Lambda timeout.
+  for (let row = 0; row < matrix.size; row += 1) {
+    let runStart: number | null = null;
+    for (let column = 0; column <= matrix.size; column += 1) {
+      const filled = column < matrix.size && matrix.modules[row * matrix.size + column];
+      if (filled && runStart === null) {
+        runStart = column;
+      } else if (!filled && runStart !== null) {
+        doc.rect(
+          x + (runStart + quiet) * module,
+          y + (row + quiet) * module,
+          (column - runStart) * module + 0.08,
+          module + 0.08
+        );
+        runStart = null;
+      }
+    }
+  }
+  doc.fill();
   const badge = 18;
   const bx = x + (size - badge) / 2;
   const by = y + (size - badge) / 2;

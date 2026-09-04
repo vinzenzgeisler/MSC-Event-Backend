@@ -36,12 +36,15 @@ export const uploadFile = async (key: string, body: Buffer, contentType: string)
   );
 };
 
-export const getPresignedDownloadUrl = async (key: string, expiresInSeconds = 300) => {
+export const getPresignedDownloadUrl = async (key: string, expiresInSeconds = 300, downloadFileName?: string) => {
   const client = getS3Client();
   const bucket = getDocumentsBucket();
   const command = new GetObjectCommand({
     Bucket: bucket,
-    Key: key
+    Key: key,
+    ResponseContentDisposition: downloadFileName
+      ? `attachment; filename="${downloadFileName.replace(/["\\\r\n]/g, '_')}"`
+      : undefined
   });
   return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 };

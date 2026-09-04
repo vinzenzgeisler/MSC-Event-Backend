@@ -229,7 +229,7 @@
         "tags": ["admin"],
         "summary": "Generate the 2 by 5 pre-cut A4 stamp-card PDF",
         "security": [{ "bearerAuth": [] }],
-        "responses": { "200": { "description": "Base64 encoded PDF plus card and page counts" }, "400": { "description": "Invalid slot or subject selection" } }
+        "responses": { "200": { "description": "Short-lived document download URL plus card and page counts" }, "400": { "description": "Invalid slot or subject selection" } }
       }
     },
     "/admin/entries/{id}/codriver-invitations": {

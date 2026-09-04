@@ -4135,9 +4135,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const download = await createStampCardExport(input, auth.sub);
       return json(200, {
         ok: true,
-        filename: `stempelkarten-${download.year}.pdf`,
+        filename: download.filename,
         mimeType: 'application/pdf',
-        dataBase64: download.data.toString('base64'),
+        downloadUrl: download.downloadUrl,
         cardCount: download.cardCount,
         pageCount: download.pageCount
       });

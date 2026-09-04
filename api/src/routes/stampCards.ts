@@ -1,10 +1,12 @@
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { entry, entryCharityCodriver, event, eventClass, person } from '../db/schema';
 import { buildQrCodeMatrix, type QrCodeMatrix } from '../docs/girocode';
+import { getPresignedDownloadUrl, uploadPdf } from '../docs/storage';
 
 // Lambda uses the standalone build so rendering never depends on host fonts.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -263,6 +265,10 @@ export const createStampCardExport = async (input: StampCardExportInput, actorUs
     doc.end();
   });
   const pageCount = Math.ceil((input.startSlot - 1 + resolved.cards.length) / 10);
+  const filename = `stempelkarten-${resolved.year}.pdf`;
+  const s3Key = `exports/${input.eventId}/stamp-cards/${randomUUID()}.pdf`;
+  await uploadPdf(s3Key, data);
+  const downloadUrl = await getPresignedDownloadUrl(s3Key, 300, filename);
   const db = await getDb();
   await writeAuditLog(db as never, {
     eventId: input.eventId,
@@ -272,7 +278,7 @@ export const createStampCardExport = async (input: StampCardExportInput, actorUs
     entityId: input.eventId,
     payload: { cardCount: resolved.cards.length, pageCount, startSlot: input.startSlot, selectionType: input.selection.type }
   });
-  return { data, cardCount: resolved.cards.length, pageCount, year: resolved.year };
+  return { downloadUrl, filename, cardCount: resolved.cards.length, pageCount, year: resolved.year };
 };
 
 export const validateStampCardExportInput = (payload: unknown) => exportSchema.parse(payload);

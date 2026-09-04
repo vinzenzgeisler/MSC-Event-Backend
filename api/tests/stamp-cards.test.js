@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { validateStampCardExportInput } = require('../dist/routes/stampCards');
 
 const eventId = '11111111-1111-4111-8111-111111111111';
@@ -18,5 +20,16 @@ assert.equal(validateStampCardExportInput({
 
 assert.throws(() => validateStampCardExportInput({ eventId, startSlot: 11, selection: { type: 'accepted_regular' } }));
 assert.throws(() => validateStampCardExportInput({ eventId, startSlot: 1, selection: { type: 'subjects', subjects: [] } }));
+
+const routeSource = fs.readFileSync(path.join(__dirname, '../src/routes/stampCards.ts'), 'utf8');
+const handlerSource = fs.readFileSync(path.join(__dirname, '../src/handler.ts'), 'utf8');
+const stampCardHandlerBlock = handlerSource.slice(
+  handlerSource.indexOf("path === '/admin/stamp-cards/export'"),
+  handlerSource.indexOf('const inspectionQrExportMatch')
+);
+assert.match(routeSource, /await uploadPdf\(s3Key, data\)/);
+assert.match(routeSource, /getPresignedDownloadUrl\(s3Key, 300, filename\)/);
+assert.match(stampCardHandlerBlock, /downloadUrl: download\.downloadUrl/);
+assert.doesNotMatch(stampCardHandlerBlock, /dataBase64: download\.data\.toString\('base64'\)/);
 
 console.log('stamp-card contract tests passed');

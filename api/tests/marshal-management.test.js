@@ -245,7 +245,7 @@ async function run() {
   assert.match(handlerSource, /DELETE'[\s\S]*marshalAreaAssignmentMatch[\s\S]*validateMarshalAreaAssignmentDeleteInput[\s\S]*deleteMarshalAreaAssignment/);
   assert.match(handlerSource, /MARSHAL_DAY_SCOPE_INVALID[\s\S]*Day does not belong to event/);
   assert.match(handlerSource, /MARSHAL_SECTION_SCOPE_INVALID[\s\S]*Section does not belong to event/);
-  assert.match(handlerSource, /'attendance', 'section', 'training', 'area'/);
+  assert.match(handlerSource, /'attendance', 'section', 'training', 'area', 'shirt_statistics'/);
   assert.match(handlerSource, /areaId: event\.queryStringParameters\?\.areaId[\s\S]*shiftId: event\.queryStringParameters\?\.shiftId/);
   assert.match(handlerSource, /MARSHAL_AREA_SCOPE_INVALID[\s\S]*Area does not belong to event/);
   assert.match(handlerSource, /MARSHAL_SHIFT_SCOPE_INVALID[\s\S]*Shift does not belong to area and event/);
@@ -270,6 +270,12 @@ async function run() {
   assert.match(routeSource, /MARSHAL_DAY_SCOPE_INVALID/);
   assert.match(routeSource, /MARSHAL_SECTION_SCOPE_INVALID/);
   assert.match(routeSource, /eq\(marshalPerson\.noDeployment, false\)/);
+  assert.match(routeSource, /shirt: marshalPerson\.shirtSize/);
+  assert.doesNotMatch(routeSource.match(/export const createMarshalPrintPdf[\s\S]*$/)?.[0] ?? '', /shirt: marshalEventParticipation\.shirtSizeSnapshot/);
+  assert.match(routeSource, /registered: 'Angemeldet'/);
+  assert.match(routeSource, /Anwesenheit \$\{day\.label\} \$\{formatPrintDate\(day\.eventDate\)\}/);
+  assert.match(routeSource, /Zusätzliche Helfer – handschriftliche Erfassung/);
+  assert.match(routeSource, /input\.type === 'shirt_statistics'/);
   assert.match(routeSource, /input\.type === 'area'[\s\S]*marshalHelperArea\.id, input\.areaId[\s\S]*marshalHelperArea\.eventId, input\.eventId/);
   assert.match(routeSource, /marshalAreaShift\.id, input\.shiftId[\s\S]*marshalAreaShift\.areaId, area\.id/);
   assert.match(routeSource, /input\.shiftId[\s\S]*area\.areaType !== 'setup'[\s\S]*MARSHAL_SHIFT_SCOPE_INVALID/);

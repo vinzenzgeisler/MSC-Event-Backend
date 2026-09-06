@@ -1420,9 +1420,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     if (!hasPermission(auth, 'marshals.export')) return errorJson(403, 'Forbidden');
     const eventId = event.queryStringParameters?.eventId;
     const type = event.queryStringParameters?.type;
-    if (!eventId || !type || !['attendance', 'section', 'training', 'area'].includes(type)) return errorJson(400, 'eventId and valid type are required');
+    if (!eventId || !type || !['attendance', 'section', 'training', 'area', 'shirt_statistics'].includes(type)) return errorJson(400, 'eventId and valid type are required');
     try {
-      const result = await createMarshalPrintPdf({ eventId, type: type as 'attendance' | 'section' | 'training' | 'area', dayId: event.queryStringParameters?.dayId, sectionId: event.queryStringParameters?.sectionId, trainingId: event.queryStringParameters?.trainingId, areaId: event.queryStringParameters?.areaId, shiftId: event.queryStringParameters?.shiftId });
+      const result = await createMarshalPrintPdf({ eventId, type: type as 'attendance' | 'section' | 'training' | 'area' | 'shirt_statistics', dayId: event.queryStringParameters?.dayId, sectionId: event.queryStringParameters?.sectionId, trainingId: event.queryStringParameters?.trainingId, areaId: event.queryStringParameters?.areaId, shiftId: event.queryStringParameters?.shiftId });
       if (!result) return errorJson(404, 'Print list not found');
       return { statusCode: 200, headers: { 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="${result.filename}"`, 'cache-control': 'no-store' }, isBase64Encoded: true, body: result.buffer.toString('base64') };
     } catch (error) {

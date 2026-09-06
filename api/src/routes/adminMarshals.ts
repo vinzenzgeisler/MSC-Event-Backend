@@ -650,6 +650,9 @@ export const upsertMarshalAssignment = async (personId: string, input: z.infer<t
       ...day,
       sectionId: resolveMarshalAssignmentSectionId(day.sectionId, day.postId ? postById.get(day.postId)!.sectionId : null)
     }));
+    if (normalizedDays.some(isExplicitMarshalTrackAssignment) && !isMarshalTrackActivityArea(person.activityAreas)) {
+      await tx.update(marshalPerson).set({ activityAreas: [...person.activityAreas, 'Strecke'], updatedAt: new Date() }).where(eq(marshalPerson.id, personId));
+    }
     const [participation] = await tx.insert(marshalEventParticipation).values({
       eventId: input.eventId, personId, contactOwner: input.contactOwner, wish: input.wish, note: input.note,
       shirtSizeSnapshot: input.shirtSizeSnapshot ?? person.shirtSize
@@ -1204,20 +1207,37 @@ const renderSetupPdf = (title: string, rows: Array<{ firstName: string; lastName
 
 const printStatusLabel = (status: string) => ({ not_asked: 'Nicht angefragt', pending: 'Offen', accepted: 'Zugesagt', declined: 'Abgesagt', tentative: 'Vielleicht' }[status] ?? status);
 const trainingStatusLabel = (status: string) => ({ registered: 'Angemeldet', attended: 'Anwesend', absent: 'Nicht anwesend', excused: 'Entschuldigt' }[status] ?? status);
+const TRACK_AREA_ALIASES = new Set(['strecke', 'streckenposten', 'team strecke', 'team streckenposten', 'track', 'marshal']);
+export const isMarshalTrackActivityArea = (activityAreas: unknown): boolean => Array.isArray(activityAreas) && activityAreas.some((value) => (
+  typeof value === 'string' && TRACK_AREA_ALIASES.has(value.trim().replace(/[\s_-]+/g, ' ').toLocaleLowerCase('de'))
+));
+export const isExplicitMarshalTrackAssignment = (assignment: { role?: string | null; sectionId?: string | null; postId?: string | null; functionCode?: string | null }): boolean => Boolean(
+  assignment.postId
+    || assignment.sectionId
+    || assignment.role === 'marshal'
+    || assignment.role === 'section_leader'
+    || (assignment.role === 'special' && assignment.functionCode?.trim())
+);
+export const normalizeMarshalShirtSize = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const validSize = /^(?:(?:H|D|K|HERREN|DAMEN|KINDER)\s*[-/ ]\s*)?(?:XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|[2-6]XL|\d{2,3}(?:\s*\/\s*\d{2,3})?)$/i;
+  return validSize.test(trimmed) ? trimmed : null;
+};
 const formatPrintDate = (value: string | Date) => {
   const raw = value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
   const [year, month, day] = raw.split('-');
   return day && month && year ? `${day}.${month}.${year}` : raw;
 };
 
-export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: string; sectionId?: string; trainingId?: string; areaId?: string; shiftId?: string; type: 'attendance' | 'section' | 'training' | 'area' | 'shirt_statistics' }) => {
+export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: string; sectionId?: string; trainingId?: string; areaId?: string; shiftId?: string; statisticsAreaId?: string; type: 'attendance' | 'section' | 'training' | 'area' | 'shirt_statistics' }) => {
   const db = await getDb();
   if (input.type === 'shirt_statistics') {
     const [people, trackAssignments, areas, areaAssignments, shiftAssignments] = await Promise.all([
-      db.select({ participationId: marshalEventParticipation.id, shirtSize: marshalPerson.shirtSize })
+      db.select({ participationId: marshalEventParticipation.id, shirtSize: marshalPerson.shirtSize, activityAreas: marshalPerson.activityAreas })
         .from(marshalEventParticipation).innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id))
-        .where(and(eq(marshalEventParticipation.eventId, input.eventId), eq(marshalPerson.noDeployment, false))),
-      db.select({ participationId: marshalDayAssignment.participationId }).from(marshalDayAssignment)
+        .where(and(eq(marshalEventParticipation.eventId, input.eventId), eq(marshalPerson.isActive, true), eq(marshalPerson.noDeployment, false))),
+      db.select({ participationId: marshalDayAssignment.participationId, role: marshalDayAssignment.role, sectionId: marshalDayAssignment.sectionId, postId: marshalDayAssignment.postId, functionCode: marshalDayAssignment.functionCode }).from(marshalDayAssignment)
         .innerJoin(marshalEventParticipation, eq(marshalDayAssignment.participationId, marshalEventParticipation.id))
         .where(and(eq(marshalEventParticipation.eventId, input.eventId), eq(marshalDayAssignment.commitmentStatus, 'accepted'))),
       db.select().from(marshalHelperArea).where(eq(marshalHelperArea.eventId, input.eventId)).orderBy(asc(marshalHelperArea.sortOrder), asc(marshalHelperArea.name)),
@@ -1227,11 +1247,15 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
         .innerJoin(marshalAreaShift, eq(marshalShiftAssignment.shiftId, marshalAreaShift.id))
         .where(and(eq(marshalShiftAssignment.eventId, input.eventId), eq(marshalShiftAssignment.commitmentStatus, 'accepted')))
     ]);
-    const trackIds = new Set(trackAssignments.map((row) => row.participationId));
-    const shirtByParticipation = new Map(people.map((row) => [row.participationId, row.shirtSize?.trim() || 'Ohne Größenangabe']));
+    const activityAreasByParticipation = new Map(people.map((row) => [row.participationId, row.activityAreas]));
+    const trackIds = new Set(trackAssignments
+      .filter((row) => isMarshalTrackActivityArea(activityAreasByParticipation.get(row.participationId)))
+      .map((row) => row.participationId));
+    const shirtByParticipation = new Map(people.map((row) => [row.participationId, normalizeMarshalShirtSize(row.shirtSize) ?? 'Ohne Größenangabe']));
     const counted = new Set<string>();
     const resultRows: string[][] = [];
-    const addGroup = (name: string, participationIds: Iterable<string>) => {
+    let selectedGroupName: string | null = null;
+    const addGroup = (id: string, name: string, participationIds: Iterable<string>) => {
       const counts = new Map<string, number>();
       for (const participationId of participationIds) {
         if (counted.has(participationId) || !shirtByParticipation.has(participationId)) continue;
@@ -1239,17 +1263,26 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
         const size = shirtByParticipation.get(participationId)!;
         counts.set(size, (counts.get(size) ?? 0) + 1);
       }
-      [...counts.entries()].sort(([a], [b]) => a.localeCompare(b, 'de', { numeric: true })).forEach(([size, count]) => resultRows.push([name, size, String(count)]));
+      if (!input.statisticsAreaId || input.statisticsAreaId === id) {
+        selectedGroupName = input.statisticsAreaId ? name : null;
+        const rows = [...counts.entries()].sort(([a], [b]) => a.localeCompare(b, 'de', { numeric: true }));
+        if (rows.length === 0) resultRows.push([name, 'Keine zugesagten Helfer', '0']);
+        else rows.forEach(([size, count]) => resultRows.push([name, size, String(count)]));
+      }
     };
-    addGroup('Streckenposten', trackIds);
+    addGroup('track', 'Streckenposten', trackIds);
     for (const area of areas) {
       const ids = new Set([
         ...areaAssignments.filter((row) => row.areaId === area.id).map((row) => row.participationId),
         ...shiftAssignments.filter((row) => row.areaId === area.id).map((row) => row.participationId)
       ]);
-      addGroup(area.name, ids);
+      const dayLabel = area.dayScope === 'saturday' ? 'Samstag' : area.dayScope === 'sunday' ? 'Sonntag' : null;
+      addGroup(area.id, dayLabel ? `${area.name} · ${dayLabel}` : area.name, ids);
     }
-    return { filename: 'T-Shirt-Statistik.pdf', buffer: await renderPdf('T-Shirt-Bedarf nach Bereich', ['Bereich', 'T-Shirt-Größe', 'Anzahl'], resultRows, [330, 250, 120]) };
+    if (input.statisticsAreaId && !selectedGroupName) throw new Error('MARSHAL_STATISTICS_AREA_INVALID');
+    const title = selectedGroupName ? `T-Shirt-Bedarf – ${selectedGroupName}` : 'T-Shirt-Bedarf nach Bereich';
+    const safeName = (selectedGroupName ?? 'Gesamt').normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'Bereich';
+    return { filename: `T-Shirt-Statistik-${safeName}.pdf`, buffer: await renderPdf(title, ['Bereich', 'T-Shirt-Größe', 'Anzahl'], resultRows, [330, 250, 120]) };
   }
   if (input.type === 'training' && input.trainingId) {
     const [session] = await db.select().from(marshalTrainingSession).where(and(eq(marshalTrainingSession.id, input.trainingId), eq(marshalTrainingSession.eventId, input.eventId))).limit(1);
@@ -1299,14 +1332,15 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
     if (!section) throw new Error('MARSHAL_SECTION_SCOPE_INVALID');
     selectedSection = section;
   }
-  const filters = [eq(marshalEventParticipation.eventId, input.eventId), eq(marshalDayAssignment.dayId, input.dayId), eq(marshalDayAssignment.commitmentStatus, 'accepted'), eq(marshalPerson.noDeployment, false)];
+  const filters = [eq(marshalEventParticipation.eventId, input.eventId), eq(marshalDayAssignment.dayId, input.dayId), eq(marshalDayAssignment.commitmentStatus, 'accepted'), eq(marshalPerson.isActive, true), eq(marshalPerson.noDeployment, false)];
   if (input.sectionId) filters.push(eq(marshalDayAssignment.sectionId, input.sectionId));
   const orderBy = input.type === 'section'
     ? [sql`${marshalPost.sortOrder} asc nulls first`, asc(marshalPerson.lastName), asc(marshalPerson.firstName)]
     : [asc(marshalPerson.lastName), asc(marshalPerson.firstName)];
-  const rows = await db.select({ firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, zip: marshalPerson.zip, city: marshalPerson.city, shirt: marshalPerson.shirtSize, post: marshalPost.code, functionCode: marshalDayAssignment.functionCode })
+  const rows = await db.select({ firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, zip: marshalPerson.zip, city: marshalPerson.city, shirt: marshalPerson.shirtSize, activityAreas: marshalPerson.activityAreas, role: marshalDayAssignment.role, sectionId: marshalDayAssignment.sectionId, postId: marshalDayAssignment.postId, post: marshalPost.code, functionCode: marshalDayAssignment.functionCode })
     .from(marshalDayAssignment).innerJoin(marshalEventParticipation, eq(marshalDayAssignment.participationId, marshalEventParticipation.id)).innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id)).leftJoin(marshalPost, eq(marshalDayAssignment.postId, marshalPost.id)).where(and(...filters)).orderBy(...orderBy);
+  const printableRows = rows.filter((row) => isMarshalTrackActivityArea(row.activityAreas));
   const attendanceTitle = `Anwesenheit ${day.label} ${formatPrintDate(day.eventDate)}`;
-  if (input.type === 'section') return { filename: `Anwesenheit-${day.label}-${selectedSection?.name ?? 'Abschnitt'}.pdf`, buffer: await renderPdf(`${attendanceTitle} – ${selectedSection?.name ?? 'Abschnitt'}`, ['Vorname', 'Nachname', 'Posten/Funktion', 'Änderung'], rows.map((row) => [row.firstName, row.lastName, row.post ?? row.functionCode ?? '', '']), [140, 160, 150, 290]) };
-  return { filename: `Anwesenheit-${day.label}.pdf`, buffer: await renderPdf(attendanceTitle, ['Vorname', 'Nachname', 'PLZ', 'Wohnort', 'T-Shirt', 'Posten', 'Unterschrift'], rows.map((row) => [row.firstName, row.lastName, row.zip ?? '', row.city ?? '', row.shirt ?? '', row.post ?? row.functionCode ?? '', '']), [95, 115, 55, 115, 60, 85, 215]) };
+  if (input.type === 'section') return { filename: `Anwesenheit-${day.label}-${selectedSection?.name ?? 'Abschnitt'}.pdf`, buffer: await renderPdf(`${attendanceTitle} – ${selectedSection?.name ?? 'Abschnitt'}`, ['Vorname', 'Nachname', 'Posten/Funktion', 'Änderung'], printableRows.map((row) => [row.firstName, row.lastName, row.post ?? row.functionCode ?? '', '']), [140, 160, 150, 290]) };
+  return { filename: `Anwesenheit-${day.label}.pdf`, buffer: await renderPdf(attendanceTitle, ['Vorname', 'Nachname', 'PLZ', 'Wohnort', 'T-Shirt', 'Posten', 'Unterschrift'], printableRows.map((row) => [row.firstName, row.lastName, row.zip ?? '', row.city ?? '', normalizeMarshalShirtSize(row.shirt) ?? '', row.post ?? row.functionCode ?? '', '']), [95, 115, 55, 115, 60, 85, 215]) };
 };

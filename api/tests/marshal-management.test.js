@@ -6,7 +6,10 @@ const {
   findAmbiguousMarshalNameMatches,
   indexMarshalPeopleByNormalizedName,
   indexMarshalPeopleByNormalizedNameCandidates,
+  isExplicitMarshalTrackAssignment,
+  isMarshalTrackActivityArea,
   marshalParticipationUpdateValues,
+  normalizeMarshalShirtSize,
   parseMarshalAssignmentCell,
   parseMarshalWorkbookBuffer,
   resolveMarshalEmergencyTargetStaff,
@@ -60,6 +63,17 @@ async function run() {
 
   assert.deepEqual(validateMarshalPersonPatch({ noDeployment: true }), { noDeployment: true });
   assert.throws(() => validateMarshalPersonPatch({ noDeployment: 'yes' }));
+  assert.equal(normalizeMarshalShirtSize(' H-2XL '), 'H-2XL');
+  assert.equal(normalizeMarshalShirtSize('D-S'), 'D-S');
+  assert.equal(normalizeMarshalShirtSize('128/134'), '128/134');
+  assert.equal(normalizeMarshalShirtSize('Streckenposten'), null);
+  assert.equal(normalizeMarshalShirtSize('1/6, H-XXL'), null);
+  assert.equal(isMarshalTrackActivityArea(['Aufbau']), false);
+  assert.equal(isMarshalTrackActivityArea(['Team Strecke']), true);
+  assert.equal(isMarshalTrackActivityArea(null), false);
+  assert.equal(isExplicitMarshalTrackAssignment({ role: null, sectionId: null, postId: null, functionCode: null }), false);
+  assert.equal(isExplicitMarshalTrackAssignment({ role: 'marshal', sectionId: null, postId: null, functionCode: null }), true);
+  assert.equal(isExplicitMarshalTrackAssignment({ role: 'special', sectionId: null, postId: null, functionCode: 'Streckenposten' }), true);
 
   const eventId = '11111111-1111-4111-8111-111111111111';
   const areaId = '33333333-3333-4333-8333-333333333333';
@@ -247,6 +261,7 @@ async function run() {
   assert.match(handlerSource, /MARSHAL_SECTION_SCOPE_INVALID[\s\S]*Section does not belong to event/);
   assert.match(handlerSource, /'attendance', 'section', 'training', 'area', 'shirt_statistics'/);
   assert.match(handlerSource, /areaId: event\.queryStringParameters\?\.areaId[\s\S]*shiftId: event\.queryStringParameters\?\.shiftId/);
+  assert.match(handlerSource, /statisticsAreaId: event\.queryStringParameters\?\.statisticsAreaId/);
   assert.match(handlerSource, /MARSHAL_AREA_SCOPE_INVALID[\s\S]*Area does not belong to event/);
   assert.match(handlerSource, /MARSHAL_SHIFT_SCOPE_INVALID[\s\S]*Shift does not belong to area and event/);
 
@@ -270,12 +285,16 @@ async function run() {
   assert.match(routeSource, /MARSHAL_DAY_SCOPE_INVALID/);
   assert.match(routeSource, /MARSHAL_SECTION_SCOPE_INVALID/);
   assert.match(routeSource, /eq\(marshalPerson\.noDeployment, false\)/);
+  assert.match(routeSource, /eq\(marshalPerson\.isActive, true\)/);
+  assert.match(routeSource, /normalizedDays\.some\(isExplicitMarshalTrackAssignment\)[\s\S]*activityAreas: \[\.\.\.person\.activityAreas, 'Strecke'\]/);
+  assert.match(routeSource, /printableRows = rows\.filter[\s\S]*isMarshalTrackActivityArea/);
   assert.match(routeSource, /shirt: marshalPerson\.shirtSize/);
   assert.doesNotMatch(routeSource.match(/export const createMarshalPrintPdf[\s\S]*$/)?.[0] ?? '', /shirt: marshalEventParticipation\.shirtSizeSnapshot/);
   assert.match(routeSource, /registered: 'Angemeldet'/);
   assert.match(routeSource, /Anwesenheit \$\{day\.label\} \$\{formatPrintDate\(day\.eventDate\)\}/);
   assert.match(routeSource, /Zusätzliche Helfer – handschriftliche Erfassung/);
   assert.match(routeSource, /input\.type === 'shirt_statistics'/);
+  assert.match(routeSource, /MARSHAL_STATISTICS_AREA_INVALID/);
   assert.match(routeSource, /input\.type === 'area'[\s\S]*marshalHelperArea\.id, input\.areaId[\s\S]*marshalHelperArea\.eventId, input\.eventId/);
   assert.match(routeSource, /marshalAreaShift\.id, input\.shiftId[\s\S]*marshalAreaShift\.areaId, area\.id/);
   assert.match(routeSource, /input\.shiftId[\s\S]*area\.areaType !== 'setup'[\s\S]*MARSHAL_SHIFT_SCOPE_INVALID/);

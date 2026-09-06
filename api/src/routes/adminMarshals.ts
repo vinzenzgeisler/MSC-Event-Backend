@@ -5,6 +5,7 @@ import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
+import { getAssetObjectBuffer } from '../docs/storage';
 import {
   event,
   marshalAreaAssignment,
@@ -1172,58 +1173,167 @@ export const commitMarshalImport = async (input: z.infer<typeof importInputSchem
   });
 };
 
-const renderPdf = (title: string, headers: string[], rows: string[][], widths: number[]) => new Promise<Buffer>((resolve, reject) => {
-  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 32 });
+type MarshalPdfTable = {
+  heading?: string;
+  headers: string[];
+  rows: string[][];
+  widths: number[];
+  checkboxColumns?: number[];
+  minimumRowHeight?: number;
+  pageBreakBefore?: boolean;
+};
+
+const MARSHAL_PRINT_LOGO_KEY = 'public/mail/msc-logo.png';
+const marshalPrintGeneratedAt = () => new Intl.DateTimeFormat('de-DE', {
+  day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+}).format(new Date());
+
+const renderStyledMarshalPdf = (title: string, tables: MarshalPdfTable[], logoImage?: Buffer | null) => new Promise<Buffer>((resolve, reject) => {
+  const doc = new PDFDocument({
+    size: 'A4',
+    layout: 'landscape',
+    margin: 30,
+    bufferPages: true,
+    info: { Title: title, Author: 'MSC Oberlausitzer Dreiländereck e.V.', Subject: 'Helferverwaltung' }
+  });
   const chunks: Buffer[] = [];
+  const pageX = 30;
+  const pageWidth = doc.page.width - 60;
+  const pageBottom = () => doc.page.height - 42;
+  const generatedAt = marshalPrintGeneratedAt();
+  let cursorY = 0;
   doc.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
   doc.on('end', () => resolve(Buffer.concat(chunks)));
   doc.on('error', reject);
-  doc.fontSize(16).text(title).moveDown(0.7);
-  const drawRow = (values: string[], bold = false) => {
-    const y = doc.y;
-    if (bold) doc.font('Helvetica-Bold'); else doc.font('Helvetica');
-    values.forEach((value, index) => doc.fontSize(9).text(value || '', 32 + widths.slice(0, index).reduce((sum, width) => sum + width, 0), y, { width: widths[index] - 6, height: 22 }));
-    doc.moveTo(32, y + 21).lineTo(32 + widths.reduce((sum, width) => sum + width, 0), y + 21).strokeColor('#cccccc').stroke();
-    doc.y = y + 24;
-    if (doc.y > 540) { doc.addPage(); doc.y = 32; }
+
+  const drawPageHeader = (continued = false) => {
+    if (logoImage?.length) {
+      try {
+        doc.image(logoImage, doc.page.width - 95, 22, { fit: [62, 62], align: 'right' });
+      } catch {
+        // The list remains printable if the optional logo cannot be decoded.
+      }
+    }
+    doc.font('Helvetica-Bold').fontSize(8.2).fillColor('#163A70').text('MSC OBERLAUSITZER DREILÄNDERECK E.V.', pageX, 25, { width: pageWidth - 80, characterSpacing: 0.65 });
+    const titleWidth = pageWidth - 86;
+    doc.font('Helvetica-Bold').fontSize(18).fillColor('#0F172A').text(title, pageX, 40, { width: titleWidth, lineGap: 1 });
+    const titleHeight = doc.heightOfString(title, { width: titleWidth, lineGap: 1 });
+    const metadataY = 42 + titleHeight;
+    doc.font('Helvetica').fontSize(7.8).fillColor('#64748B').text(`Helferverwaltung · Erstellt am ${generatedAt}${continued ? ' · Fortsetzung' : ''}`, pageX, metadataY, { width: titleWidth });
+    const dividerY = Math.max(metadataY + 16, 88);
+    doc.save().lineWidth(1.2).strokeColor('#E6B800').moveTo(pageX, dividerY).lineTo(pageX + pageWidth, dividerY).stroke().restore();
+    cursorY = dividerY + 14;
   };
-  drawRow(headers, true);
-  rows.forEach((row) => drawRow(row));
+
+  const scaledWidths = (widths: number[]) => {
+    const sourceTotal = widths.reduce((sum, width) => sum + width, 0) || 1;
+    const result = widths.map((width) => width * pageWidth / sourceTotal);
+    result[result.length - 1] += pageWidth - result.reduce((sum, width) => sum + width, 0);
+    return result;
+  };
+
+  const drawSectionHeading = (heading?: string, continued = false) => {
+    if (!heading) return;
+    const label = continued ? `${heading} · Fortsetzung` : heading;
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#163A70').text(label.toUpperCase(), pageX, cursorY, { width: pageWidth, characterSpacing: 0.45 });
+    cursorY += 17;
+  };
+
+  const drawTableHeader = (table: MarshalPdfTable, widths: number[]) => {
+    const height = 30;
+    let x = pageX;
+    table.headers.forEach((header, index) => {
+      const width = widths[index];
+      doc.save().rect(x, cursorY, width, height).fill('#163A70').restore();
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#FFFFFF').text(header.toUpperCase(), x + 6, cursorY + 8, { width: width - 12, height: height - 10, lineGap: 0.5 });
+      x += width;
+    });
+    cursorY += height;
+  };
+
+  const measureRowHeight = (table: MarshalPdfTable, row: string[], widths: number[]) => {
+    doc.font('Helvetica').fontSize(8.5);
+    const checkboxColumns = new Set(table.checkboxColumns ?? []);
+    const contentHeight = row.reduce((maximum, value, index) => checkboxColumns.has(index) ? maximum : Math.max(maximum, doc.heightOfString(value || ' ', { width: widths[index] - 14, lineGap: 1 })), 0);
+    return Math.min(56, Math.max(table.minimumRowHeight ?? 29, contentHeight + 14));
+  };
+
+  const drawTableRow = (table: MarshalPdfTable, row: string[], widths: number[], rowIndex: number) => {
+    const height = measureRowHeight(table, row, widths);
+    const checkboxColumns = new Set(table.checkboxColumns ?? []);
+    let x = pageX;
+    row.forEach((value, index) => {
+      const width = widths[index];
+      doc.save().rect(x, cursorY, width, height).fill(rowIndex % 2 === 0 ? '#FFFFFF' : '#F8FAFC').restore();
+      doc.save().lineWidth(0.55).strokeColor('#CBD5E1').rect(x, cursorY, width, height).stroke().restore();
+      if (checkboxColumns.has(index)) {
+        const boxSize = 12;
+        doc.save().lineWidth(1).strokeColor('#334155').roundedRect(x + (width - boxSize) / 2, cursorY + (height - boxSize) / 2, boxSize, boxSize, 1.5).stroke().restore();
+      } else if (value) {
+        doc.font('Helvetica').fontSize(8.5).fillColor('#0F172A').text(value, x + 7, cursorY + 7, { width: width - 14, height: height - 12, lineGap: 1 });
+      }
+      x += width;
+    });
+    cursorY += height;
+  };
+
+  drawPageHeader();
+  tables.forEach((table) => {
+    if (table.pageBreakBefore) {
+      doc.addPage();
+      drawPageHeader(true);
+    }
+    drawSectionHeading(table.heading);
+    const widths = scaledWidths(table.widths);
+    drawTableHeader(table, widths);
+    table.rows.forEach((row, rowIndex) => {
+      const rowHeight = measureRowHeight(table, row, widths);
+      if (cursorY + rowHeight > pageBottom()) {
+        doc.addPage();
+        drawPageHeader(true);
+        drawSectionHeading(table.heading, true);
+        drawTableHeader(table, widths);
+      }
+      drawTableRow(table, row, widths, rowIndex);
+    });
+  });
+
+  const pageRange = doc.bufferedPageRange();
+  for (let pageIndex = 0; pageIndex < pageRange.count; pageIndex += 1) {
+    doc.switchToPage(pageRange.start + pageIndex);
+    const footerY = doc.page.height - 27;
+    doc.save().lineWidth(0.6).strokeColor('#D8DEE9').moveTo(pageX, footerY - 6).lineTo(pageX + pageWidth, footerY - 6).stroke().restore();
+    doc.font('Helvetica').fontSize(7.4).fillColor('#64748B').text('Interne Arbeitsliste · Helferverwaltung', pageX, footerY, { width: pageWidth / 2 });
+    doc.text(`Seite ${pageIndex + 1} / ${pageRange.count}`, pageX + pageWidth / 2, footerY, { width: pageWidth / 2, align: 'right' });
+  }
   doc.end();
 });
 
-const renderSetupPdf = (title: string, rows: Array<{ firstName: string; lastName: string }>) => new Promise<Buffer>((resolve, reject) => {
-  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 32 });
-  const chunks: Buffer[] = [];
-  doc.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-  doc.on('end', () => resolve(Buffer.concat(chunks)));
-  doc.on('error', reject);
-  const drawTable = (heading: string, headers: string[], values: string[][], widths: number[], rowHeight = 32) => {
-    doc.font('Helvetica-Bold').fontSize(16).text(heading).moveDown(0.7);
-    const drawRow = (row: string[], bold = false) => {
-      const y = doc.y;
-      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica');
-      row.forEach((value, index) => doc.fontSize(8.5).text(value, 32 + widths.slice(0, index).reduce((sum, width) => sum + width, 0), y + 4, { width: widths[index] - 6, height: rowHeight - 7 }));
-      doc.rect(32, y, widths.reduce((sum, width) => sum + width, 0), rowHeight).strokeColor('#b8b8b8').stroke();
-      let x = 32;
-      widths.slice(0, -1).forEach((width) => { x += width; doc.moveTo(x, y).lineTo(x, y + rowHeight).stroke(); });
-      doc.y = y + rowHeight;
-    };
-    drawRow(headers, true);
-    values.forEach((row) => {
-      if (doc.y + rowHeight > 560) {
-        doc.addPage();
-        doc.font('Helvetica-Bold').fontSize(14).text(`${heading} (Fortsetzung)`).moveDown(0.5);
-        drawRow(headers, true);
-      }
-      drawRow(row);
-    });
-  };
-  drawTable(title, ['Anwesend', 'Name', 'Unterschrift Arbeitsschutz', 'Unterschrift Datenschutz'], rows.map((row) => ['[ ]', `${row.lastName}, ${row.firstName}`, '', '']), [70, 240, 230, 230]);
-  doc.addPage();
-  drawTable('Zusätzliche Helfer – handschriftliche Erfassung', ['Name', 'Adresse', 'Kontaktdaten', 'T-Shirt', 'Unterschrift Arbeitsschutz', 'Unterschrift Datenschutz'], Array.from({ length: 10 }, () => ['', '', '', '', '', '']), [135, 155, 145, 65, 135, 130], 42);
-  doc.end();
-});
+export const renderMarshalTablePdf = (title: string, headers: string[], rows: string[][], widths: number[], logoImage?: Buffer | null) => renderStyledMarshalPdf(title, [{
+  headers,
+  rows,
+  widths,
+  checkboxColumns: headers.flatMap((header, index) => /^anwesend(?:heit)?$/i.test(header.trim()) ? [index] : [])
+}], logoImage);
+
+export const renderMarshalSetupPdf = (title: string, rows: Array<{ firstName: string; lastName: string }>, logoImage?: Buffer | null) => renderStyledMarshalPdf(title, [
+  {
+    heading: 'Anwesenheit und Unterschriften',
+    headers: ['Anwesend', 'Name', 'Unterschrift Arbeitsschutz', 'Unterschrift Datenschutz'],
+    rows: rows.map((row) => ['', `${row.lastName}, ${row.firstName}`, '', '']),
+    widths: [70, 240, 230, 230],
+    checkboxColumns: [0],
+    minimumRowHeight: 33
+  },
+  {
+    heading: 'Zusätzliche Helfer · handschriftliche Erfassung',
+    headers: ['Name', 'Adresse', 'Kontaktdaten', 'T-Shirt', 'Unterschrift Arbeitsschutz', 'Unterschrift Datenschutz'],
+    rows: Array.from({ length: 10 }, () => ['', '', '', '', '', '']),
+    widths: [135, 155, 145, 65, 135, 130],
+    minimumRowHeight: 42,
+    pageBreakBefore: true
+  }
+], logoImage);
 
 const printStatusLabel = (status: string) => ({ not_asked: 'Nicht angefragt', pending: 'Offen', accepted: 'Zugesagt', declined: 'Abgesagt', tentative: 'Vielleicht' }[status] ?? status);
 const trainingStatusLabel = (status: string) => ({ registered: 'Angemeldet', attended: 'Anwesend', absent: 'Nicht anwesend', excused: 'Entschuldigt' }[status] ?? status);
@@ -1257,6 +1367,7 @@ const formatPrintDate = (value: string | Date) => {
 
 export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: string; sectionId?: string; trainingId?: string; areaId?: string; shiftId?: string; statisticsAreaId?: string; type: 'attendance' | 'section' | 'training' | 'area' | 'shirt_statistics' }) => {
   const db = await getDb();
+  const logoImage = await getAssetObjectBuffer(MARSHAL_PRINT_LOGO_KEY).catch(() => null);
   if (input.type === 'shirt_statistics') {
     const [people, trackAssignments, areas, areaAssignments, shiftAssignments] = await Promise.all([
       db.select({ participationId: marshalEventParticipation.id, shirtSize: marshalPerson.shirtSize, activityAreas: marshalPerson.activityAreas })
@@ -1307,7 +1418,7 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
     if (input.statisticsAreaId && !selectedGroupName) throw new Error('MARSHAL_STATISTICS_AREA_INVALID');
     const title = selectedGroupName ? `T-Shirt-Bedarf – ${selectedGroupName}` : 'T-Shirt-Bedarf nach Bereich';
     const safeName = (selectedGroupName ?? 'Gesamt').normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'Bereich';
-    return { filename: `T-Shirt-Statistik-${safeName}.pdf`, buffer: await renderPdf(title, ['Bereich', 'T-Shirt-Größe', 'Anzahl'], resultRows, [330, 250, 120]) };
+    return { filename: `T-Shirt-Statistik-${safeName}.pdf`, buffer: await renderMarshalTablePdf(title, ['Bereich', 'T-Shirt-Größe', 'Anzahl'], resultRows, [330, 250, 120], logoImage) };
   }
   if (input.type === 'training' && input.trainingId) {
     const [session] = await db.select().from(marshalTrainingSession).where(and(eq(marshalTrainingSession.id, input.trainingId), eq(marshalTrainingSession.eventId, input.eventId))).limit(1);
@@ -1315,7 +1426,7 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
     const rows = await db.select({ firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, zip: marshalPerson.zip, city: marshalPerson.city, status: marshalTrainingParticipant.attendanceStatus })
       .from(marshalTrainingParticipant).innerJoin(marshalPerson, eq(marshalTrainingParticipant.personId, marshalPerson.id)).where(eq(marshalTrainingParticipant.sessionId, session.id)).orderBy(asc(marshalPerson.lastName));
     const title = `${session.sessionType === 'briefing' ? 'Einweisung' : 'Schulung'} ${formatPrintDate(session.sessionDate)} – ${session.title}`;
-    return { filename: `Teilnehmerliste-${session.sessionDate}.pdf`, buffer: await renderPdf(title, ['Vorname', 'Nachname', 'PLZ', 'Wohnort', 'Status', 'Unterschrift'], rows.map((row) => [row.firstName, row.lastName, row.zip ?? '', row.city ?? '', trainingStatusLabel(row.status), '']), [100, 120, 70, 130, 90, 250]) };
+    return { filename: `Teilnehmerliste-${session.sessionDate}.pdf`, buffer: await renderMarshalTablePdf(title, ['Vorname', 'Nachname', 'PLZ', 'Wohnort', 'Status', 'Unterschrift'], rows.map((row) => [row.firstName, row.lastName, row.zip ?? '', row.city ?? '', trainingStatusLabel(row.status), '']), [100, 120, 70, 130, 90, 250], logoImage) };
   }
   if (input.type === 'area') {
     if (!input.areaId) throw new Error('MARSHAL_AREA_REQUIRED');
@@ -1343,8 +1454,8 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
         .orderBy(asc(marshalPerson.lastName), asc(marshalPerson.firstName));
     }
     const safeName = title.normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'Bereich';
-    if (area.areaType === 'setup') return { filename: `Helferliste-${safeName}.pdf`, buffer: await renderSetupPdf(title, rows) };
-    return { filename: `Helferliste-${safeName}.pdf`, buffer: await renderPdf(title, ['Nr.', 'Vorname', 'Nachname', 'Status', 'Bemerkung', 'Anwesend'], rows.map((row) => [String(row.helperNumber), row.firstName, row.lastName, printStatusLabel(row.status), row.note ?? '', '']), [60, 120, 140, 90, 240, 90]) };
+    if (area.areaType === 'setup') return { filename: `Helferliste-${safeName}.pdf`, buffer: await renderMarshalSetupPdf(title, rows, logoImage) };
+    return { filename: `Helferliste-${safeName}.pdf`, buffer: await renderMarshalTablePdf(title, ['Nr.', 'Vorname', 'Nachname', 'Status', 'Bemerkung', 'Anwesend'], rows.map((row) => [String(row.helperNumber), row.firstName, row.lastName, printStatusLabel(row.status), row.note ?? '', '']), [60, 120, 140, 90, 240, 90], logoImage) };
   }
   if (!input.dayId) throw new Error('MARSHAL_DAY_REQUIRED');
   const [day] = await db.select({ id: marshalEventDay.id, label: marshalEventDay.label, eventDate: marshalEventDay.eventDate }).from(marshalEventDay)
@@ -1366,6 +1477,6 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
     .from(marshalDayAssignment).innerJoin(marshalEventParticipation, eq(marshalDayAssignment.participationId, marshalEventParticipation.id)).innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id)).leftJoin(marshalPost, eq(marshalDayAssignment.postId, marshalPost.id)).where(and(...filters)).orderBy(...orderBy);
   const printableRows = rows.filter((row) => isMarshalTrackActivityArea(row.activityAreas));
   const attendanceTitle = `Anwesenheit ${day.label} ${formatPrintDate(day.eventDate)}`;
-  if (input.type === 'section') return { filename: `Anwesenheit-${day.label}-${selectedSection?.name ?? 'Abschnitt'}.pdf`, buffer: await renderPdf(`${attendanceTitle} – ${selectedSection?.name ?? 'Abschnitt'}`, ['Vorname', 'Nachname', 'Posten/Funktion', 'Änderung'], printableRows.map((row) => [row.firstName, row.lastName, row.post ?? row.functionCode ?? '', '']), [140, 160, 150, 290]) };
-  return { filename: `Anwesenheit-${day.label}.pdf`, buffer: await renderPdf(attendanceTitle, ['Vorname', 'Nachname', 'PLZ', 'Wohnort', 'T-Shirt', 'Posten', 'Unterschrift'], printableRows.map((row) => [row.firstName, row.lastName, row.zip ?? '', row.city ?? '', normalizeMarshalShirtSize(row.shirt) ?? '', row.post ?? row.functionCode ?? '', '']), [95, 115, 55, 115, 60, 85, 215]) };
+  if (input.type === 'section') return { filename: `Anwesenheit-${day.label}-${selectedSection?.name ?? 'Abschnitt'}.pdf`, buffer: await renderMarshalTablePdf(`${attendanceTitle} – ${selectedSection?.name ?? 'Abschnitt'}`, ['Vorname', 'Nachname', 'Posten/Funktion', 'Änderung'], printableRows.map((row) => [row.firstName, row.lastName, row.post ?? row.functionCode ?? '', '']), [140, 160, 150, 290], logoImage) };
+  return { filename: `Anwesenheit-${day.label}.pdf`, buffer: await renderMarshalTablePdf(attendanceTitle, ['Vorname', 'Nachname', 'PLZ', 'Wohnort', 'T-Shirt', 'Posten', 'Unterschrift'], printableRows.map((row) => [row.firstName, row.lastName, row.zip ?? '', row.city ?? '', normalizeMarshalShirtSize(row.shirt) ?? '', row.post ?? row.functionCode ?? '', '']), [95, 115, 55, 115, 60, 85, 215], logoImage) };
 };

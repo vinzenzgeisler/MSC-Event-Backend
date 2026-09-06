@@ -13,6 +13,8 @@ const {
   normalizeMarshalShirtSize,
   parseMarshalAssignmentCell,
   parseMarshalWorkbookBuffer,
+  renderMarshalSetupPdf,
+  renderMarshalTablePdf,
   resolveMarshalEmergencyTargetStaff,
   resolveMarshalAssignmentSectionId,
   validateMarshalAreaAssignmentDeleteInput,
@@ -234,6 +236,13 @@ async function run() {
   assert.equal(validateMarshalPersonInput({ firstName: 'Test', lastName: 'Person', shirtSize: 'H-XXL' }).shirtSize, 'H-2XL');
   assert.throws(() => validateMarshalPersonInput({ firstName: 'Test', lastName: 'Person', shirtSize: 'Abschnitt 2' }), /Ungültiges T-Shirt-Format/);
 
+  const attendancePdf = await renderMarshalTablePdf('Anwesenheit Samstag 12.09.2026', ['Name', 'Anwesend'], [['Mustermann, Max', '']], [500, 100]);
+  assert.equal(attendancePdf.subarray(0, 4).toString('ascii'), '%PDF');
+  assert.ok(attendancePdf.length > 1500);
+  const setupPdf = await renderMarshalSetupPdf('Aufbau Fahrerlager 1', [{ firstName: 'Max', lastName: 'Mustermann' }]);
+  assert.equal(setupPdf.subarray(0, 4).toString('ascii'), '%PDF');
+  assert.ok(setupPdf.length > attendancePdf.length);
+
   const teamOnlyWorkbook = new ExcelJS.Workbook();
   const teamOnly = teamOnlyWorkbook.addWorksheet('Team_Laufer_2023');
   teamOnly.addRow(['Name', 'Vorname', 'Geburtsdatum', 'Straße', 'PLZ', 'Ort', 'Telefon', 'E-Mail', 'Kennzeichen', 'Shirt']);
@@ -304,7 +313,7 @@ async function run() {
   assert.doesNotMatch(routeSource.match(/export const createMarshalPrintPdf[\s\S]*$/)?.[0] ?? '', /shirt: marshalEventParticipation\.shirtSizeSnapshot/);
   assert.match(routeSource, /registered: 'Angemeldet'/);
   assert.match(routeSource, /Anwesenheit \$\{day\.label\} \$\{formatPrintDate\(day\.eventDate\)\}/);
-  assert.match(routeSource, /Zusätzliche Helfer – handschriftliche Erfassung/);
+  assert.match(routeSource, /Zusätzliche Helfer · handschriftliche Erfassung/);
   assert.match(routeSource, /input\.type === 'shirt_statistics'/);
   assert.match(routeSource, /MARSHAL_STATISTICS_AREA_INVALID/);
   assert.match(routeSource, /input\.type === 'area'[\s\S]*marshalHelperArea\.id, input\.areaId[\s\S]*marshalHelperArea\.eventId, input\.eventId/);

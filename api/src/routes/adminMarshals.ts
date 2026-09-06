@@ -1188,10 +1188,10 @@ const marshalPrintGeneratedAt = () => new Intl.DateTimeFormat('de-DE', {
   day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
 }).format(new Date());
 
-const renderStyledMarshalPdf = (title: string, tables: MarshalPdfTable[], logoImage?: Buffer | null) => new Promise<Buffer>((resolve, reject) => {
+const renderStyledMarshalPdf = (title: string, tables: MarshalPdfTable[], logoImage?: Buffer | null, layout: 'portrait' | 'landscape' = 'landscape') => new Promise<Buffer>((resolve, reject) => {
   const doc = new PDFDocument({
     size: 'A4',
-    layout: 'landscape',
+    layout,
     margin: 30,
     bufferPages: true,
     info: { Title: title, Author: 'MSC Oberlausitzer Dreiländereck e.V.', Subject: 'Helferverwaltung' }
@@ -1319,21 +1319,21 @@ export const renderMarshalTablePdf = (title: string, headers: string[], rows: st
 export const renderMarshalSetupPdf = (title: string, rows: Array<{ firstName: string; lastName: string }>, logoImage?: Buffer | null) => renderStyledMarshalPdf(title, [
   {
     heading: 'Anwesenheit und Unterschriften',
-    headers: ['Anwesend', 'Name', 'Unterschrift Arbeitsschutz', 'Unterschrift Datenschutz'],
-    rows: rows.map((row) => ['', `${row.lastName}, ${row.firstName}`, '', '']),
-    widths: [70, 240, 230, 230],
+    headers: ['Anwesend', 'Name', 'Unterschrift Arbeitsschutz & Datenschutz'],
+    rows: rows.map((row) => ['', `${row.lastName}, ${row.firstName}`, '']),
+    widths: [60, 200, 270],
     checkboxColumns: [0],
-    minimumRowHeight: 33
+    minimumRowHeight: 29
   },
   {
     heading: 'Zusätzliche Helfer · handschriftliche Erfassung',
-    headers: ['Name', 'Adresse', 'Kontaktdaten', 'T-Shirt', 'Unterschrift Arbeitsschutz', 'Unterschrift Datenschutz'],
-    rows: Array.from({ length: 10 }, () => ['', '', '', '', '', '']),
-    widths: [135, 155, 145, 65, 135, 130],
+    headers: ['Name', 'Adresse', 'Kontaktdaten', 'T-Shirt', 'Unterschrift Arbeitsschutz & Datenschutz'],
+    rows: Array.from({ length: 14 }, () => ['', '', '', '', '']),
+    widths: [105, 125, 105, 55, 140],
     minimumRowHeight: 42,
     pageBreakBefore: true
   }
-], logoImage);
+], logoImage, 'portrait');
 
 const printStatusLabel = (status: string) => ({ not_asked: 'Nicht angefragt', pending: 'Offen', accepted: 'Zugesagt', declined: 'Abgesagt', tentative: 'Vielleicht' }[status] ?? status);
 const trainingStatusLabel = (status: string) => ({ registered: 'Angemeldet', attended: 'Anwesend', absent: 'Nicht anwesend', excused: 'Entschuldigt' }[status] ?? status);

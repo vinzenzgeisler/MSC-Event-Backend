@@ -2,7 +2,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const PDFDocument = require('pdfkit/js/pdfkit.standalone');
-const { validateStampCardExportInput } = require('../dist/routes/stampCards');
+const { renderStampCardPdf, validateStampCardExportInput } = require('../dist/routes/stampCards');
+const { defaultStampCardAccentColor } = require('../dist/routes/adminEvents');
 
 const eventId = '11111111-1111-4111-8111-111111111111';
 const personId = '22222222-2222-4222-8222-222222222222';
@@ -21,11 +22,16 @@ assert.equal(validateStampCardExportInput({
 
 assert.throws(() => validateStampCardExportInput({ eventId, startSlot: 11, selection: { type: 'accepted_regular' } }));
 assert.throws(() => validateStampCardExportInput({ eventId, startSlot: 1, selection: { type: 'subjects', subjects: [] } }));
+assert.deepEqual(
+  [2026, 2027, 2028, 2029, 2030].map((year) => defaultStampCardAccentColor(`${year}-07-31`)),
+  ['#153A81', '#B5121B', '#1F7A4D', '#C9A227', '#153A81']
+);
 
 const routeSource = fs.readFileSync(path.join(__dirname, '../src/routes/stampCards.ts'), 'utf8');
 const handlerSource = fs.readFileSync(path.join(__dirname, '../src/handler.ts'), 'utf8');
 const apiStackSource = fs.readFileSync(path.join(__dirname, '../../infra/lib/stacks/api-stack.ts'), 'utf8');
 const storageStackSource = fs.readFileSync(path.join(__dirname, '../../infra/lib/stacks/storage-stack.ts'), 'utf8');
+const migrationSource = fs.readFileSync(path.join(__dirname, '../migrations/0078_stamp_card_design_palette.sql'), 'utf8');
 const stampCardHandlerBlock = handlerSource.slice(
   handlerSource.indexOf("path === '/admin/stamp-cards/export'"),
   handlerSource.indexOf('const inspectionQrExportMatch')
@@ -34,24 +40,105 @@ assert.match(routeSource, /await uploadPdf\(s3Key, data\)/);
 assert.match(routeSource, /getPresignedDownloadUrl\(s3Key, 300, filename\)/);
 assert.match(routeSource, /for \(let row = 0; row < matrix\.size; row \+= 1\)/);
 assert.match(routeSource, /const shortYear = year\.slice\(-2\)/);
-assert.match(routeSource, /fillColor\(accentColor\)\.roundedRect\(bx, by, badge, badge/);
-assert.match(routeSource, /getAssetObjectBuffer\(STAMP_CARD_LOGO_KEY\)/);
-assert.match(routeSource, /opacity\(0\.42\)\.image\(logoImage/);
+assert.match(routeSource, /errorCorrectionLevel|buildQrCodeMatrix\(inspectionUrl\(eventId, card\.personId\), 'H'\)/);
+assert.match(routeSource, /const clearSize = mm\(8\)/);
+assert.match(routeSource, /fillColor\('#FFFFFF'\)\.rect\(clearX, clearY, clearSize, clearSize\)\.fill\(\)/);
+assert.match(routeSource, /public\/stamp-cards\/msc-crest-watermark\.png/);
+assert.match(routeSource, /public\/stamp-cards\/fonts\/oswald-700\.ttf/);
+assert.match(routeSource, /opacity\(0\.08\)\.image\(image/);
+assert.match(routeSource, /\['TA', 'FB', 'FB'\]/);
+assert.match(routeSource, /\['FB', 'FB'\]/);
+assert.match(routeSource, /CHARITY-BEIFAHRER/);
+assert.match(routeSource, /mergeDriverName\(codriver, nameOf\(row\.driverFirstName, row\.driverLastName\)\)/);
+assert.match(routeSource, /const driverLine = `BEI /);
+assert.match(routeSource, /year\.toLocaleUpperCase|\.text\(year, yearX/);
+assert.match(routeSource, /const nameWidth = contentRight - contentLeft/);
+assert.doesNotMatch(routeSource, /drawCornerMarks/);
 assert.match(routeSource, /data:image\/png;base64/);
 assert.match(storageStackSource, /destinationKeyPrefix: 'public\/stamp-cards'/);
+assert.match(migrationSource, /when 2026 then '#153A81'/i);
+assert.match(migrationSource, /upper\("stamp_card_accent_color"\) = '#0F6B65'/i);
 assert.match(stampCardHandlerBlock, /downloadUrl: download\.downloadUrl/);
 assert.doesNotMatch(stampCardHandlerBlock, /dataBase64: download\.data\.toString\('base64'\)/);
 assert.match(stampCardHandlerBlock, /console\.error\('stamp_card_export_failed'/);
 assert.match(apiStackSource, /memorySize: 1024/);
 assert.match(apiStackSource, /timeout: cdk\.Duration\.seconds\(29\)/);
 
-const logoBuffer = fs.readFileSync(path.join(__dirname, '../../infra/assets/stamp-cards/msc-wordmark.png'));
+const assetRoot = path.join(__dirname, '../../infra/assets/stamp-cards');
+const watermarkBuffer = fs.readFileSync(path.join(assetRoot, 'msc-crest-watermark.png'));
+const displayFont = fs.readFileSync(path.join(assetRoot, 'fonts/oswald-700.ttf'));
+const textFont = fs.readFileSync(path.join(assetRoot, 'fonts/barlow-500.ttf'));
+const boldFont = fs.readFileSync(path.join(assetRoot, 'fonts/barlow-700.ttf'));
 const previewDocument = new PDFDocument({ size: [243.8, 155.65], margin: 0 });
-const previewLogo = previewDocument.openImage(`data:image/png;base64,${logoBuffer.toString('base64')}`);
-assert.equal(previewLogo.width, 320);
-assert.equal(previewLogo.height, 267);
-assert.doesNotThrow(() => previewDocument.image(previewLogo, 8, 4, { fit: [39, 27] }));
+const previewWatermark = previewDocument.openImage(`data:image/png;base64,${watermarkBuffer.toString('base64')}`);
+assert.ok(previewWatermark.width > 500);
+assert.ok(previewWatermark.height > 500);
+assert.doesNotThrow(() => previewDocument.image(previewWatermark, 8, 4, { fit: [164, 176] }));
+assert.doesNotThrow(() => previewDocument.registerFont('OswaldPreview', displayFont));
+assert.doesNotThrow(() => previewDocument.registerFont('BarlowPreview', textFont));
+assert.doesNotThrow(() => previewDocument.registerFont('BarlowBoldPreview', boldFont));
 previewDocument.on('data', () => {});
 previewDocument.end();
 
-console.log('stamp-card contract tests passed');
+const cards = [
+  {
+    key: `driver:${personId}`,
+    kind: 'driver',
+    personId,
+    personName: 'Jürgen Weiß-Zimmermann',
+    starts: [
+      { className: 'Klasse 1 · Motorräder bis Baujahr 1949', startNumber: '4' },
+      { className: 'Klasse 6 · Rennmotorräder 500–1000 cm³ bis Baujahr 1995', startNumber: '410' },
+      { className: 'Klasse 7 · Seitenwagen offen', startNumber: '65' },
+      { className: 'Sonderklasse historische Fahrzeuge', startNumber: '101' },
+      { className: 'Zusätzlicher Start', startNumber: '202' }
+    ]
+  },
+  {
+    key: 'regular:33333333-3333-4333-8333-333333333333',
+    kind: 'regular_codriver',
+    personId: '33333333-3333-4333-8333-333333333333',
+    personName: 'Anna Beispiel',
+    driverNames: ['Dietmar Zimmermann'],
+    starts: [{ className: 'Klasse 7 · Seitenwagen offen', startNumber: '65' }]
+  },
+  {
+    key: 'charity:44444444-4444-4444-8444-444444444444',
+    kind: 'charity_codriver',
+    registrationId: '44444444-4444-4444-8444-444444444444',
+    personName: 'Maria Musterfrau',
+    driverNames: ['Dietmar Zimmermann'],
+    starts: [{ className: 'Charity-Runde · Seitenwagen', startNumber: '65' }]
+  }
+];
+
+const main = async () => {
+  process.env.MAIL_PUBLIC_BASE_URL = 'https://example.test';
+  const data = await renderStampCardPdf({
+    cards,
+    eventId,
+    startSlot: 10,
+    year: '2026',
+    accentColor: '#153A81',
+    assets: { watermark: watermarkBuffer, displayFont, textFont, boldFont }
+  });
+  assert.equal(data.subarray(0, 4).toString('ascii'), '%PDF');
+  assert.ok(data.length > 50_000);
+
+  const fallbackData = await renderStampCardPdf({
+    cards: cards.slice(1),
+    eventId,
+    startSlot: 1,
+    year: '2026',
+    accentColor: '#153A81',
+    assets: { watermark: null, displayFont: null, textFont: null, boldFont: null }
+  });
+  assert.equal(fallbackData.subarray(0, 4).toString('ascii'), '%PDF');
+
+  console.log('stamp-card contract tests passed');
+};
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

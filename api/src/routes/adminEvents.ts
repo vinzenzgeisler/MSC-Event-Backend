@@ -9,13 +9,14 @@ import { buildOrgaCode } from '../domain/orgaCode';
 
 const eventStatusSchema = z.enum(['draft', 'open', 'closed', 'archived']);
 const stampCardAccentColorSchema = z.string().regex(/^#[0-9A-Fa-f]{6}$/).transform((value) => value.toUpperCase());
+const STAMP_CARD_ACCENT_PALETTE = ['#153A81', '#B5121B', '#1F7A4D', '#C9A227'] as const;
 
-const defaultStampCardAccentColor = (startsAt: string): string => {
+export const defaultStampCardAccentColor = (startsAt: string): string => {
   const year = Number(startsAt.slice(0, 4));
-  const palette = ['#0F6B65', '#8B1E3F', '#2F6B3C', '#6B4E9B', '#9A5B13', '#244A78'];
-  if (year === 2025) return '#365F91';
-  if (year === 2026) return '#0F6B65';
-  return palette[Math.abs(year || 0) % palette.length];
+  if (!Number.isInteger(year)) return STAMP_CARD_ACCENT_PALETTE[0];
+  const index = ((year - 2026) % STAMP_CARD_ACCENT_PALETTE.length + STAMP_CARD_ACCENT_PALETTE.length)
+    % STAMP_CARD_ACCENT_PALETTE.length;
+  return STAMP_CARD_ACCENT_PALETTE[index];
 };
 
 const createEventSchema = z.object({

@@ -31,7 +31,7 @@ export const event = pgTable(
     paymentDueAt: timestamp('payment_due_at', { withTimezone: true }),
     contactEmail: text('contact_email'),
     websiteUrl: text('website_url'),
-    stampCardAccentColor: text('stamp_card_accent_color').notNull().default('#0F6B65'),
+    stampCardAccentColor: text('stamp_card_accent_color').notNull().default('#153A81'),
     entryConfirmationConfig: jsonb('entry_confirmation_config').$type<EntryConfirmationConfig>().notNull().default(sql`'{}'::jsonb`),
     openedAt: timestamp('opened_at', { withTimezone: true }),
     closedAt: timestamp('closed_at', { withTimezone: true }),

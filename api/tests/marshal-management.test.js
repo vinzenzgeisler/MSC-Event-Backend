@@ -8,6 +8,7 @@ const {
   indexMarshalPeopleByNormalizedNameCandidates,
   isExplicitMarshalTrackAssignment,
   isMarshalTrackActivityArea,
+  marshalShirtStatisticsLabel,
   marshalParticipationUpdateValues,
   normalizeMarshalShirtSize,
   parseMarshalAssignmentCell,
@@ -68,6 +69,9 @@ async function run() {
   assert.equal(normalizeMarshalShirtSize('128/134'), '128/134');
   assert.equal(normalizeMarshalShirtSize('Streckenposten'), null);
   assert.equal(normalizeMarshalShirtSize('1/6, H-XXL'), null);
+  assert.equal(marshalShirtStatisticsLabel(null), 'Ohne Größenangabe');
+  assert.equal(marshalShirtStatisticsLabel('Streckenposten'), 'Ungültige Größenangabe');
+  assert.equal(marshalShirtStatisticsLabel('H-XL'), 'H-XL');
   assert.equal(isMarshalTrackActivityArea(['Aufbau']), false);
   assert.equal(isMarshalTrackActivityArea(['Team Strecke']), true);
   assert.equal(isMarshalTrackActivityArea(null), false);

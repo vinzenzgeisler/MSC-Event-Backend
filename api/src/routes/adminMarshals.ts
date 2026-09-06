@@ -1224,6 +1224,11 @@ export const normalizeMarshalShirtSize = (value: string | null | undefined): str
   const validSize = /^(?:(?:H|D|K|HERREN|DAMEN|KINDER)\s*[-/ ]\s*)?(?:XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|[2-6]XL|\d{2,3}(?:\s*\/\s*\d{2,3})?)$/i;
   return validSize.test(trimmed) ? trimmed : null;
 };
+export const marshalShirtStatisticsLabel = (value: string | null | undefined): string => {
+  const normalized = normalizeMarshalShirtSize(value);
+  if (normalized) return normalized;
+  return value?.trim() ? 'Ungültige Größenangabe' : 'Ohne Größenangabe';
+};
 const formatPrintDate = (value: string | Date) => {
   const raw = value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
   const [year, month, day] = raw.split('-');
@@ -1251,7 +1256,7 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
     const trackIds = new Set(trackAssignments
       .filter((row) => isMarshalTrackActivityArea(activityAreasByParticipation.get(row.participationId)))
       .map((row) => row.participationId));
-    const shirtByParticipation = new Map(people.map((row) => [row.participationId, normalizeMarshalShirtSize(row.shirtSize) ?? 'Ohne Größenangabe']));
+    const shirtByParticipation = new Map(people.map((row) => [row.participationId, marshalShirtStatisticsLabel(row.shirtSize)]));
     const counted = new Set<string>();
     const resultRows: string[][] = [];
     let selectedGroupName: string | null = null;

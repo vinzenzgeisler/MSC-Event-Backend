@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ExcelJS = require('exceljs');
 const {
+  buildMarshalShirtPrintTable,
   findAmbiguousMarshalNameMatches,
   indexMarshalPeopleByNormalizedName,
   indexMarshalPeopleByNormalizedNameCandidates,
@@ -240,6 +241,16 @@ async function run() {
   assert.equal(isMarshalShirtRelevantAreaAssignment('setup', 'declined'), true);
   assert.equal(isMarshalShirtRelevantAreaAssignment('general', 'not_asked'), false);
   assert.equal(isMarshalShirtRelevantAreaAssignment('general', 'accepted'), true);
+  const selectedShirtTable = buildMarshalShirtPrintTable([
+    { id: 'setup', name: 'Aufbau Fahrerlager', sizes: [{ size: 'S', count: 2 }, { size: 'XL', count: 10 }] }
+  ], 'setup');
+  assert.deepEqual(selectedShirtTable.headers, ['T-Shirt-Größe', 'Anzahl']);
+  assert.deepEqual(selectedShirtTable.rows, [['S', '2'], ['XL', '10']]);
+  const overallShirtTable = buildMarshalShirtPrintTable([
+    { id: 'setup', name: 'Aufbau Fahrerlager', sizes: [{ size: 'S', count: 2 }, { size: 'XL', count: 10 }] }
+  ]);
+  assert.deepEqual(overallShirtTable.headers, ['Bereich', 'Bedarf', 'Gesamt']);
+  assert.deepEqual(overallShirtTable.rows, [['Aufbau Fahrerlager', '2× S · 10× XL', '12']]);
 
   const attendancePdf = await renderMarshalTablePdf('Anwesenheit Samstag 12.09.2026', ['Name', 'Anwesend'], [['Mustermann, Max', '']], [500, 100]);
   assert.equal(attendancePdf.subarray(0, 4).toString('ascii'), '%PDF');

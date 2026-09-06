@@ -1378,6 +1378,31 @@ export const marshalShirtStatisticsLabel = (value: string | null | undefined): s
 export const isMarshalShirtRelevantAreaAssignment = (areaType: string, commitmentStatus: string): boolean => (
   areaType === 'setup' || commitmentStatus === 'accepted'
 );
+type MarshalShirtPrintGroup = { id: string; name: string; sizes: Array<{ size: string; count: number }> };
+export const buildMarshalShirtPrintTable = (groups: MarshalShirtPrintGroup[], selectedGroupId?: string) => {
+  if (selectedGroupId) {
+    const selectedGroup = groups.find((group) => group.id === selectedGroupId);
+    if (!selectedGroup) return null;
+    return {
+      selectedGroupName: selectedGroup.name,
+      headers: ['T-Shirt-Größe', 'Anzahl'],
+      rows: selectedGroup.sizes.length > 0
+        ? selectedGroup.sizes.map(({ size, count }) => [size, String(count)])
+        : [['Keine Helfer zugeordnet', '0']],
+      widths: [410, 120]
+    };
+  }
+  return {
+    selectedGroupName: null,
+    headers: ['Bereich', 'Bedarf', 'Gesamt'],
+    rows: groups.map((group) => [
+      group.name,
+      group.sizes.length > 0 ? group.sizes.map(({ size, count }) => `${count}× ${size}`).join(' · ') : 'Keine Helfer zugeordnet',
+      String(group.sizes.reduce((sum, item) => sum + item.count, 0))
+    ]),
+    widths: [230, 390, 80]
+  };
+};
 const formatPrintDate = (value: string | Date) => {
   const raw = value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
   const [year, month, day] = raw.split('-');
@@ -1408,8 +1433,7 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
       .map((row) => row.participationId));
     const shirtByParticipation = new Map(people.map((row) => [row.participationId, marshalShirtStatisticsLabel(row.shirtSize)]));
     const counted = new Set<string>();
-    const resultRows: string[][] = [];
-    let selectedGroupName: string | null = null;
+    const resultGroups: MarshalShirtPrintGroup[] = [];
     const addGroup = (id: string, name: string, participationIds: Iterable<string>) => {
       const counts = new Map<string, number>();
       for (const participationId of participationIds) {
@@ -1418,12 +1442,13 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
         const size = shirtByParticipation.get(participationId)!;
         counts.set(size, (counts.get(size) ?? 0) + 1);
       }
-      if (!input.statisticsAreaId || input.statisticsAreaId === id) {
-        selectedGroupName = input.statisticsAreaId ? name : null;
-        const rows = [...counts.entries()].sort(([a], [b]) => a.localeCompare(b, 'de', { numeric: true }));
-        if (rows.length === 0) resultRows.push([name, 'Keine zugesagten Helfer', '0']);
-        else rows.forEach(([size, count]) => resultRows.push([name, size, String(count)]));
-      }
+      resultGroups.push({
+        id,
+        name,
+        sizes: [...counts.entries()]
+          .sort(([a], [b]) => a.localeCompare(b, 'de', { numeric: true }))
+          .map(([size, count]) => ({ size, count }))
+      });
     };
     addGroup('track', 'Streckenposten', trackIds);
     for (const area of areas) {
@@ -1434,10 +1459,11 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
       const dayLabel = area.dayScope === 'saturday' ? 'Samstag' : area.dayScope === 'sunday' ? 'Sonntag' : null;
       addGroup(area.id, dayLabel ? `${area.name} · ${dayLabel}` : area.name, ids);
     }
-    if (input.statisticsAreaId && !selectedGroupName) throw new Error('MARSHAL_STATISTICS_AREA_INVALID');
-    const title = selectedGroupName ? `T-Shirt-Bedarf – ${selectedGroupName}` : 'T-Shirt-Bedarf nach Bereich';
-    const safeName = (selectedGroupName ?? 'Gesamt').normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'Bereich';
-    return { filename: `T-Shirt-Statistik-${safeName}.pdf`, buffer: await renderMarshalTablePdf(title, ['Bereich', 'T-Shirt-Größe', 'Anzahl'], resultRows, [330, 250, 120], logoImage) };
+    const printTable = buildMarshalShirtPrintTable(resultGroups, input.statisticsAreaId);
+    if (!printTable) throw new Error('MARSHAL_STATISTICS_AREA_INVALID');
+    const title = printTable.selectedGroupName ? `T-Shirt-Bedarf – ${printTable.selectedGroupName}` : 'T-Shirt-Bedarf nach Bereich';
+    const safeName = (printTable.selectedGroupName ?? 'Gesamt').normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'Bereich';
+    return { filename: `T-Shirt-Statistik-${safeName}.pdf`, buffer: await renderMarshalTablePdf(title, printTable.headers, printTable.rows, printTable.widths, logoImage) };
   }
   if (input.type === 'training' && input.trainingId) {
     const [session] = await db.select().from(marshalTrainingSession).where(and(eq(marshalTrainingSession.id, input.trainingId), eq(marshalTrainingSession.eventId, input.eventId))).limit(1);

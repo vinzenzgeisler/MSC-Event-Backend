@@ -1195,6 +1195,28 @@ export const marshalImportRun = pgTable(
   })
 );
 
+export const marshalImportRepairSnapshot = pgTable(
+  'marshal_import_repair_snapshot',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    repairKey: text('repair_key').notNull(),
+    sourceWorkbookSha256: text('source_workbook_sha256').notNull(),
+    personId: uuid('person_id').notNull().references(() => marshalPerson.id, { onDelete: 'cascade' }),
+    eventId: uuid('event_id').references(() => event.id, { onDelete: 'set null' }),
+    beforeData: jsonb('before_data').$type<Record<string, unknown>>().notNull(),
+    afterData: jsonb('after_data').$type<Record<string, unknown>>().notNull(),
+    appliedFields: text('applied_fields').array().notNull(),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    repairPersonUnique: unique('marshal_import_repair_snapshot_repair_person_unique').on(table.repairKey, table.personId),
+    eventIndex: index('marshal_import_repair_snapshot_event_idx').on(table.eventId, table.createdAt),
+    hashCheck: check('marshal_import_repair_snapshot_hash_check', sql`${table.sourceWorkbookSha256} ~ '^[a-f0-9]{64}$'`),
+    fieldsCheck: check('marshal_import_repair_snapshot_fields_check', sql`cardinality(${table.appliedFields}) > 0`)
+  })
+);
+
 export const marshalHelperArea = pgTable(
   'marshal_helper_area',
   {

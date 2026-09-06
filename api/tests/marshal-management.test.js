@@ -194,7 +194,7 @@ async function run() {
   current.addRow([]); current.addRow([]); current.addRow([]);
   current.addRow(['Telefonhelfer', 'Helfernummer', 'Name', 'Vorname', 'Adresse', 'PLZ', 'Wohnort', 'Geburtsdatum', 'Telefonnummer', 'Email-Adresse', 'Bereich', 'T-Shirt', 'Notiz', 'Angemeldet', 'Sa', 'So', 'Wunsch']);
   current.addRow(['Josi', 67, 'Anders', 'Steffen', 'Neu 2', '02763', 'Mittelherwigsdorf', new Date('1957-04-12'), '456', 'neu@example.org', 'Strecke', 'H-XL', '', 'x', '5/2', 'nein', 'gleicher Posten']);
-  current.addRow(['Josi', 753, 'Baldt', 'Fabian', 'Weg 3', '02796', 'Jonsdorf', new Date('2008-06-02'), '789', '', 'Strecke', 'H-XL', 'neu', 'x', '4/5', '4/5', '']);
+  current.addRow(['Josi', 753, 'Baldt', 'Fabian', 'Weg 3', '02796', 'Jonsdorf', new Date('2008-06-02'), '789', '', 'Strecke', 'H-XXL', 'neu', 'x', '4/5', '4/5', '']);
   const saturday2024 = workbook.addWorksheet('Samstag 2024');
   saturday2024.addRow([]); saturday2024.addRow(['Name', 'Vorname', 'T-Shirt', 'erhalten', 'Posten']);
   saturday2024.addRow(['Anders', 'Steffen', 'H-L', '', '5/2']);
@@ -223,8 +223,16 @@ async function run() {
   assert.equal(parsed.lauferPeople[1].city, 'Zittau');
   assert.equal(parsed.lauferPeople[1].email, 'tom@example.org');
   assert.equal(parsed.people.find((person) => person.helperNumber === 67).street, 'Neu 2');
+  assert.equal(parsed.people.find((person) => person.helperNumber === 67).shirtSize, 'H-XL');
+  assert.equal(parsed.people.find((person) => person.helperNumber === 67).note, null);
+  assert.equal(parsed.people.find((person) => person.helperNumber === 67).clubMember, true);
+  assert.equal(parsed.people.find((person) => person.helperNumber === 753).shirtSize, 'H-2XL');
+  assert.equal(parsed.people.find((person) => person.helperNumber === 753).note, 'neu');
+  assert.equal(parsed.people.find((person) => person.helperNumber === 753).clubMember, undefined);
   assert.equal(parsed.people.find((person) => person.helperNumber === 67).licenseNumber, 'SP-67');
   assert.equal(parsed.conflicts.length, 0);
+  assert.equal(validateMarshalPersonInput({ firstName: 'Test', lastName: 'Person', shirtSize: 'H-XXL' }).shirtSize, 'H-2XL');
+  assert.throws(() => validateMarshalPersonInput({ firstName: 'Test', lastName: 'Person', shirtSize: 'Abschnitt 2' }), /Ungültiges T-Shirt-Format/);
 
   const teamOnlyWorkbook = new ExcelJS.Workbook();
   const teamOnly = teamOnlyWorkbook.addWorksheet('Team_Laufer_2023');

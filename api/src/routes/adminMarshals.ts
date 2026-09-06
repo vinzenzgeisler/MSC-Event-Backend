@@ -23,6 +23,25 @@ import {
   marshalTrainingSession
 } from '../db/schema';
 
+const marshalShirtSizePattern = /^(?:(H|D|K|HERREN|DAMEN|KINDER)\s*[-/ ]\s*)?(XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|[2-6]XL|\d{2,3}(?:\s*\/\s*\d{2,3})?)$/i;
+
+export const canonicalizeMarshalShirtSize = (value: string): string | null => {
+  const match = value.trim().toUpperCase().match(marshalShirtSizePattern);
+  if (!match) return null;
+  const prefix = ({ HERREN: 'H', DAMEN: 'D', KINDER: 'K' } as Record<string, string>)[match[1]] ?? match[1] ?? null;
+  const size = ({ XXL: '2XL', XXXL: '3XL', XXXXL: '4XL' } as Record<string, string>)[match[2]] ?? match[2].replace(/\s/g, '');
+  return `${prefix ? `${prefix}-` : ''}${size}`;
+};
+
+const marshalShirtSizeSchema = z.string().trim().min(1).max(30).transform((value, context) => {
+  const canonical = canonicalizeMarshalShirtSize(value);
+  if (!canonical) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Ungültiges T-Shirt-Format' });
+    return z.NEVER;
+  }
+  return canonical;
+}).nullable().optional();
+
 const personInputSchema = z.object({
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
@@ -32,7 +51,7 @@ const personInputSchema = z.object({
   birthdate: z.string().date().nullable().optional(),
   phone: z.string().trim().max(200).nullable().optional(),
   email: z.string().trim().email().nullable().optional(),
-  shirtSize: z.string().trim().max(30).nullable().optional(),
+  shirtSize: marshalShirtSizeSchema,
   clubMember: z.boolean().optional(),
   licenseNumber: z.string().trim().max(100).nullable().optional(),
   vehicleRegistration: z.string().trim().max(100).nullable().optional(),
@@ -48,7 +67,7 @@ const assignmentInputSchema = z.object({
   contactOwner: z.string().trim().max(100).nullable().optional(),
   wish: z.string().trim().max(1000).nullable().optional(),
   note: z.string().trim().max(2000).nullable().optional(),
-  shirtSizeSnapshot: z.string().trim().max(30).nullable().optional(),
+  shirtSizeSnapshot: marshalShirtSizeSchema,
   days: z.array(z.object({
     dayId: z.string().uuid(),
     commitmentStatus: z.enum(['not_asked', 'pending', 'accepted', 'declined', 'tentative']),
@@ -308,12 +327,13 @@ const parsePersonRow = (row: ExcelJS.Row, offset = 0): ImportedPerson | null => 
   const lastName = cellText(row.getCell(2 + offset).value);
   const firstName = cellText(row.getCell(3 + offset).value);
   if (!Number.isInteger(helperNumber) || helperNumber <= 0 || !lastName || !firstName) return null;
+  const rawShirtSize = nullable(row.getCell(12).value);
   return {
     helperNumber, lastName, firstName,
     street: nullable(row.getCell(4 + offset).value), zip: zipValue(row.getCell(5 + offset).value), city: nullable(row.getCell(6 + offset).value),
     birthdate: toIsoDate(row.getCell(7 + offset).value), phone: nullable(row.getCell(8 + offset).value), email: nullable(row.getCell(9 + offset).value),
-    activityAreas: splitAreas(cellText(row.getCell(10 + offset).value)), shirtSize: nullable(row.getCell(12 + offset).value),
-    note: nullable(row.getCell(13 + offset).value), clubMember: Boolean(row.getCell(11 + offset).value),
+    activityAreas: splitAreas(cellText(row.getCell(10 + offset).value)), shirtSize: rawShirtSize ? canonicalizeMarshalShirtSize(rawShirtSize) ?? rawShirtSize : null,
+    note: nullable(row.getCell(13).value), ...(offset === 0 ? { clubMember: Boolean(row.getCell(11).value) } : {}),
     vehicleRegistration: offset === 0 ? nullable(row.getCell(15).value) : null,
     licenseNumber: offset === 0 ? nullable(row.getCell(16).value) : null,
     isActive: true, source: row.worksheet.name

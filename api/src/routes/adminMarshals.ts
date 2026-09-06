@@ -1181,6 +1181,13 @@ type MarshalPdfTable = {
   checkboxColumns?: number[];
   minimumRowHeight?: number;
   pageBreakBefore?: boolean;
+  fitOnSinglePage?: boolean;
+};
+
+type MarshalPdfOptions = {
+  layout?: 'portrait' | 'landscape';
+  fitOnSinglePage?: boolean;
+  minimumRowHeight?: number;
 };
 
 const MARSHAL_PRINT_LOGO_KEY = 'public/mail/msc-logo.png';
@@ -1199,7 +1206,7 @@ const renderStyledMarshalPdf = (title: string, tables: MarshalPdfTable[], logoIm
   const chunks: Buffer[] = [];
   const pageX = 30;
   const pageWidth = doc.page.width - 60;
-  const pageBottom = () => doc.page.height - 42;
+  const pageBottom = () => doc.page.height - 52;
   const generatedAt = marshalPrintGeneratedAt();
   let cursorY = 0;
   doc.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
@@ -1251,16 +1258,20 @@ const renderStyledMarshalPdf = (title: string, tables: MarshalPdfTable[], logoIm
     cursorY += height;
   };
 
-  const measureRowHeight = (table: MarshalPdfTable, row: string[], widths: number[]) => {
+  const measureRowHeight = (table: MarshalPdfTable, row: string[], widths: number[], maximumHeight?: number) => {
     doc.font('Helvetica').fontSize(8.5);
     const checkboxColumns = new Set(table.checkboxColumns ?? []);
     const contentHeight = row.reduce((maximum, value, index) => checkboxColumns.has(index) ? maximum : Math.max(maximum, doc.heightOfString(value || ' ', { width: widths[index] - 14, lineGap: 1 })), 0);
-    return Math.min(56, Math.max(table.minimumRowHeight ?? 29, contentHeight + 14));
+    const naturalHeight = Math.min(56, Math.max(table.minimumRowHeight ?? 29, contentHeight + 14));
+    return maximumHeight === undefined ? naturalHeight : Math.min(naturalHeight, maximumHeight);
   };
 
-  const drawTableRow = (table: MarshalPdfTable, row: string[], widths: number[], rowIndex: number) => {
-    const height = measureRowHeight(table, row, widths);
+  const drawTableRow = (table: MarshalPdfTable, row: string[], widths: number[], rowIndex: number, maximumHeight?: number) => {
+    const height = measureRowHeight(table, row, widths, maximumHeight);
     const checkboxColumns = new Set(table.checkboxColumns ?? []);
+    const compact = height < 24;
+    const cellPaddingY = compact ? 3 : 7;
+    const fontSize = compact ? Math.max(6, Math.min(8.5, height - 9)) : 8.5;
     let x = pageX;
     row.forEach((value, index) => {
       const width = widths[index];
@@ -1270,7 +1281,7 @@ const renderStyledMarshalPdf = (title: string, tables: MarshalPdfTable[], logoIm
         const boxSize = 12;
         doc.save().lineWidth(1).strokeColor('#334155').roundedRect(x + (width - boxSize) / 2, cursorY + (height - boxSize) / 2, boxSize, boxSize, 1.5).stroke().restore();
       } else if (value) {
-        doc.font('Helvetica').fontSize(8.5).fillColor('#0F172A').text(value, x + 7, cursorY + 7, { width: width - 14, height: height - 12, lineGap: 1 });
+        doc.font('Helvetica').fontSize(fontSize).fillColor('#0F172A').text(value, x + 7, cursorY + cellPaddingY, { width: width - 14, height: height - (cellPaddingY * 2), lineGap: compact ? 0 : 1 });
       }
       x += width;
     });
@@ -1286,22 +1297,25 @@ const renderStyledMarshalPdf = (title: string, tables: MarshalPdfTable[], logoIm
     drawSectionHeading(table.heading);
     const widths = scaledWidths(table.widths);
     drawTableHeader(table, widths);
+    const maximumRowHeight = table.fitOnSinglePage && table.rows.length > 0
+      ? (pageBottom() - cursorY) / table.rows.length
+      : undefined;
     table.rows.forEach((row, rowIndex) => {
-      const rowHeight = measureRowHeight(table, row, widths);
-      if (cursorY + rowHeight > pageBottom()) {
+      const rowHeight = measureRowHeight(table, row, widths, maximumRowHeight);
+      if (cursorY + rowHeight > pageBottom() + 0.1) {
         doc.addPage();
         drawPageHeader(true);
         drawSectionHeading(table.heading, true);
         drawTableHeader(table, widths);
       }
-      drawTableRow(table, row, widths, rowIndex);
+      drawTableRow(table, row, widths, rowIndex, maximumRowHeight);
     });
   });
 
   const pageRange = doc.bufferedPageRange();
   for (let pageIndex = 0; pageIndex < pageRange.count; pageIndex += 1) {
     doc.switchToPage(pageRange.start + pageIndex);
-    const footerY = doc.page.height - 27;
+    const footerY = doc.page.height - 40;
     doc.save().lineWidth(0.6).strokeColor('#D8DEE9').moveTo(pageX, footerY - 6).lineTo(pageX + pageWidth, footerY - 6).stroke().restore();
     doc.font('Helvetica').fontSize(7.4).fillColor('#64748B').text('Interne Arbeitsliste · Helferverwaltung', pageX, footerY, { width: pageWidth / 2 });
     doc.text(`Seite ${pageIndex + 1} / ${pageRange.count}`, pageX + pageWidth / 2, footerY, { width: pageWidth / 2, align: 'right' });
@@ -1309,12 +1323,14 @@ const renderStyledMarshalPdf = (title: string, tables: MarshalPdfTable[], logoIm
   doc.end();
 });
 
-export const renderMarshalTablePdf = (title: string, headers: string[], rows: string[][], widths: number[], logoImage?: Buffer | null) => renderStyledMarshalPdf(title, [{
+export const renderMarshalTablePdf = (title: string, headers: string[], rows: string[][], widths: number[], logoImage?: Buffer | null, options: MarshalPdfOptions = {}) => renderStyledMarshalPdf(title, [{
   headers,
   rows,
   widths,
-  checkboxColumns: headers.flatMap((header, index) => /^anwesend(?:heit)?$/i.test(header.trim()) ? [index] : [])
-}], logoImage);
+  checkboxColumns: headers.flatMap((header, index) => /^anwesend(?:heit)?$/i.test(header.trim()) ? [index] : []),
+  fitOnSinglePage: options.fitOnSinglePage,
+  minimumRowHeight: options.minimumRowHeight
+}], logoImage, options.layout);
 
 export const renderMarshalSetupPdf = (title: string, rows: Array<{ firstName: string; lastName: string }>, logoImage?: Buffer | null) => renderStyledMarshalPdf(title, [
   {
@@ -1359,6 +1375,9 @@ export const marshalShirtStatisticsLabel = (value: string | null | undefined): s
   if (normalized) return normalized;
   return value?.trim() ? 'Ungültige Größenangabe' : 'Ohne Größenangabe';
 };
+export const isMarshalShirtRelevantAreaAssignment = (areaType: string, commitmentStatus: string): boolean => (
+  areaType === 'setup' || commitmentStatus === 'accepted'
+);
 const formatPrintDate = (value: string | Date) => {
   const raw = value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
   const [year, month, day] = raw.split('-');
@@ -1377,11 +1396,11 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
         .innerJoin(marshalEventParticipation, eq(marshalDayAssignment.participationId, marshalEventParticipation.id))
         .where(and(eq(marshalEventParticipation.eventId, input.eventId), eq(marshalDayAssignment.commitmentStatus, 'accepted'))),
       db.select().from(marshalHelperArea).where(eq(marshalHelperArea.eventId, input.eventId)).orderBy(asc(marshalHelperArea.sortOrder), asc(marshalHelperArea.name)),
-      db.select({ participationId: marshalAreaAssignment.participationId, areaId: marshalAreaAssignment.areaId }).from(marshalAreaAssignment)
-        .where(and(eq(marshalAreaAssignment.eventId, input.eventId), eq(marshalAreaAssignment.commitmentStatus, 'accepted'))),
-      db.select({ participationId: marshalShiftAssignment.participationId, areaId: marshalAreaShift.areaId }).from(marshalShiftAssignment)
+      db.select({ participationId: marshalAreaAssignment.participationId, areaId: marshalAreaAssignment.areaId, commitmentStatus: marshalAreaAssignment.commitmentStatus }).from(marshalAreaAssignment)
+        .where(eq(marshalAreaAssignment.eventId, input.eventId)),
+      db.select({ participationId: marshalShiftAssignment.participationId, areaId: marshalAreaShift.areaId, commitmentStatus: marshalShiftAssignment.commitmentStatus }).from(marshalShiftAssignment)
         .innerJoin(marshalAreaShift, eq(marshalShiftAssignment.shiftId, marshalAreaShift.id))
-        .where(and(eq(marshalShiftAssignment.eventId, input.eventId), eq(marshalShiftAssignment.commitmentStatus, 'accepted')))
+        .where(eq(marshalShiftAssignment.eventId, input.eventId))
     ]);
     const activityAreasByParticipation = new Map(people.map((row) => [row.participationId, row.activityAreas]));
     const trackIds = new Set(trackAssignments
@@ -1409,8 +1428,8 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
     addGroup('track', 'Streckenposten', trackIds);
     for (const area of areas) {
       const ids = new Set([
-        ...areaAssignments.filter((row) => row.areaId === area.id).map((row) => row.participationId),
-        ...shiftAssignments.filter((row) => row.areaId === area.id).map((row) => row.participationId)
+        ...areaAssignments.filter((row) => row.areaId === area.id && isMarshalShirtRelevantAreaAssignment(area.areaType, row.commitmentStatus)).map((row) => row.participationId),
+        ...shiftAssignments.filter((row) => row.areaId === area.id && isMarshalShirtRelevantAreaAssignment(area.areaType, row.commitmentStatus)).map((row) => row.participationId)
       ]);
       const dayLabel = area.dayScope === 'saturday' ? 'Samstag' : area.dayScope === 'sunday' ? 'Sonntag' : null;
       addGroup(area.id, dayLabel ? `${area.name} · ${dayLabel}` : area.name, ids);
@@ -1433,20 +1452,36 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
     const [area] = await db.select().from(marshalHelperArea).where(and(eq(marshalHelperArea.id, input.areaId), eq(marshalHelperArea.eventId, input.eventId))).limit(1);
     if (!area) throw new Error('MARSHAL_AREA_SCOPE_INVALID');
     let title = area.name;
-    let rows: Array<{ firstName: string; lastName: string; helperNumber: number; status: string; note: string | null }>;
+    let rows: Array<{ personId: string; firstName: string; lastName: string; helperNumber: number; status: string; note: string | null }>;
     if (input.shiftId) {
       if (area.areaType !== 'setup') throw new Error('MARSHAL_SHIFT_SCOPE_INVALID');
       const [shift] = await db.select().from(marshalAreaShift).where(and(eq(marshalAreaShift.id, input.shiftId), eq(marshalAreaShift.eventId, input.eventId), eq(marshalAreaShift.areaId, area.id))).limit(1);
       if (!shift) throw new Error('MARSHAL_SHIFT_SCOPE_INVALID');
       title = `${area.name} – ${shift.label}`;
-      rows = await db.select({ firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, helperNumber: marshalPerson.helperNumber, status: marshalShiftAssignment.commitmentStatus, note: marshalShiftAssignment.note })
+      rows = await db.select({ personId: marshalPerson.id, firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, helperNumber: marshalPerson.helperNumber, status: marshalShiftAssignment.commitmentStatus, note: marshalShiftAssignment.note })
         .from(marshalShiftAssignment)
         .innerJoin(marshalEventParticipation, eq(marshalShiftAssignment.participationId, marshalEventParticipation.id))
         .innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id))
         .where(and(eq(marshalShiftAssignment.shiftId, shift.id), eq(marshalEventParticipation.eventId, input.eventId), eq(marshalPerson.noDeployment, false)))
         .orderBy(asc(marshalPerson.lastName), asc(marshalPerson.firstName));
+    } else if (area.areaType === 'setup') {
+      const [directAreaRows, legacyShiftRows] = await Promise.all([
+        db.select({ personId: marshalPerson.id, firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, helperNumber: marshalPerson.helperNumber, status: marshalAreaAssignment.commitmentStatus, note: marshalAreaAssignment.note })
+          .from(marshalAreaAssignment)
+          .innerJoin(marshalEventParticipation, eq(marshalAreaAssignment.participationId, marshalEventParticipation.id))
+          .innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id))
+          .where(and(eq(marshalAreaAssignment.areaId, area.id), eq(marshalEventParticipation.eventId, input.eventId), eq(marshalPerson.noDeployment, false))),
+        db.select({ personId: marshalPerson.id, firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, helperNumber: marshalPerson.helperNumber, status: marshalShiftAssignment.commitmentStatus, note: marshalShiftAssignment.note })
+          .from(marshalShiftAssignment)
+          .innerJoin(marshalAreaShift, eq(marshalShiftAssignment.shiftId, marshalAreaShift.id))
+          .innerJoin(marshalEventParticipation, eq(marshalShiftAssignment.participationId, marshalEventParticipation.id))
+          .innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id))
+          .where(and(eq(marshalAreaShift.areaId, area.id), eq(marshalEventParticipation.eventId, input.eventId), eq(marshalPerson.noDeployment, false)))
+      ]);
+      rows = [...new Map([...legacyShiftRows, ...directAreaRows].map((row) => [row.personId, row])).values()]
+        .sort((left, right) => left.lastName.localeCompare(right.lastName, 'de') || left.firstName.localeCompare(right.firstName, 'de'));
     } else {
-      rows = await db.select({ firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, helperNumber: marshalPerson.helperNumber, status: marshalAreaAssignment.commitmentStatus, note: marshalAreaAssignment.note })
+      rows = await db.select({ personId: marshalPerson.id, firstName: marshalPerson.firstName, lastName: marshalPerson.lastName, helperNumber: marshalPerson.helperNumber, status: marshalAreaAssignment.commitmentStatus, note: marshalAreaAssignment.note })
         .from(marshalAreaAssignment)
         .innerJoin(marshalEventParticipation, eq(marshalAreaAssignment.participationId, marshalEventParticipation.id))
         .innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id))
@@ -1477,6 +1512,6 @@ export const createMarshalPrintPdf = async (input: { eventId: string; dayId?: st
     .from(marshalDayAssignment).innerJoin(marshalEventParticipation, eq(marshalDayAssignment.participationId, marshalEventParticipation.id)).innerJoin(marshalPerson, eq(marshalEventParticipation.personId, marshalPerson.id)).leftJoin(marshalPost, eq(marshalDayAssignment.postId, marshalPost.id)).where(and(...filters)).orderBy(...orderBy);
   const printableRows = rows.filter((row) => isMarshalTrackActivityArea(row.activityAreas));
   const attendanceTitle = `Anwesenheit ${day.label} ${formatPrintDate(day.eventDate)}`;
-  if (input.type === 'section') return { filename: `Anwesenheit-${day.label}-${selectedSection?.name ?? 'Abschnitt'}.pdf`, buffer: await renderMarshalTablePdf(`${attendanceTitle} – ${selectedSection?.name ?? 'Abschnitt'}`, ['Vorname', 'Nachname', 'Posten/Funktion', 'Änderung'], printableRows.map((row) => [row.firstName, row.lastName, row.post ?? row.functionCode ?? '', '']), [140, 160, 150, 290], logoImage) };
+  if (input.type === 'section') return { filename: `Anwesenheit-${day.label}-${selectedSection?.name ?? 'Abschnitt'}.pdf`, buffer: await renderMarshalTablePdf(`${attendanceTitle} – ${selectedSection?.name ?? 'Abschnitt'}`, ['Vorname', 'Nachname', 'Posten/Funktion', 'Änderung'], printableRows.map((row) => [row.firstName, row.lastName, row.post ?? row.functionCode ?? '', '']), [120, 135, 120, 155], logoImage, { layout: 'portrait', fitOnSinglePage: true, minimumRowHeight: 22 }) };
   return { filename: `Anwesenheit-${day.label}.pdf`, buffer: await renderMarshalTablePdf(attendanceTitle, ['Vorname', 'Nachname', 'PLZ', 'Wohnort', 'T-Shirt', 'Posten', 'Unterschrift'], printableRows.map((row) => [row.firstName, row.lastName, row.zip ?? '', row.city ?? '', normalizeMarshalShirtSize(row.shirt) ?? '', row.post ?? row.functionCode ?? '', '']), [95, 115, 55, 115, 60, 85, 215], logoImage) };
 };

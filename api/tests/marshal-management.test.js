@@ -7,6 +7,7 @@ const {
   indexMarshalPeopleByNormalizedName,
   indexMarshalPeopleByNormalizedNameCandidates,
   isExplicitMarshalTrackAssignment,
+  isMarshalShirtRelevantAreaAssignment,
   isMarshalTrackActivityArea,
   marshalShirtStatisticsLabel,
   marshalParticipationUpdateValues,
@@ -235,6 +236,10 @@ async function run() {
   assert.equal(parsed.conflicts.length, 0);
   assert.equal(validateMarshalPersonInput({ firstName: 'Test', lastName: 'Person', shirtSize: 'H-XXL' }).shirtSize, 'H-2XL');
   assert.throws(() => validateMarshalPersonInput({ firstName: 'Test', lastName: 'Person', shirtSize: 'Abschnitt 2' }), /Ungültiges T-Shirt-Format/);
+  assert.equal(isMarshalShirtRelevantAreaAssignment('setup', 'not_asked'), true);
+  assert.equal(isMarshalShirtRelevantAreaAssignment('setup', 'declined'), true);
+  assert.equal(isMarshalShirtRelevantAreaAssignment('general', 'not_asked'), false);
+  assert.equal(isMarshalShirtRelevantAreaAssignment('general', 'accepted'), true);
 
   const attendancePdf = await renderMarshalTablePdf('Anwesenheit Samstag 12.09.2026', ['Name', 'Anwesend'], [['Mustermann, Max', '']], [500, 100]);
   assert.equal(attendancePdf.subarray(0, 4).toString('ascii'), '%PDF');
@@ -243,6 +248,16 @@ async function run() {
   assert.equal(setupPdf.subarray(0, 4).toString('ascii'), '%PDF');
   assert.ok(setupPdf.length > attendancePdf.length);
   assert.match(setupPdf.toString('latin1'), /\/MediaBox \[0 0 595\.28 841\.89\]/);
+  const sectionPdf = await renderMarshalTablePdf(
+    'Anwesenheit Samstag 12.09.2026 – Abschnitt 1',
+    ['Vorname', 'Nachname', 'Posten/Funktion', 'Änderung'],
+    Array.from({ length: 32 }, (_, index) => [`Vorname ${index + 1}`, `Nachname ${index + 1}`, `Posten ${index + 1}`, '']),
+    [120, 135, 120, 155],
+    null,
+    { layout: 'portrait', fitOnSinglePage: true, minimumRowHeight: 22 }
+  );
+  assert.match(sectionPdf.toString('latin1'), /\/MediaBox \[0 0 595\.28 841\.89\]/);
+  assert.equal((sectionPdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 1);
 
   const teamOnlyWorkbook = new ExcelJS.Workbook();
   const teamOnly = teamOnlyWorkbook.addWorksheet('Team_Laufer_2023');
@@ -317,9 +332,11 @@ async function run() {
   assert.match(routeSource, /Zusätzliche Helfer · handschriftliche Erfassung/);
   assert.match(routeSource, /Unterschrift Arbeitsschutz & Datenschutz/);
   assert.match(routeSource, /renderMarshalSetupPdf[\s\S]*logoImage, 'portrait'/);
+  assert.match(routeSource, /input\.type === 'section'[\s\S]*layout: 'portrait'[\s\S]*fitOnSinglePage: true/);
   assert.match(routeSource, /input\.type === 'shirt_statistics'/);
   assert.match(routeSource, /MARSHAL_STATISTICS_AREA_INVALID/);
   assert.match(routeSource, /input\.type === 'area'[\s\S]*marshalHelperArea\.id, input\.areaId[\s\S]*marshalHelperArea\.eventId, input\.eventId/);
+  assert.match(routeSource, /area\.areaType === 'setup'[\s\S]*directAreaRows[\s\S]*legacyShiftRows[\s\S]*new Map/);
   assert.match(routeSource, /marshalAreaShift\.id, input\.shiftId[\s\S]*marshalAreaShift\.areaId, area\.id/);
   assert.match(routeSource, /input\.shiftId[\s\S]*area\.areaType !== 'setup'[\s\S]*MARSHAL_SHIFT_SCOPE_INVALID/);
   assert.match(routeSource, /marshalShiftAssignment\.shiftId, shift\.id[\s\S]*marshalPerson\.noDeployment, false/);

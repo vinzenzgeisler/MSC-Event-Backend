@@ -1022,7 +1022,7 @@ export const commitMarshalImport = async (input: z.infer<typeof importInputSchem
   if (personValues.length) await tx.insert(marshalPerson).values(personValues).onConflictDoUpdate({ target: marshalPerson.helperNumber, set: {
     firstName: sql`excluded.first_name`, lastName: sql`excluded.last_name`, street: sql`excluded.street`, zip: sql`excluded.zip`,
     city: sql`excluded.city`, birthdate: sql`excluded.birthdate`, phone: sql`excluded.phone`, email: sql`excluded.email`,
-    shirtSize: sql`excluded.shirt_size`, clubMember: sql`excluded.club_member`, licenseNumber: sql`excluded.license_number`,
+    shirtSize: sql`excluded.shirt_size`, licenseNumber: sql`excluded.license_number`,
     vehicleRegistration: sql`excluded.vehicle_registration`, activityAreas: sql`excluded.activity_areas`, note: sql`excluded.note`,
     isActive: sql`excluded.is_active`, updatedAt: new Date()
   }});

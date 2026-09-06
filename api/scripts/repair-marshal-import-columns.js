@@ -162,7 +162,8 @@ const main = async () => {
     const peopleByNumber = new Map(peopleResult.rows.map((row) => [row.helper_number, row]));
     const participationByNumber = new Map(participationResult.rows.map((row) => [row.helper_number, row]));
     const changes = [];
-    const conflicts = { shirtSize: 0, note: 0, clubMember: 0, shirtSizeSnapshot: 0 };
+    const conflicts = { shirtSize: 0, note: 0, shirtSizeSnapshot: 0 };
+    let preservedHistoricalMembershipCandidates = 0;
 
     for (const sourcePerson of source.people.values()) {
       const person = peopleByNumber.get(sourcePerson.helperNumber);
@@ -181,9 +182,8 @@ const main = async () => {
         if (sameText(person.note, sourcePerson.buggyNote)) fields.push('note');
         else conflicts.note += 1;
       }
-      if (person.club_member !== target.clubMember) {
-        if (person.club_member === sourcePerson.buggyClubMember) fields.push('clubMember');
-        else conflicts.clubMember += 1;
+      if (person.club_member !== target.clubMember && person.club_member === sourcePerson.buggyClubMember) {
+        preservedHistoricalMembershipCandidates += 1;
       }
       const participation = sourcePerson.presentInCurrentSheet ? participationByNumber.get(sourcePerson.helperNumber) : undefined;
       if (participation && !sameText(participation.shirt_size_snapshot, target.shirtSize)) {
@@ -203,9 +203,9 @@ const main = async () => {
       safeFieldChanges: {
         shirtSize: changes.filter((change) => change.fields.includes('shirtSize')).length,
         note: changes.filter((change) => change.fields.includes('note')).length,
-        clubMember: changes.filter((change) => change.fields.includes('clubMember')).length,
         shirtSizeSnapshot: changes.filter((change) => change.fields.includes('shirtSizeSnapshot')).length
       },
+      preservedHistoricalMembershipCandidates,
       preservedConflicts: conflicts
     };
     if (!apply) {
@@ -221,7 +221,7 @@ const main = async () => {
       const afterPerson = {
         shirtSize: change.fields.includes('shirtSize') ? change.target.shirtSize : change.person.shirt_size,
         note: change.fields.includes('note') ? change.target.note : change.person.note,
-        clubMember: change.fields.includes('clubMember') ? change.target.clubMember : change.person.club_member
+        clubMember: change.person.club_member
       };
       const beforeData = {
         person: { shirtSize: change.person.shirt_size, note: change.person.note, clubMember: change.person.club_member },

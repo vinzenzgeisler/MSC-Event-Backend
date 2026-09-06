@@ -25,6 +25,8 @@ node api/scripts/repair-marshal-import-columns.js `
 
 Der Probelauf ändert nichts. Ein Feld gilt nur dann als automatisch reparierbar, wenn sein Datenbankwert noch exakt dem früheren fehlerhaften Importergebnis entspricht. Abweichende Werte werden als Konflikte gezählt und bleiben erhalten.
 
+Der Vereinsmitglied-Status wird bewusst nicht automatisch aus dem Tabellenblatt `Vorlage Lily 2022` repariert. Diese Kennzeichnung ist keine aktuelle Mitgliederliste. Künftige Event-Imports überschreiben den bestehenden Vereinsmitglied-Status ebenfalls nicht mehr.
+
 ## 3. Freigegebene Reparatur anwenden
 
 Zuerst muss Migration `0077_marshal_import_repair_snapshot.sql` ausgerollt sein. Danach werden der zuvor geprüfte Hash und die erwartete Anzahl betroffener Personen als Sperren mitgegeben:

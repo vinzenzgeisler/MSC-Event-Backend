@@ -292,6 +292,14 @@ import {
   validateVerifyPublicEntryInput,
   verifyPublicEntryEmail
 } from './routes/publicRegistration';
+import {
+  deleteSimulatorEntry,
+  getPublicSimLeaderboard,
+  listSimulatorEntries,
+  upsertSimulatorEntry,
+  validateListSimulatorEntriesQuery,
+  validateUpsertSimulatorEntryInput
+} from './routes/adminSimulator';
 
 const isInvalidJson = (error: unknown): boolean =>
   error instanceof Error && error.message === 'Invalid JSON body';
@@ -4361,6 +4369,59 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(500, 'IAM is not configured');
       }
       return errorJson(500, 'Patch IAM status failed');
+    }
+  }
+
+  // --- Simulator Leaderboard (Public) ---
+  if (method === 'GET' && path === '/public/sim/leaderboard') {
+    try {
+      const dayParam = event.queryStringParameters?.day;
+      const day = dayParam === 'saturday' || dayParam === 'sunday' ? dayParam : undefined;
+      const result = await getPublicSimLeaderboard(day);
+      return json(200, { ok: true, ...result });
+    } catch {
+      return errorJson(500, 'Get public sim leaderboard failed');
+    }
+  }
+
+  // --- Simulator Leaderboard (Admin) ---
+  if (method === 'GET' && path === '/admin/sim/entries') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'sim.read')) return errorJson(403, 'Forbidden');
+    try {
+      const query = validateListSimulatorEntriesQuery(event.queryStringParameters ?? {});
+      const entries = await listSimulatorEntries(query.eventId, query.day);
+      return json(200, { ok: true, entries });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      return errorJson(500, 'List simulator entries failed');
+    }
+  }
+
+  if (method === 'PUT' && path === '/admin/sim/entries') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'sim.write')) return errorJson(403, 'Forbidden');
+    try {
+      const input = validateUpsertSimulatorEntryInput(parseJsonBody(event));
+      const entry = await upsertSimulatorEntry(input);
+      return json(200, { ok: true, entry });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      return errorJson(500, 'Upsert simulator entry failed');
+    }
+  }
+
+  const simEntryDeleteMatch = path.match(/^\/admin\/sim\/entries\/([^/]+)$/);
+  if (method === 'DELETE' && simEntryDeleteMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'sim.write')) return errorJson(403, 'Forbidden');
+    try {
+      const deleted = await deleteSimulatorEntry(decodeURIComponent(simEntryDeleteMatch[1]));
+      if (!deleted) return errorJson(404, 'Entry not found');
+      return { statusCode: 204, body: '' };
+    } catch {
+      return errorJson(500, 'Delete simulator entry failed');
     }
   }
 

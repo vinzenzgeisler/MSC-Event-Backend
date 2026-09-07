@@ -1397,3 +1397,30 @@ export const documentGenerationJob = pgTable(
     statusIndex: index('document_generation_job_status_idx').on(table.status)
   })
 );
+
+export const simulatorEntry = pgTable(
+  'simulator_entry',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => event.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    bestTimeMs: integer('best_time_ms').notNull(),
+    day: text('day').notNull(), // 'saturday' | 'sunday'
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    nameUnique: uniqueIndex('simulator_entry_event_name_day_unique').on(
+      table.eventId,
+      table.name,
+      table.day
+    ),
+    eventDayTimeIdx: index('simulator_entry_event_day_time_idx').on(
+      table.eventId,
+      table.day,
+      table.bestTimeMs
+    )
+  })
+);

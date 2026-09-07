@@ -44,8 +44,11 @@ const CARD_HEIGHT = 3113 / 20;
 const PAGE_LEFT = 1077 / 20;
 const PAGE_TOP = 624 / 20;
 const POINTS_PER_MM = 72 / 25.4;
+const QR_QUIET_MODULES = 4;
+const STAMP_BOX_STROKE_WIDTH = 0.8;
+const BOTTOM_EDGE_COMPENSATION = STAMP_BOX_STROKE_WIDTH / 2;
 const STAMP_CARD_ASSET_KEYS = {
-  watermark: 'public/stamp-cards/msc-crest-watermark.png',
+  cornerLogo: 'public/stamp-cards/msc-logo-clean-transparent.png',
   displayFont: 'public/stamp-cards/fonts/oswald-700.ttf',
   textFont: 'public/stamp-cards/fonts/barlow-500.ttf',
   boldFont: 'public/stamp-cards/fonts/barlow-700.ttf'
@@ -57,7 +60,7 @@ const FONT_NAMES = {
 } as const;
 
 export type StampCardRenderAssets = {
-  watermark: Buffer | null;
+  cornerLogo: Buffer | null;
   displayFont: Buffer | null;
   textFont: Buffer | null;
   boldFont: Buffer | null;
@@ -67,13 +70,13 @@ let cachedStampCardAssets: StampCardRenderAssets | null = null;
 
 const loadStampCardAssets = async (): Promise<StampCardRenderAssets> => {
   if (cachedStampCardAssets) return cachedStampCardAssets;
-  const [watermark, displayFont, textFont, boldFont] = await Promise.all([
-    getAssetObjectBuffer(STAMP_CARD_ASSET_KEYS.watermark),
+  const [cornerLogo, displayFont, textFont, boldFont] = await Promise.all([
+    getAssetObjectBuffer(STAMP_CARD_ASSET_KEYS.cornerLogo),
     getAssetObjectBuffer(STAMP_CARD_ASSET_KEYS.displayFont),
     getAssetObjectBuffer(STAMP_CARD_ASSET_KEYS.textFont),
     getAssetObjectBuffer(STAMP_CARD_ASSET_KEYS.boldFont)
   ]);
-  const resolved = { watermark, displayFont, textFont, boldFont };
+  const resolved = { cornerLogo, displayFont, textFont, boldFont };
   const missing = Object.entries(resolved)
     .filter(([, value]) => !value)
     .map(([key]) => key);
@@ -245,30 +248,28 @@ const registerStampCardFonts = (doc: any, assets: StampCardRenderAssets): StampC
   return fonts;
 };
 
-const openWatermark = (doc: any, buffer: Buffer | null) => {
+const openCornerLogo = (doc: any, buffer: Buffer | null) => {
   if (!buffer) return null;
   try {
     return doc.openImage(`data:image/png;base64,${buffer.toString('base64')}`);
   } catch (error) {
-    console.warn('stamp_card_watermark_open_failed', {
+    console.warn('stamp_card_corner_logo_open_failed', {
       message: error instanceof Error ? error.message : String(error)
     });
     return null;
   }
 };
 
-const drawWatermark = (doc: any, image: any | null, x: number, y: number) => {
+const drawCornerLogo = (doc: any, image: any | null, right: number, top: number) => {
   if (!image) return;
-  const width = mm(47);
-  const height = mm(50);
-  doc.save();
-  doc.rect(x, y, CARD_WIDTH, CARD_HEIGHT).clip();
-  doc.opacity(0.08).image(image, x + (CARD_WIDTH - width) / 2, y + (CARD_HEIGHT - height) / 2, {
-    fit: [width, height],
-    align: 'center',
-    valign: 'center'
-  });
-  doc.restore();
+  const size = mm(11.5);
+  const sourceSize = 1254;
+  const visibleTop = 47;
+  const visibleRight = 1127;
+  const scale = size / sourceSize;
+  const drawX = right - visibleRight * scale;
+  const drawY = top - visibleTop * scale;
+  doc.save().image(image, drawX, drawY, { width: size, height: size }).restore();
 };
 
 const drawQr = (
@@ -281,17 +282,15 @@ const drawQr = (
   accentColor: string,
   fonts: StampCardFonts
 ) => {
-  const frame = mm(1.8);
-  const innerX = x + frame;
-  const innerY = y + frame;
-  const innerSize = size - frame * 2;
-  const quiet = 4;
+  const innerX = x;
+  const innerY = y;
+  const innerSize = size;
+  const quiet = QR_QUIET_MODULES;
   const module = innerSize / (matrix.size + quiet * 2);
   const clearSize = mm(8);
   const clearX = x + (size - clearSize) / 2;
   const clearY = y + (size - clearSize) / 2;
-  doc.save().fillColor(accentColor).rect(x, y, size, size).fill();
-  doc.fillColor('#FFFFFF').rect(innerX, innerY, innerSize, innerSize).fill();
+  doc.save().fillColor('#FFFFFF').rect(innerX, innerY, innerSize, innerSize).fill();
   doc.fillColor('#000000');
   // Merge adjacent modules into horizontal runs. Bulk sheets otherwise emit
   // enough PDF commands to exceed the synchronous API Lambda timeout.
@@ -353,13 +352,14 @@ const drawRoleMeta = (
   const height = mm(5);
   const yearX = right - yearWidth;
   const role = card.kind === 'regular_codriver' ? 'BEIFAHRER' : 'CHARITY-BEIFAHRER';
-  const roleWidth = card.kind === 'regular_codriver' ? mm(22) : mm(36);
-  const roleX = yearX - mm(2) - roleWidth;
-  doc.fillColor('#475569').font(fonts.bold).fontSize(card.kind === 'regular_codriver' ? 7.3 : 6.7);
+  const roleWidth = card.kind === 'regular_codriver' ? mm(24) : mm(38);
+  const roleX = yearX - mm(1) - roleWidth;
+  doc.fillColor(accentColor).rect(roleX, y, roleWidth, height).fill();
+  doc.fillColor('#FFFFFF').font(fonts.bold).fontSize(card.kind === 'regular_codriver' ? 7.3 : 6.7);
   const roleHeight = doc.heightOfString(role, { width: roleWidth, lineBreak: false });
   doc.text(role, roleX, y + (height - roleHeight) / 2 - 0.2, {
     width: roleWidth,
-    align: 'right',
+    align: 'center',
     characterSpacing: 0.2,
     lineBreak: false
   });
@@ -369,6 +369,26 @@ const drawRoleMeta = (
   doc.text(year, yearX, y + (height - yearHeight) / 2 - 0.25, {
     width: yearWidth,
     align: 'center',
+    lineBreak: false
+  });
+};
+
+const drawDriverBanner = (
+  doc: any,
+  x: number,
+  y: number,
+  width: number,
+  accentColor: string,
+  fonts: StampCardFonts
+) => {
+  const height = mm(5);
+  doc.fillColor(accentColor).rect(x, y, width, height).fill();
+  doc.fillColor('#FFFFFF').font(fonts.bold).fontSize(8);
+  const roleHeight = doc.heightOfString('FAHRER', { width, lineBreak: false });
+  doc.text('FAHRER', x, y + (height - roleHeight) / 2 - 0.2, {
+    width,
+    align: 'center',
+    characterSpacing: 0.5,
     lineBreak: false
   });
 };
@@ -430,7 +450,7 @@ const drawStampBoxes = (
   const boxHeight = mm(10.5);
   labels.forEach((label, index) => {
     const boxX = left + index * (boxWidth + gap);
-    doc.lineWidth(0.8).strokeColor('#9CA3AF').rect(boxX, top, boxWidth, boxHeight).stroke();
+    doc.lineWidth(STAMP_BOX_STROKE_WIDTH).strokeColor('#9CA3AF').rect(boxX, top, boxWidth, boxHeight).stroke();
     doc.fillColor('#475569').font(fonts.bold).fontSize(8);
     const labelHeight = doc.heightOfString(label, { width: boxWidth, lineBreak: false });
     doc.text(label, boxX, top + (boxHeight - labelHeight) / 2 - 0.3, {
@@ -446,9 +466,10 @@ const drawCard = (
   card: StampCard,
   x: number,
   y: number,
+  logoRight: number,
   year: string,
   accentColor: string,
-  watermarkImage: any | null,
+  cornerLogoImage: any | null,
   fonts: StampCardFonts
 ) => {
   const stripeX = x + mm(3.4);
@@ -458,18 +479,25 @@ const drawCard = (
   const stampTop = y + CARD_HEIGHT - mm(4) - stampHeight;
   const qrSize = mm(29.5);
   const qrX = contentRight - qrSize;
+  const logoVisibleWidth = mm(9.2);
+  const logoLeft = logoRight - logoVisibleWidth;
   const isDriver = card.kind === 'driver';
   const textRight = isDriver ? qrX - mm(3) : contentRight;
   const textWidth = textRight - contentLeft;
-  const nameWidth = contentRight - contentLeft;
+  const nameWidth = logoLeft - contentLeft - mm(2);
   const displayName = card.personName.toLocaleUpperCase('de-DE');
 
   doc.save();
   doc.fillColor('#FFFFFF').rect(x, y, CARD_WIDTH, CARD_HEIGHT).fill();
-  drawWatermark(doc, watermarkImage, x, y);
-  doc.fillColor(accentColor).rect(stripeX, y + mm(4), 2.2, CARD_HEIGHT - mm(8)).fill();
+  doc.fillColor(accentColor).rect(
+    stripeX,
+    y + mm(5),
+    2.2,
+    CARD_HEIGHT - mm(9) + BOTTOM_EDGE_COMPENSATION
+  ).fill();
+  drawCornerLogo(doc, cornerLogoImage, logoRight, y + mm(5));
 
-  const nameY = y + mm(3.5);
+  const nameY = y + mm(4);
   const nameSize = fitText(doc.font(fonts.display), displayName, nameWidth, 16.5, 9.5);
   doc.fillColor('#0F172A').font(fonts.display).fontSize(nameSize).text(displayName, contentLeft, nameY, {
     width: nameWidth,
@@ -478,14 +506,15 @@ const drawCard = (
 
   if (card.kind !== 'driver' && card.driverNames?.length) {
     const driverLine = `BEI ${card.driverNames.map((name) => name.toLocaleUpperCase('de-DE')).join(' · ')}`;
-    const driverSize = fitText(doc.font(fonts.text), driverLine, nameWidth, 8.5, 7.2);
+    const driverWidth = contentRight - contentLeft;
+    const driverSize = fitText(doc.font(fonts.text), driverLine, driverWidth, 8.5, 7.2);
     doc.fillColor('#475569').font(fonts.text).fontSize(driverSize).text(driverLine, contentLeft, y + mm(14.8), {
-      width: nameWidth,
+      width: driverWidth,
       lineBreak: false
     });
   }
 
-  const startsTop = card.kind === 'driver' ? y + mm(11.8) : y + mm(20.5);
+  const startsTop = card.kind === 'driver' ? y + mm(11.8) : y + mm(21.5);
   const footerY = stampTop + (stampHeight - mm(5)) / 2;
   const startsBottom = card.kind === 'charity_codriver' ? footerY - mm(2.2) : stampTop - mm(2.2);
   drawStartRows(doc, startsForCard(card), contentLeft, startsTop, textWidth, startsBottom, accentColor, fonts);
@@ -509,7 +538,18 @@ export const renderStampCardPdf = ({ cards, eventId, startSlot, year, accentColo
   new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 0, autoFirstPage: true, info: { Title: `Stempelkarten ${year}` } });
     const fonts = registerStampCardFonts(doc, assets);
-    const watermarkImage = openWatermark(doc, assets.watermark);
+    const cornerLogoImage = openCornerLogo(doc, assets.cornerLogo);
+    const qrSize = mm(29.5);
+    const qrMatrices = new Map<string, QrCodeMatrix>();
+    cards.forEach((card) => {
+      if (card.kind === 'driver' && card.personId) {
+        qrMatrices.set(card.personId, buildQrCodeMatrix(inspectionUrl(eventId, card.personId), 'H'));
+      }
+    });
+    const alignmentMatrix = qrMatrices.values().next().value as QrCodeMatrix | undefined;
+    const logoQuietInset = alignmentMatrix
+      ? QR_QUIET_MODULES * (qrSize / (alignmentMatrix.size + QR_QUIET_MODULES * 2))
+      : mm(1.8);
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -520,12 +560,18 @@ export const renderStampCardPdf = ({ cards, eventId, startSlot, year, accentColo
       const slot = absolute % 10;
       const x = PAGE_LEFT + (slot % 2) * CARD_WIDTH;
       const y = PAGE_TOP + Math.floor(slot / 2) * CARD_HEIGHT;
-      drawCard(doc, card, x, y, year, accentColor, watermarkImage, fonts);
+      const logoRight = x + CARD_WIDTH - mm(3.6) - logoQuietInset;
+      drawCard(doc, card, x, y, logoRight, year, accentColor, cornerLogoImage, fonts);
       if (card.kind === 'driver' && card.personId) {
-        const qrSize = mm(29.5);
         const qrX = x + CARD_WIDTH - mm(3.6) - qrSize;
-        const qrY = y + mm(14.2);
-        const matrix = buildQrCodeMatrix(inspectionUrl(eventId, card.personId), 'H');
+        const matrix = qrMatrices.get(card.personId)!;
+        const module = qrSize / (matrix.size + QR_QUIET_MODULES * 2);
+        const quietInset = QR_QUIET_MODULES * module;
+        const visibleQrBottom = y + CARD_HEIGHT - mm(4) + BOTTOM_EDGE_COMPENSATION;
+        const qrY = visibleQrBottom - qrSize + quietInset;
+        const visibleQrX = qrX + QR_QUIET_MODULES * module;
+        const visibleQrWidth = matrix.size * module;
+        drawDriverBanner(doc, visibleQrX, qrY - mm(6), visibleQrWidth, accentColor, fonts);
         drawQr(doc, matrix, qrX, qrY, qrSize, year, accentColor, fonts);
       }
     });

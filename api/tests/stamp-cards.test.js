@@ -43,16 +43,25 @@ assert.match(routeSource, /const shortYear = year\.slice\(-2\)/);
 assert.match(routeSource, /errorCorrectionLevel|buildQrCodeMatrix\(inspectionUrl\(eventId, card\.personId\), 'H'\)/);
 assert.match(routeSource, /const clearSize = mm\(8\)/);
 assert.match(routeSource, /fillColor\('#FFFFFF'\)\.rect\(clearX, clearY, clearSize, clearSize\)\.fill\(\)/);
-assert.match(routeSource, /public\/stamp-cards\/msc-crest-watermark\.png/);
+assert.match(routeSource, /public\/stamp-cards\/msc-logo-clean-transparent\.png/);
 assert.match(routeSource, /public\/stamp-cards\/fonts\/oswald-700\.ttf/);
-assert.match(routeSource, /opacity\(0\.08\)\.image\(image/);
+assert.match(routeSource, /drawCornerLogo\(doc, cornerLogoImage, logoRight, y \+ mm\(5\)\)/);
+assert.match(routeSource, /const logoRight = x \+ CARD_WIDTH - mm\(3\.6\) - logoQuietInset/);
+assert.match(routeSource, /drawDriverBanner\(doc, visibleQrX, qrY - mm\(6\), visibleQrWidth, accentColor, fonts\)/);
+assert.match(routeSource, /const visibleQrBottom = y \+ CARD_HEIGHT - mm\(4\) \+ BOTTOM_EDGE_COMPENSATION/);
+assert.match(routeSource, /const BOTTOM_EDGE_COMPENSATION = STAMP_BOX_STROKE_WIDTH \/ 2/);
+assert.match(routeSource, /const qrY = visibleQrBottom - qrSize \+ quietInset/);
+assert.match(routeSource, /const visibleQrWidth = matrix\.size \* module/);
+assert.doesNotMatch(routeSource, /fillColor\(accentColor\)\.rect\(x, y, size, size\)\.fill\(\)/);
 assert.match(routeSource, /\['TA', 'FB', 'FB'\]/);
 assert.match(routeSource, /\['FB', 'FB'\]/);
 assert.match(routeSource, /CHARITY-BEIFAHRER/);
+assert.match(routeSource, /fillColor\(accentColor\)\.rect\(roleX, y, roleWidth, height\)\.fill\(\)/);
+assert.match(routeSource, /\.text\(year, yearX/);
 assert.match(routeSource, /mergeDriverName\(codriver, nameOf\(row\.driverFirstName, row\.driverLastName\)\)/);
 assert.match(routeSource, /const driverLine = `BEI /);
-assert.match(routeSource, /year\.toLocaleUpperCase|\.text\(year, yearX/);
-assert.match(routeSource, /const nameWidth = contentRight - contentLeft/);
+assert.match(routeSource, /const nameY = y \+ mm\(4\)/);
+assert.match(routeSource, /const nameWidth = logoLeft - contentLeft - mm\(2\)/);
 assert.doesNotMatch(routeSource, /drawCornerMarks/);
 assert.match(routeSource, /data:image\/png;base64/);
 assert.match(storageStackSource, /destinationKeyPrefix: 'public\/stamp-cards'/);
@@ -65,15 +74,16 @@ assert.match(apiStackSource, /memorySize: 1024/);
 assert.match(apiStackSource, /timeout: cdk\.Duration\.seconds\(29\)/);
 
 const assetRoot = path.join(__dirname, '../../infra/assets/stamp-cards');
-const watermarkBuffer = fs.readFileSync(path.join(assetRoot, 'msc-crest-watermark.png'));
+const cornerLogoBuffer = fs.readFileSync(path.join(assetRoot, 'msc-logo-clean-transparent.png'));
+assert.equal(cornerLogoBuffer.readUInt8(25), 6, 'corner logo must be an RGBA PNG');
 const displayFont = fs.readFileSync(path.join(assetRoot, 'fonts/oswald-700.ttf'));
 const textFont = fs.readFileSync(path.join(assetRoot, 'fonts/barlow-500.ttf'));
 const boldFont = fs.readFileSync(path.join(assetRoot, 'fonts/barlow-700.ttf'));
 const previewDocument = new PDFDocument({ size: [243.8, 155.65], margin: 0 });
-const previewWatermark = previewDocument.openImage(`data:image/png;base64,${watermarkBuffer.toString('base64')}`);
-assert.ok(previewWatermark.width > 500);
-assert.ok(previewWatermark.height > 500);
-assert.doesNotThrow(() => previewDocument.image(previewWatermark, 8, 4, { fit: [164, 176] }));
+const previewCornerLogo = previewDocument.openImage(`data:image/png;base64,${cornerLogoBuffer.toString('base64')}`);
+assert.equal(previewCornerLogo.width, 1254);
+assert.equal(previewCornerLogo.height, 1254);
+assert.doesNotThrow(() => previewDocument.image(previewCornerLogo, 8, 4, { fit: [26, 26] }));
 assert.doesNotThrow(() => previewDocument.registerFont('OswaldPreview', displayFont));
 assert.doesNotThrow(() => previewDocument.registerFont('BarlowPreview', textFont));
 assert.doesNotThrow(() => previewDocument.registerFont('BarlowBoldPreview', boldFont));
@@ -120,7 +130,7 @@ const main = async () => {
     startSlot: 10,
     year: '2026',
     accentColor: '#153A81',
-    assets: { watermark: watermarkBuffer, displayFont, textFont, boldFont }
+    assets: { cornerLogo: cornerLogoBuffer, displayFont, textFont, boldFont }
   });
   assert.equal(data.subarray(0, 4).toString('ascii'), '%PDF');
   assert.ok(data.length > 50_000);
@@ -131,7 +141,7 @@ const main = async () => {
     startSlot: 1,
     year: '2026',
     accentColor: '#153A81',
-    assets: { watermark: null, displayFont: null, textFont: null, boldFont: null }
+    assets: { cornerLogo: null, displayFont: null, textFont: null, boldFont: null }
   });
   assert.equal(fallbackData.subarray(0, 4).toString('ascii'), '%PDF');
 

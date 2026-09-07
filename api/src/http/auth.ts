@@ -1,6 +1,6 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-const allowedRoles = ['admin', 'editor', 'viewer', 'technical_inspector', 'marshal_manager'] as const;
+const allowedRoles = ['admin', 'editor', 'viewer', 'technical_inspector', 'marshal_manager', 'simulator_manager'] as const;
 export type AllowedRole = (typeof allowedRoles)[number];
 const allowedRoleSet = new Set<string>(allowedRoles);
 const legacyRoleAliases: Record<string, AllowedRole> = {
@@ -30,7 +30,9 @@ export const adminPermissions = [
   'inspection.write',
   'marshals.read',
   'marshals.write',
-  'marshals.export'
+  'marshals.export',
+  'sim.read',
+  'sim.write'
 ] as const;
 export type AdminPermission = (typeof adminPermissions)[number];
 export type AdminReadPermission = Extract<AdminPermission, `${string}.read`>;
@@ -60,7 +62,9 @@ const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
     'inspection.write',
     'marshals.read',
     'marshals.write',
-    'marshals.export'
+    'marshals.export',
+    'sim.read',
+    'sim.write'
   ],
   editor: [
     'dashboard.read',
@@ -76,7 +80,8 @@ const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
   ],
   viewer: ['dashboard.read', 'entries.read', 'entries.payment.read', 'exports.read'],
   technical_inspector: ['inspection.read', 'inspection.write'],
-  marshal_manager: ['marshals.read', 'marshals.write', 'marshals.export']
+  marshal_manager: ['marshals.read', 'marshals.write', 'marshals.export'],
+  simulator_manager: ['sim.read', 'sim.write']
 };
 
 export type AuthContext = {

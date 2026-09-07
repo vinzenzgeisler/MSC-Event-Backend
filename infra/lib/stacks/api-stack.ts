@@ -1343,6 +1343,27 @@ export class ApiStack extends Stack {
       authorizer: jwtAuthorizer
     });
 
+    // --- Simulator Leaderboard ---
+    this.api.addRoutes({
+      path: '/public/sim/leaderboard',
+      methods: [apigwv2.HttpMethod.GET],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/admin/sim/entries',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/sim/entries/{id}',
+      methods: [apigwv2.HttpMethod.DELETE],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
     new CfnOutput(this, 'ApiUrl', {
       value: this.api.url ?? 'n/a',
       exportName: `${props.config.prefix}-api-url`

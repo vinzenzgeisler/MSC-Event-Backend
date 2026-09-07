@@ -5,7 +5,10 @@ const {
   validatePairingClaimInput,
   validateCreateSigningSessionInput,
   validateCompleteSigningSessionInput,
-  extractSigningDeviceToken
+  extractSigningDeviceToken,
+  normalizeWaiverMailRecipient,
+  formatWaiverMailEventDates,
+  formatWaiverMailSignedAt
 } = require('../dist/routes/adminSigning');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -20,6 +23,15 @@ const throws = (fn, msgPattern) => {
     return true;
   });
 };
+
+// ── signed-waiver recipient hardening ────────────────────────────────────────
+{
+  assert.equal(normalizeWaiverMailRecipient(' Driver@Example.ORG '), 'driver@example.org');
+  throws(() => normalizeWaiverMailRecipient('not-an-email'), 'WAIVER_MAIL_RECIPIENT_INVALID');
+  throws(() => normalizeWaiverMailRecipient(''), 'WAIVER_MAIL_RECIPIENT_INVALID');
+  assert.equal(formatWaiverMailEventDates('2026-09-07', '2026-09-08'), '07.09.2026 – 08.09.2026');
+  assert.match(formatWaiverMailSignedAt('2026-09-07T14:30:00.000Z'), /^07\.09\.2026, 16:30$/);
+}
 
 // ── validatePairingClaimInput ─────────────────────────────────────────────────
 {

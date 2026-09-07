@@ -199,6 +199,31 @@ const buildBasePayload = () => ({
   assert.equal((rendered.bodyTextRendered.match(/Mit freundlichen Grüßen/g) ?? []).length, 0);
 }
 
+// Signed waivers use the canonical system-mail chrome and never trust legacy stored HTML.
+{
+  const rendered = renderMailContract({
+    templateKey: 'waiver_signed',
+    subjectTemplate: 'Bestätigung deiner Haftverzichtserklärung – {{eventName}}',
+    bodyTextTemplate:
+      'Hallo {{signerName}},\n\ndeine Haftverzichtserklärung wurde erfolgreich digital unterschrieben.\n\nDas Dokument liegt als PDF bei.',
+    bodyHtmlTemplate: '<!doctype html><html><body><div style="background:red">legacy waiver mail</div></body></html>',
+    data: {
+      ...buildBasePayload(),
+      locale: 'de',
+      signerName: 'Erika Beispiel',
+      signerRole: 'Beifahrerin',
+      signedAt: '07.09.2026, 14:30 Uhr',
+      eventDateText: '12.09.2026 – 13.09.2026',
+      headerTitle: 'Haftverzicht unterschrieben'
+    }
+  });
+  assert.equal(rendered.warnings.some((item) => item.includes('Template-HTML wird für dieses Template ignoriert')), true);
+  assert.equal(rendered.htmlDocument.includes('background:red'), false);
+  assert.match(rendered.htmlDocument, /mail-card/);
+  assert.match(rendered.htmlDocument, /Haftverzicht unterschrieben/);
+  assert.match(rendered.htmlDocument, /MSC Oberlausitzer Dreiländereck e\.V\./);
+}
+
 // Explicit process-mail content must not be replaced by the localized default copy.
 {
   const rendered = renderMailContract({

@@ -65,6 +65,50 @@ const completeSigningSessionSchema = z.object({
   signatureDataUrl: z.string().startsWith('data:image/png;base64,').max(2_000_000)
 });
 
+const waiverMailRecipientSchema = z.string().trim().email().transform((value) => value.toLowerCase());
+
+export const normalizeWaiverMailRecipient = (value: string): string => {
+  const parsed = waiverMailRecipientSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error('WAIVER_MAIL_RECIPIENT_INVALID');
+  }
+  return parsed.data;
+};
+
+const formatWaiverDate = (value: string): string => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat('de-DE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: 'Europe/Berlin'
+  }).format(date);
+};
+
+export const formatWaiverMailEventDates = (startsAt: string, endsAt: string): string => {
+  const start = formatWaiverDate(startsAt);
+  const end = formatWaiverDate(endsAt);
+  return start === end ? start : `${start} – ${end}`;
+};
+
+export const formatWaiverMailSignedAt = (value: string): string => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat('de-DE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Berlin'
+  }).format(date);
+};
+
 type CreateSigningSessionInput = z.infer<typeof createSigningSessionSchema>;
 type CompleteSigningSessionInput = z.infer<typeof completeSigningSessionSchema>;
 
@@ -972,27 +1016,32 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
   // Queue the signed document for the person whose waiver was captured.
   // Delivery remains best-effort and must never roll back valid evidence.
   try {
-    const recipientEmail = payload.signer.email?.trim() || payload.driver.email?.trim();
+    const recipientEmail = payload.signer.email?.trim();
     const signerName = signer.type === 'guardian' && signer.guardianName?.trim()
       ? signer.guardianName.trim()
       : `${payload.signer.firstName ?? payload.driver.firstName ?? ''} ${payload.signer.lastName ?? payload.driver.lastName ?? ''}`.trim();
-    if (recipientEmail && documentS3Key) {
-      await queueWaiverSignedMail(db, {
-        toEmail: recipientEmail,
-        driverName: `${payload.driver.firstName ?? ''} ${payload.driver.lastName ?? ''}`.trim(),
-        signerName,
-        signerRole: signer.type === 'guardian' ? 'Erziehungsberechtigte Person' : payload.signer.label,
-        eventId: payload.event.id,
-        eventName: payload.event.name,
-        eventDates: `${payload.event.startsAt} - ${payload.event.endsAt}`,
-        signedAt: input.signedAt,
-        documentS3Key,
-        sessionId: current.id,
-        entryId: current.sourceEntryId ?? undefined,
-        documentId: docRow?.id ?? undefined,
-        signingSessionId: current.id
-      });
+    if (!recipientEmail) {
+      throw new Error('WAIVER_MAIL_RECIPIENT_MISSING');
     }
+    await queueWaiverSignedMail(db, {
+      toEmail: recipientEmail,
+      driverName: `${payload.driver.firstName ?? ''} ${payload.driver.lastName ?? ''}`.trim(),
+      signerName,
+      signerRole: signer.type === 'guardian' ? 'Erziehungsberechtigte Person' : payload.signer.label,
+      eventId: payload.event.id,
+      eventName: payload.event.name,
+      eventDates: formatWaiverMailEventDates(payload.event.startsAt, payload.event.endsAt),
+      signedAt: formatWaiverMailSignedAt(input.signedAt),
+      documentS3Key,
+      sessionId: current.id,
+      entryId: current.sourceEntryId ?? undefined,
+      documentId: docRow?.id ?? undefined,
+      signingSessionId: current.id,
+      queueAudit: {
+        actorUserId: current.operatorUserId,
+        entityId: current.id
+      }
+    });
   } catch (error) {
     // Mail failure must never abort the signing session, but it must leave a trace.
     await db
@@ -1024,8 +1073,13 @@ export const queueWaiverSignedMail = async (
     documentId?: string;
     signingSessionId?: string;
     idempotencyKey?: string;
+    queueAudit?: {
+      actorUserId: string | null;
+      entityId: string;
+    };
   }
 ): Promise<{ outboxId: string }> => {
+  const toEmail = normalizeWaiverMailRecipient(input.toEmail);
   // Resolve template
   const templateRows = await db
     .select({
@@ -1051,55 +1105,75 @@ export const queueWaiverSignedMail = async (
   const { templateKey, version, subjectTemplate } = templateRows[0];
 
   const idempotencyKey = input.idempotencyKey ?? `waiver_signed:${input.sessionId}`;
-  const [outboxRow] = await db
-    .insert(emailOutbox)
-    .values({
-      eventId: input.eventId,
-      toEmail: input.toEmail,
-      subject: subjectTemplate,
-      templateId: templateKey,
-      templateVersion: version,
-      templateData: {
-        driverName: input.driverName,
-        signerName: input.signerName,
-        signerRole: input.signerRole,
-        eventName: input.eventName,
-        eventDates: input.eventDates,
-        signedAt: input.signedAt,
-        entryId: input.entryId,
-        signingSessionId: input.signingSessionId ?? input.sessionId,
-        documentId: input.documentId
-      },
-      idempotencyKey
-    })
-    .onConflictDoNothing({ target: emailOutbox.idempotencyKey })
-    .returning({ id: emailOutbox.id });
+  const outboxId = await db.transaction(async (tx) => {
+    const [outboxRow] = await tx
+      .insert(emailOutbox)
+      .values({
+        eventId: input.eventId,
+        toEmail,
+        subject: subjectTemplate,
+        templateId: templateKey,
+        templateVersion: version,
+        templateData: {
+          driverName: input.driverName,
+          signerName: input.signerName,
+          signerRole: input.signerRole,
+          eventName: input.eventName,
+          eventDates: input.eventDates,
+          signedAt: input.signedAt,
+          eventDateText: input.eventDates,
+          headerTitle: 'Haftverzicht unterschrieben',
+          preheader: 'Deine unterschriebene Haftverzichtserklärung liegt als PDF bei.',
+          entryId: input.entryId,
+          signingSessionId: input.signingSessionId ?? input.sessionId,
+          documentId: input.documentId
+        },
+        idempotencyKey
+      })
+      .onConflictDoNothing({ target: emailOutbox.idempotencyKey })
+      .returning({ id: emailOutbox.id });
 
-  const outboxId = outboxRow?.id ?? (await db
-    .select({ id: emailOutbox.id })
-    .from(emailOutbox)
-    .where(eq(emailOutbox.idempotencyKey, idempotencyKey))
-    .limit(1))[0]?.id;
+    const resolvedOutboxId = outboxRow?.id ?? (await tx
+      .select({ id: emailOutbox.id })
+      .from(emailOutbox)
+      .where(eq(emailOutbox.idempotencyKey, idempotencyKey))
+      .limit(1))[0]?.id;
 
-  if (!outboxId) {
-    throw new Error('WAIVER_SIGNED_OUTBOX_NOT_FOUND');
-  }
+    if (!resolvedOutboxId) {
+      throw new Error('WAIVER_SIGNED_OUTBOX_NOT_FOUND');
+    }
 
-  const existingAttachments = await db
-    .select({ id: emailOutboxAttachment.id })
-    .from(emailOutboxAttachment)
-    .where(and(eq(emailOutboxAttachment.outboxId, outboxId), eq(emailOutboxAttachment.s3Key, input.documentS3Key)))
-    .limit(1);
+    const existingAttachments = await tx
+      .select({ id: emailOutboxAttachment.id })
+      .from(emailOutboxAttachment)
+      .where(and(eq(emailOutboxAttachment.outboxId, resolvedOutboxId), eq(emailOutboxAttachment.s3Key, input.documentS3Key)))
+      .limit(1);
 
-  if (existingAttachments.length === 0) {
-    await db.insert(emailOutboxAttachment).values({
-      outboxId,
-      fileName: 'Haftverzichtserklaerung.pdf',
-      contentType: 'application/pdf',
-      s3Key: input.documentS3Key,
-      source: 'document'
-    });
-  }
+    if (existingAttachments.length === 0) {
+      await tx.insert(emailOutboxAttachment).values({
+        outboxId: resolvedOutboxId,
+        fileName: 'Haftverzichtserklaerung.pdf',
+        contentType: 'application/pdf',
+        s3Key: input.documentS3Key,
+        source: 'document'
+      });
+    }
+    if (outboxRow && input.queueAudit) {
+      await writeAuditLog(tx as never, {
+        eventId: input.eventId,
+        actorUserId: input.queueAudit.actorUserId,
+        action: 'waiver_signed_mail_queued',
+        entityType: 'signing_session',
+        entityId: input.queueAudit.entityId,
+        payload: {
+          signingSessionId: input.signingSessionId ?? input.sessionId,
+          outboxId: resolvedOutboxId,
+          recipient: toEmail
+        }
+      });
+    }
+    return resolvedOutboxId;
+  });
 
   return { outboxId };
 };
@@ -1161,8 +1235,8 @@ export const resendSignedWaiverMail = async (documentId: string, actorUserId: st
     signerRole,
     eventId: row.eventId,
     eventName: payload.event.name,
-    eventDates: `${payload.event.startsAt} - ${payload.event.endsAt}`,
-    signedAt: row.signedAt?.toISOString() ?? new Date().toISOString(),
+    eventDates: formatWaiverMailEventDates(payload.event.startsAt, payload.event.endsAt),
+    signedAt: formatWaiverMailSignedAt(row.signedAt?.toISOString() ?? new Date().toISOString()),
     documentS3Key: row.documentS3Key,
     sessionId: row.sessionId,
     entryId: row.documentEntryId ?? undefined,
@@ -1170,6 +1244,11 @@ export const resendSignedWaiverMail = async (documentId: string, actorUserId: st
     signingSessionId: row.sessionId,
     idempotencyKey: `waiver_signed:manual:${row.sessionId}:${randomUUID()}`
   });
+
+  await db
+    .update(signingSession)
+    .set({ errorLast: null, updatedAt: new Date() })
+    .where(and(eq(signingSession.id, row.sessionId), sql`${signingSession.errorLast} like 'WAIVER_MAIL_QUEUE_FAILED%'`));
 
   await writeAuditLog(db as never, {
     eventId: row.eventId,

@@ -14,7 +14,8 @@ const CANONICAL_LAYOUT_ONLY_TEMPLATES = new Set<string>([
   'payment_reminder',
   'rejected',
   'codriver_info',
-  'doublestarter_migration_notice'
+  'doublestarter_migration_notice',
+  'waiver_signed'
 ]);
 
 const readPath = (data: TemplateData, keyPath: string): unknown => {
@@ -435,6 +436,12 @@ const TEMPLATE_VISUALS: Record<string, TemplateVisualConfig> = {
     entryBackground: '#F0F9FF',
     entryBorder: '#BAE6FD',
     entryLabelColor: '#0369A1'
+  },
+  waiver_signed: {
+    accentLine: '#86EFAC',
+    entryBackground: '#ECFDF5',
+    entryBorder: '#BBF7D0',
+    entryLabelColor: '#15803D'
   }
 };
 
@@ -640,6 +647,10 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   doublestarter_migration_notice: {
     mailLabel: '',
     heroSubtitle: 'Information zur Zusammenführung deiner Nennungen.'
+  },
+  waiver_signed: {
+    mailLabel: '',
+    heroSubtitle: 'Deine unterschriebene Haftverzichtserklärung liegt als PDF bei.'
   }
 };
 

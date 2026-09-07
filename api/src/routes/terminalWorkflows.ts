@@ -18,7 +18,12 @@ import {
 import { renderSignedWaiverEvidencePdf } from '../docs/pdf';
 import { uploadFile, uploadPdf } from '../docs/storage';
 import { computeConsentTextHash, getLegalTexts, type LegalUiLocale } from './publicLegalTextsSource';
-import { queueWaiverSignedMail, resolveDeviceByToken } from './adminSigning';
+import {
+  formatWaiverMailEventDates,
+  formatWaiverMailSignedAt,
+  queueWaiverSignedMail,
+  resolveDeviceByToken
+} from './adminSigning';
 
 const workflowTypeSchema = z.enum(['regular_codriver_registration', 'charity_codriver_registration']);
 const localeSchema = z.enum(['de-DE', 'en-GB', 'cs-CZ', 'pl-PL']);
@@ -342,13 +347,17 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
         : session.workflowType === 'charity_codriver_registration' ? 'Charity-Beifahrer' : 'Beifahrer',
       eventId: session.eventId,
       eventName: context.event.name,
-      eventDates: `${context.event.startsAt} - ${context.event.endsAt}`,
-      signedAt: input.signedAt,
+      eventDates: formatWaiverMailEventDates(context.event.startsAt, context.event.endsAt),
+      signedAt: formatWaiverMailSignedAt(input.signedAt),
       documentS3Key,
       sessionId,
       entryId: entryIds[0],
       documentId: updatedSession?.documentId ?? undefined,
-      signingSessionId: sessionId
+      signingSessionId: sessionId,
+      queueAudit: {
+        actorUserId: session.operatorUserId,
+        entityId: sessionId
+      }
     });
   } catch (error) {
     await db.update(signingSession).set({

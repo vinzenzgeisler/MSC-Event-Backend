@@ -54,6 +54,7 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   signing_session_started: ['entryIds', 'deviceSessionId'],
   signing_session_completed: ['documentId', 'documentSha256', 'auditS3Key', 'entryIds'],
   signing_session_cancelled: ['deviceSessionId'],
+  waiver_signed_mail_queued: ['signingSessionId', 'outboxId', 'recipient'],
   waiver_signed_mail_resent: ['signingSessionId', 'outboxId', 'recipient']
 };
 

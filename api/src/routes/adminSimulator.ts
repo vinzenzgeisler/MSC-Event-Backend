@@ -1,8 +1,36 @@
 import { eq, asc, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/client';
-import { simulatorEntry } from '../db/schema';
+import { simulatorEntry, appConfig } from '../db/schema';
 import { getCurrentEvent } from './adminEvents';
+
+const SIM_THEME_KEY = 'sim_leaderboard_theme';
+export type SimTheme = 'dark' | 'light';
+
+export const getSimLeaderboardTheme = async (): Promise<SimTheme> => {
+  const db = await getDb();
+  const rows = await db
+    .select({ payload: appConfig.payload })
+    .from(appConfig)
+    .where(eq(appConfig.configKey, SIM_THEME_KEY))
+    .limit(1);
+  const raw = (rows[0]?.payload as { theme?: string } | undefined)?.theme;
+  return raw === 'light' ? 'light' : 'dark';
+};
+
+export const setSimLeaderboardTheme = async (theme: SimTheme): Promise<void> => {
+  const db = await getDb();
+  await db
+    .insert(appConfig)
+    .values({ configKey: SIM_THEME_KEY, payload: { theme } })
+    .onConflictDoUpdate({
+      target: appConfig.configKey,
+      set: { payload: { theme } }
+    });
+};
+
+export const validateSimThemeInput = (body: unknown) =>
+  z.object({ theme: z.enum(['dark', 'light']) }).parse(body);
 
 export const validateUpsertSimulatorEntryInput = (body: unknown) =>
   z

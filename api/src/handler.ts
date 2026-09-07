@@ -295,9 +295,12 @@ import {
 import {
   deleteSimulatorEntry,
   getPublicSimLeaderboard,
+  getSimLeaderboardTheme,
   listSimulatorEntries,
+  setSimLeaderboardTheme,
   upsertSimulatorEntry,
   validateListSimulatorEntriesQuery,
+  validateSimThemeInput,
   validateUpsertSimulatorEntryInput
 } from './routes/adminSimulator';
 
@@ -4369,6 +4372,31 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(500, 'IAM is not configured');
       }
       return errorJson(500, 'Patch IAM status failed');
+    }
+  }
+
+  // --- Simulator Config (Public) ---
+  if (method === 'GET' && path === '/public/sim/config') {
+    try {
+      const theme = await getSimLeaderboardTheme();
+      return json(200, { ok: true, theme });
+    } catch {
+      return errorJson(500, 'Get sim config failed');
+    }
+  }
+
+  // --- Simulator Config (Admin) ---
+  if (method === 'PUT' && path === '/admin/sim/config') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'sim.write')) return errorJson(403, 'Forbidden');
+    try {
+      const input = validateSimThemeInput(parseJsonBody(event));
+      await setSimLeaderboardTheme(input.theme);
+      return json(200, { ok: true, theme: input.theme });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      return errorJson(500, 'Set sim config failed');
     }
   }
 

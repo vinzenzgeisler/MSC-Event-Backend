@@ -1345,6 +1345,19 @@ export class ApiStack extends Stack {
 
     // --- Simulator Leaderboard ---
     this.api.addRoutes({
+      path: '/public/sim/config',
+      methods: [apigwv2.HttpMethod.GET],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/admin/sim/config',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/public/sim/leaderboard',
       methods: [apigwv2.HttpMethod.GET],
       integration

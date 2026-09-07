@@ -16,6 +16,13 @@ const assets = {
 
 const cards = [
   {
+    key: 'driver:55555555-5555-4555-8555-555555555555',
+    kind: 'driver',
+    personId: '55555555-5555-4555-8555-555555555555',
+    personName: 'Lukas Pötschke',
+    starts: [{ className: 'Sonderlauf', startNumber: '500' }]
+  },
+  {
     key: 'driver:22222222-2222-4222-8222-222222222222',
     kind: 'driver',
     personId: '22222222-2222-4222-8222-222222222222',

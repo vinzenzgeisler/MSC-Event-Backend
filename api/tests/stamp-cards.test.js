@@ -62,6 +62,9 @@ assert.match(routeSource, /mergeDriverName\(codriver, nameOf\(row\.driverFirstNa
 assert.match(routeSource, /const driverLine = `BEI /);
 assert.match(routeSource, /const nameY = y \+ mm\(4\)/);
 assert.match(routeSource, /const nameWidth = logoLeft - contentLeft - mm\(2\)/);
+assert.match(routeSource, /const fittedNumberSize = fitText\(doc\.font\(fonts\.display\), numberText, numberWidth, numberSize, 7\.5\)/);
+assert.match(routeSource, /const numberX = left \+ width - doc\.widthOfString\(numberText\)/);
+assert.doesNotMatch(routeSource, /text\(`#\$\{start\.startNumber\}`[^;]+width: numberWidth/s);
 assert.doesNotMatch(routeSource, /drawCornerMarks/);
 assert.match(routeSource, /data:image\/png;base64/);
 assert.match(storageStackSource, /destinationKeyPrefix: 'public\/stamp-cards'/);
@@ -103,6 +106,13 @@ const cards = [
       { className: 'Sonderklasse historische Fahrzeuge', startNumber: '101' },
       { className: 'Zusätzlicher Start', startNumber: '202' }
     ]
+  },
+  {
+    key: 'driver:55555555-5555-4555-8555-555555555555',
+    kind: 'driver',
+    personId: '55555555-5555-4555-8555-555555555555',
+    personName: 'Lukas Pötschke',
+    starts: [{ className: 'Sonderlauf', startNumber: '500' }]
   },
   {
     key: 'regular:33333333-3333-4333-8333-333333333333',

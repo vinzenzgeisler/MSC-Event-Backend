@@ -420,6 +420,7 @@ const drawStartRows = (
   const numberWidth = mm(11);
   starts.forEach((start, index) => {
     const rowTop = top + rowHeight * index;
+    const numberText = `#${start.startNumber}`;
     doc.lineWidth(0.55).strokeColor('#D9DEE5').moveTo(left, rowTop).lineTo(left + width, rowTop).stroke();
     doc.fillColor('#475569').font(fonts.text).fontSize(labelSize).text(start.className, left, rowTop + mm(1.1), {
       width: width - numberWidth - mm(1.5),
@@ -427,9 +428,10 @@ const drawStartRows = (
       lineGap: 0,
       ellipsis: true
     });
-    doc.fillColor(accentColor).font(fonts.display).fontSize(numberSize).text(`#${start.startNumber}`, left + width - numberWidth, rowTop + mm(0.55), {
-      width: numberWidth,
-      align: 'right',
+    const fittedNumberSize = fitText(doc.font(fonts.display), numberText, numberWidth, numberSize, 7.5);
+    doc.fillColor(accentColor).font(fonts.display).fontSize(fittedNumberSize);
+    const numberX = left + width - doc.widthOfString(numberText);
+    doc.text(numberText, numberX, rowTop + mm(0.55), {
       lineBreak: false
     });
   });

@@ -41,16 +41,26 @@ assert.match(routeSource, /getPresignedDownloadUrl\(s3Key, 300, filename\)/);
 assert.match(routeSource, /for \(let row = 0; row < matrix\.size; row \+= 1\)/);
 assert.match(routeSource, /const shortYear = year\.slice\(-2\)/);
 assert.match(routeSource, /errorCorrectionLevel|buildQrCodeMatrix\(inspectionUrl\(eventId, card\.personId\), 'H'\)/);
-assert.match(routeSource, /const clearSize = mm\(8\)/);
+assert.match(routeSource, /const clearSize = scaledMm\(8\)/);
 assert.match(routeSource, /fillColor\('#FFFFFF'\)\.rect\(clearX, clearY, clearSize, clearSize\)\.fill\(\)/);
 assert.match(routeSource, /public\/stamp-cards\/msc-logo-clean-transparent\.png/);
 assert.match(routeSource, /public\/stamp-cards\/fonts\/oswald-700\.ttf/);
-assert.match(routeSource, /drawCornerLogo\(doc, cornerLogoImage, logoRight, y \+ mm\(5\)\)/);
-assert.match(routeSource, /const logoRight = x \+ CARD_WIDTH - mm\(3\.6\) - logoQuietInset/);
-assert.match(routeSource, /drawDriverBanner\(doc, visibleQrX, qrY - mm\(6\), visibleQrWidth, accentColor, fonts\)/);
-assert.match(routeSource, /const visibleQrBottom = y \+ CARD_HEIGHT - mm\(4\) \+ BOTTOM_EDGE_COMPENSATION/);
+assert.match(routeSource, /const CARD_WIDTH = mm\(86\)/);
+assert.match(routeSource, /const CARD_HEIGHT = mm\(55\)/);
+assert.match(routeSource, /const PAGE_LEFT = mm\(19\)/);
+assert.match(routeSource, /const PAGE_TOP = mm\(11\)/);
+assert.match(routeSource, /const VISIBLE_INSET = mm\(3\)/);
+assert.match(routeSource, /const CONTENT_SCALE = 1\.04/);
+assert.match(routeSource, /size: \[PAGE_WIDTH, PAGE_HEIGHT\]/);
+assert.match(routeSource, /ViewerPreferences = doc\.ref\(\{ PrintScaling: 'None' \}\)/);
+assert.match(routeSource, /drawCornerLogo\(doc, cornerLogoImage, logoRight, visualTop\)/);
+assert.match(routeSource, /const logoRight = visualRight/);
+assert.match(routeSource, /driverQrLayout\.qrY - scaledMm\(6\)/);
+assert.match(routeSource, /const visibleQrRight = x \+ CARD_WIDTH - VISIBLE_INSET/);
+assert.match(routeSource, /const visibleQrBottom = y \+ CARD_HEIGHT - VISIBLE_INSET \+ BOTTOM_EDGE_COMPENSATION/);
 assert.match(routeSource, /const BOTTOM_EDGE_COMPENSATION = STAMP_BOX_STROKE_WIDTH \/ 2/);
 assert.match(routeSource, /const qrY = visibleQrBottom - qrSize \+ quietInset/);
+assert.match(routeSource, /const qrX = visibleQrRight - qrSize \+ quietInset/);
 assert.match(routeSource, /const visibleQrWidth = matrix\.size \* module/);
 assert.doesNotMatch(routeSource, /fillColor\(accentColor\)\.rect\(x, y, size, size\)\.fill\(\)/);
 assert.match(routeSource, /\['TA', 'FB', 'FB'\]/);
@@ -62,9 +72,9 @@ assert.match(routeSource, /mergeDriverName\(codriver, standardPersonIdentity\(\{
 assert.match(routeSource, /type: 'stamp_cards_pdf'/);
 assert.match(routeSource, /exportJobPerson/);
 assert.match(routeSource, /const driverLine = `BEI /);
-assert.match(routeSource, /const nameY = y \+ mm\(4\)/);
-assert.match(routeSource, /const nameWidth = logoLeft - contentLeft - mm\(2\)/);
-assert.match(routeSource, /const fittedNumberSize = fitText\(doc\.font\(fonts\.display\), numberText, numberWidth, numberSize, 7\.5\)/);
+assert.match(routeSource, /const nameY = visualTop - scaledMm\(1\)/);
+assert.match(routeSource, /const nameWidth = logoLeft - contentLeft - scaledMm\(2\)/);
+assert.match(routeSource, /const fittedNumberSize = fitText\(doc\.font\(fonts\.display\), numberText, numberWidth, numberSize, 7\.5 \* CONTENT_SCALE\)/);
 assert.match(routeSource, /const numberX = left \+ width - doc\.widthOfString\(numberText\)/);
 assert.doesNotMatch(routeSource, /text\(`#\$\{start\.startNumber\}`[^;]+width: numberWidth/s);
 assert.doesNotMatch(routeSource, /drawCornerMarks/);
@@ -146,6 +156,10 @@ const main = async () => {
   });
   assert.equal(data.subarray(0, 4).toString('ascii'), '%PDF');
   assert.ok(data.length > 50_000);
+  const pdfSource = data.toString('latin1');
+  assert.match(pdfSource, /\/MediaBox \[0 0 595\.275591 841\.889764\]/);
+  assert.match(pdfSource, /\/ViewerPreferences \d+ 0 R/);
+  assert.match(pdfSource, /\/PrintScaling \/None/);
 
   const fallbackData = await renderStampCardPdf({
     cards: cards.slice(1),

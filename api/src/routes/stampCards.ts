@@ -42,11 +42,17 @@ export type StampCard = {
   starts: CardStart[];
 };
 
-const CARD_WIDTH = 4876 / 20;
-const CARD_HEIGHT = 3113 / 20;
-const PAGE_LEFT = 1077 / 20;
-const PAGE_TOP = 624 / 20;
 const POINTS_PER_MM = 72 / 25.4;
+const mm = (value: number) => value * POINTS_PER_MM;
+const PAGE_WIDTH = mm(210);
+const PAGE_HEIGHT = mm(297);
+const CARD_WIDTH = mm(86);
+const CARD_HEIGHT = mm(55);
+const PAGE_LEFT = mm(19);
+const PAGE_TOP = mm(11);
+const VISIBLE_INSET = mm(3);
+const CONTENT_SCALE = 1.04;
+const scaledMm = (value: number) => mm(value) * CONTENT_SCALE;
 const QR_QUIET_MODULES = 4;
 const STAMP_BOX_STROKE_WIDTH = 0.8;
 const BOTTOM_EDGE_COMPENSATION = STAMP_BOX_STROKE_WIDTH / 2;
@@ -242,8 +248,6 @@ const resolveCards = async (input: StampCardExportInput): Promise<{ cards: Stamp
 
 type StampCardFonts = { display: string; text: string; bold: string };
 
-const mm = (value: number) => value * POINTS_PER_MM;
-
 const registerStampCardFonts = (doc: any, assets: StampCardRenderAssets): StampCardFonts => {
   const fonts: StampCardFonts = { display: 'Helvetica-Bold', text: 'Helvetica', bold: 'Helvetica-Bold' };
   const register = (buffer: Buffer | null, name: string, key: keyof StampCardFonts) => {
@@ -278,7 +282,7 @@ const openCornerLogo = (doc: any, buffer: Buffer | null) => {
 
 const drawCornerLogo = (doc: any, image: any | null, right: number, top: number) => {
   if (!image) return;
-  const size = mm(11.5);
+  const size = scaledMm(11.5);
   const sourceSize = 1254;
   const visibleTop = 47;
   const visibleRight = 1127;
@@ -303,7 +307,7 @@ const drawQr = (
   const innerSize = size;
   const quiet = QR_QUIET_MODULES;
   const module = innerSize / (matrix.size + quiet * 2);
-  const clearSize = mm(8);
+  const clearSize = scaledMm(8);
   const clearX = x + (size - clearSize) / 2;
   const clearY = y + (size - clearSize) / 2;
   doc.save().fillColor('#FFFFFF').rect(innerX, innerY, innerSize, innerSize).fill();
@@ -332,13 +336,13 @@ const drawQr = (
     }
   }
   doc.fill();
-  const badge = mm(6.5);
+  const badge = scaledMm(6.5);
   const bx = x + (size - badge) / 2;
   const by = y + (size - badge) / 2;
   const shortYear = year.slice(-2);
   doc.fillColor('#FFFFFF').rect(clearX, clearY, clearSize, clearSize).fill();
   doc.fillColor(accentColor).roundedRect(bx, by, badge, badge, 2).fill();
-  doc.fillColor('#FFFFFF').font(fonts.bold).fontSize(9);
+  doc.fillColor('#FFFFFF').font(fonts.bold).fontSize(9 * CONTENT_SCALE);
   const yearHeight = doc.heightOfString(shortYear, { width: badge, lineBreak: false });
   doc.text(shortYear, bx, by + (badge - yearHeight) / 2 - 0.35, {
     width: badge,
@@ -364,14 +368,14 @@ const drawRoleMeta = (
   fonts: StampCardFonts
 ) => {
   if (card.kind === 'driver') return;
-  const yearWidth = mm(12);
-  const height = mm(5);
+  const yearWidth = scaledMm(12);
+  const height = scaledMm(5);
   const yearX = right - yearWidth;
   const role = card.kind === 'regular_codriver' ? 'BEIFAHRER' : 'CHARITY-BEIFAHRER';
-  const roleWidth = card.kind === 'regular_codriver' ? mm(24) : mm(38);
-  const roleX = yearX - mm(1) - roleWidth;
+  const roleWidth = card.kind === 'regular_codriver' ? scaledMm(24) : scaledMm(38);
+  const roleX = yearX - scaledMm(1) - roleWidth;
   doc.fillColor(accentColor).rect(roleX, y, roleWidth, height).fill();
-  doc.fillColor('#FFFFFF').font(fonts.bold).fontSize(card.kind === 'regular_codriver' ? 7.3 : 6.7);
+  doc.fillColor('#FFFFFF').font(fonts.bold).fontSize((card.kind === 'regular_codriver' ? 7.3 : 6.7) * CONTENT_SCALE);
   const roleHeight = doc.heightOfString(role, { width: roleWidth, lineBreak: false });
   doc.text(role, roleX, y + (height - roleHeight) / 2 - 0.2, {
     width: roleWidth,
@@ -380,7 +384,7 @@ const drawRoleMeta = (
     lineBreak: false
   });
   doc.lineWidth(0.85).strokeColor(accentColor).rect(yearX, y, yearWidth, height).stroke();
-  doc.fillColor(accentColor).font(fonts.display).fontSize(8.4);
+  doc.fillColor(accentColor).font(fonts.display).fontSize(8.4 * CONTENT_SCALE);
   const yearHeight = doc.heightOfString(year, { width: yearWidth, lineBreak: false });
   doc.text(year, yearX, y + (height - yearHeight) / 2 - 0.25, {
     width: yearWidth,
@@ -397,9 +401,9 @@ const drawDriverBanner = (
   accentColor: string,
   fonts: StampCardFonts
 ) => {
-  const height = mm(5);
+  const height = scaledMm(5);
   doc.fillColor(accentColor).rect(x, y, width, height).fill();
-  doc.fillColor('#FFFFFF').font(fonts.bold).fontSize(8);
+  doc.fillColor('#FFFFFF').font(fonts.bold).fontSize(8 * CONTENT_SCALE);
   const roleHeight = doc.heightOfString('FAHRER', { width, lineBreak: false });
   doc.text('FAHRER', x, y + (height - roleHeight) / 2 - 0.2, {
     width,
@@ -431,23 +435,23 @@ const drawStartRows = (
 ) => {
   if (starts.length === 0) return;
   const rowHeight = (bottom - top) / starts.length;
-  const labelSize = starts.length === 1 ? 9.5 : starts.length === 2 ? 8.7 : starts.length === 3 ? 7.8 : 7;
-  const numberSize = starts.length === 1 ? 16 : starts.length === 2 ? 14 : starts.length === 3 ? 12 : 11;
-  const numberWidth = mm(11);
+  const labelSize = (starts.length === 1 ? 9.5 : starts.length === 2 ? 8.7 : starts.length === 3 ? 7.8 : 7) * CONTENT_SCALE;
+  const numberSize = (starts.length === 1 ? 16 : starts.length === 2 ? 14 : starts.length === 3 ? 12 : 11) * CONTENT_SCALE;
+  const numberWidth = scaledMm(11);
   starts.forEach((start, index) => {
     const rowTop = top + rowHeight * index;
     const numberText = `#${start.startNumber}`;
     doc.lineWidth(0.55).strokeColor('#D9DEE5').moveTo(left, rowTop).lineTo(left + width, rowTop).stroke();
-    doc.fillColor('#475569').font(fonts.text).fontSize(labelSize).text(start.className, left, rowTop + mm(1.1), {
-      width: width - numberWidth - mm(1.5),
-      height: Math.max(mm(3.2), rowHeight - mm(1.2)),
+    doc.fillColor('#475569').font(fonts.text).fontSize(labelSize).text(start.className, left, rowTop + scaledMm(1.1), {
+      width: width - numberWidth - scaledMm(1.5),
+      height: Math.max(scaledMm(3.2), rowHeight - scaledMm(1.2)),
       lineGap: 0,
       ellipsis: true
     });
-    const fittedNumberSize = fitText(doc.font(fonts.display), numberText, numberWidth, numberSize, 7.5);
+    const fittedNumberSize = fitText(doc.font(fonts.display), numberText, numberWidth, numberSize, 7.5 * CONTENT_SCALE);
     doc.fillColor(accentColor).font(fonts.display).fontSize(fittedNumberSize);
     const numberX = left + width - doc.widthOfString(numberText);
-    doc.text(numberText, numberX, rowTop + mm(0.55), {
+    doc.text(numberText, numberX, rowTop + scaledMm(0.55), {
       lineBreak: false
     });
   });
@@ -461,15 +465,15 @@ const drawStampBoxes = (
   availableWidth: number,
   fonts: StampCardFonts
 ) => {
-  const gap = mm(2.5);
+  const gap = scaledMm(2.5);
   const boxWidth = labels.length === 3
     ? (availableWidth - gap * (labels.length - 1)) / labels.length
-    : Math.min(mm(15), (availableWidth - gap * (labels.length - 1)) / labels.length);
-  const boxHeight = mm(10.5);
+    : Math.min(scaledMm(15), (availableWidth - gap * (labels.length - 1)) / labels.length);
+  const boxHeight = scaledMm(10.5);
   labels.forEach((label, index) => {
     const boxX = left + index * (boxWidth + gap);
     doc.lineWidth(STAMP_BOX_STROKE_WIDTH).strokeColor('#9CA3AF').rect(boxX, top, boxWidth, boxHeight).stroke();
-    doc.fillColor('#475569').font(fonts.bold).fontSize(8);
+    doc.fillColor('#475569').font(fonts.bold).fontSize(8 * CONTENT_SCALE);
     const labelHeight = doc.heightOfString(label, { width: boxWidth, lineBreak: false });
     doc.text(label, boxX, top + (boxHeight - labelHeight) / 2 - 0.3, {
       width: boxWidth,
@@ -479,44 +483,55 @@ const drawStampBoxes = (
   });
 };
 
+type DriverQrLayout = {
+  matrix: QrCodeMatrix;
+  qrX: number;
+  qrY: number;
+  qrSize: number;
+  visibleX: number;
+  visibleWidth: number;
+};
+
 const drawCard = (
   doc: any,
   card: StampCard,
   x: number,
   y: number,
-  logoRight: number,
+  driverQrLayout: DriverQrLayout | null,
   year: string,
   accentColor: string,
   cornerLogoImage: any | null,
   fonts: StampCardFonts
 ) => {
-  const stripeX = x + mm(3.4);
-  const contentLeft = stripeX + mm(3.1);
-  const contentRight = x + CARD_WIDTH - mm(3.6);
-  const stampHeight = mm(10.5);
-  const stampTop = y + CARD_HEIGHT - mm(4) - stampHeight;
-  const qrSize = mm(29.5);
-  const qrX = contentRight - qrSize;
-  const logoVisibleWidth = mm(9.2);
+  const visualTop = y + VISIBLE_INSET;
+  const visualRight = x + CARD_WIDTH - VISIBLE_INSET;
+  const visualBottom = y + CARD_HEIGHT - VISIBLE_INSET;
+  const stripeX = x + VISIBLE_INSET;
+  const contentLeft = stripeX + scaledMm(3.1);
+  const contentRight = visualRight;
+  const stampHeight = scaledMm(10.5);
+  const stampTop = visualBottom - stampHeight;
+  const logoVisibleWidth = scaledMm(9.2);
+  const logoRight = visualRight;
   const logoLeft = logoRight - logoVisibleWidth;
   const isDriver = card.kind === 'driver';
-  const textRight = isDriver ? qrX - mm(3) : contentRight;
+  const textRight = isDriver && driverQrLayout ? driverQrLayout.qrX - scaledMm(3) : contentRight;
   const textWidth = textRight - contentLeft;
-  const nameWidth = logoLeft - contentLeft - mm(2);
+  const nameWidth = logoLeft - contentLeft - scaledMm(2);
   const displayName = card.personName.toLocaleUpperCase('de-DE');
 
   doc.save();
   doc.fillColor('#FFFFFF').rect(x, y, CARD_WIDTH, CARD_HEIGHT).fill();
   doc.fillColor(accentColor).rect(
     stripeX,
-    y + mm(5),
-    2.2,
-    CARD_HEIGHT - mm(9) + BOTTOM_EDGE_COMPENSATION
+    visualTop,
+    2.2 * CONTENT_SCALE,
+    visualBottom - visualTop + BOTTOM_EDGE_COMPENSATION
   ).fill();
-  drawCornerLogo(doc, cornerLogoImage, logoRight, y + mm(5));
+  drawCornerLogo(doc, cornerLogoImage, logoRight, visualTop);
 
-  const nameY = y + mm(4);
-  const nameSize = fitText(doc.font(fonts.display), displayName, nameWidth, 16.5, 9.5);
+  const nameY = visualTop - scaledMm(1);
+  const nameSize = fitText(doc.font(fonts.display), displayName, nameWidth, 16.5 * CONTENT_SCALE, 9.5 * CONTENT_SCALE);
   doc.fillColor('#0F172A').font(fonts.display).fontSize(nameSize).text(displayName, contentLeft, nameY, {
     width: nameWidth,
     lineBreak: false
@@ -525,20 +540,20 @@ const drawCard = (
   if (card.kind !== 'driver' && card.driverNames?.length) {
     const driverLine = `BEI ${card.driverNames.map((name) => name.toLocaleUpperCase('de-DE')).join(' · ')}`;
     const driverWidth = contentRight - contentLeft;
-    const driverSize = fitText(doc.font(fonts.text), driverLine, driverWidth, 8.5, 7.2);
-    doc.fillColor('#475569').font(fonts.text).fontSize(driverSize).text(driverLine, contentLeft, y + mm(14.8), {
+    const driverSize = fitText(doc.font(fonts.text), driverLine, driverWidth, 8.5 * CONTENT_SCALE, 7.2 * CONTENT_SCALE);
+    doc.fillColor('#475569').font(fonts.text).fontSize(driverSize).text(driverLine, contentLeft, visualTop + scaledMm(9.8), {
       width: driverWidth,
       lineBreak: false
     });
   }
 
-  const startsTop = card.kind === 'driver' ? y + mm(11.8) : y + mm(21.5);
-  const footerY = stampTop + (stampHeight - mm(5)) / 2;
-  const startsBottom = card.kind === 'charity_codriver' ? footerY - mm(2.2) : stampTop - mm(2.2);
+  const startsTop = visualTop + scaledMm(card.kind === 'driver' ? 6.8 : 16.5);
+  const footerY = stampTop + (stampHeight - scaledMm(5)) / 2;
+  const startsBottom = card.kind === 'charity_codriver' ? footerY - scaledMm(2.2) : stampTop - scaledMm(2.2);
   drawStartRows(doc, startsForCard(card), contentLeft, startsTop, textWidth, startsBottom, accentColor, fonts);
 
   if (card.kind === 'driver') drawStampBoxes(doc, ['TA', 'FB', 'FB'], contentLeft, stampTop, textWidth, fonts);
-  if (card.kind === 'regular_codriver') drawStampBoxes(doc, ['FB', 'FB'], contentLeft, stampTop, mm(32.5), fonts);
+  if (card.kind === 'regular_codriver') drawStampBoxes(doc, ['FB', 'FB'], contentLeft, stampTop, scaledMm(32.5), fonts);
   drawRoleMeta(doc, card, footerY, contentRight, year, accentColor, fonts);
   doc.restore();
 };
@@ -554,20 +569,25 @@ type StampCardRenderInput = {
 
 export const renderStampCardPdf = ({ cards, eventId, startSlot, year, accentColor, assets }: StampCardRenderInput) =>
   new Promise<Buffer>((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 0, autoFirstPage: true, info: { Title: `Stempelkarten ${year}` } });
+    const doc = new PDFDocument({
+      size: [PAGE_WIDTH, PAGE_HEIGHT],
+      margin: 0,
+      autoFirstPage: true,
+      info: {
+        Title: `Stempelkarten ${year}`,
+        Subject: 'Roscheba E113 · Druck bei 100 % / Tatsächliche Größe'
+      }
+    });
+    doc._root.data.ViewerPreferences = doc.ref({ PrintScaling: 'None' });
     const fonts = registerStampCardFonts(doc, assets);
     const cornerLogoImage = openCornerLogo(doc, assets.cornerLogo);
-    const qrSize = mm(29.5);
+    const qrSize = scaledMm(29.5);
     const qrMatrices = new Map<string, QrCodeMatrix>();
     cards.forEach((card) => {
       if (card.kind === 'driver' && card.personId) {
         qrMatrices.set(card.personId, buildQrCodeMatrix(inspectionUrl(eventId, card.personId), 'H'));
       }
     });
-    const alignmentMatrix = qrMatrices.values().next().value as QrCodeMatrix | undefined;
-    const logoQuietInset = alignmentMatrix
-      ? QR_QUIET_MODULES * (qrSize / (alignmentMatrix.size + QR_QUIET_MODULES * 2))
-      : mm(1.8);
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -578,19 +598,39 @@ export const renderStampCardPdf = ({ cards, eventId, startSlot, year, accentColo
       const slot = absolute % 10;
       const x = PAGE_LEFT + (slot % 2) * CARD_WIDTH;
       const y = PAGE_TOP + Math.floor(slot / 2) * CARD_HEIGHT;
-      const logoRight = x + CARD_WIDTH - mm(3.6) - logoQuietInset;
-      drawCard(doc, card, x, y, logoRight, year, accentColor, cornerLogoImage, fonts);
+      let driverQrLayout: DriverQrLayout | null = null;
       if (card.kind === 'driver' && card.personId) {
-        const qrX = x + CARD_WIDTH - mm(3.6) - qrSize;
         const matrix = qrMatrices.get(card.personId)!;
         const module = qrSize / (matrix.size + QR_QUIET_MODULES * 2);
         const quietInset = QR_QUIET_MODULES * module;
-        const visibleQrBottom = y + CARD_HEIGHT - mm(4) + BOTTOM_EDGE_COMPENSATION;
+        const visibleQrRight = x + CARD_WIDTH - VISIBLE_INSET;
+        const visibleQrBottom = y + CARD_HEIGHT - VISIBLE_INSET + BOTTOM_EDGE_COMPENSATION;
+        const qrX = visibleQrRight - qrSize + quietInset;
         const qrY = visibleQrBottom - qrSize + quietInset;
         const visibleQrX = qrX + QR_QUIET_MODULES * module;
         const visibleQrWidth = matrix.size * module;
-        drawDriverBanner(doc, visibleQrX, qrY - mm(6), visibleQrWidth, accentColor, fonts);
-        drawQr(doc, matrix, qrX, qrY, qrSize, year, accentColor, fonts);
+        driverQrLayout = { matrix, qrX, qrY, qrSize, visibleX: visibleQrX, visibleWidth: visibleQrWidth };
+      }
+      drawCard(doc, card, x, y, driverQrLayout, year, accentColor, cornerLogoImage, fonts);
+      if (driverQrLayout) {
+        drawDriverBanner(
+          doc,
+          driverQrLayout.visibleX,
+          driverQrLayout.qrY - scaledMm(6),
+          driverQrLayout.visibleWidth,
+          accentColor,
+          fonts
+        );
+        drawQr(
+          doc,
+          driverQrLayout.matrix,
+          driverQrLayout.qrX,
+          driverQrLayout.qrY,
+          driverQrLayout.qrSize,
+          year,
+          accentColor,
+          fonts
+        );
       }
     });
     doc.end();

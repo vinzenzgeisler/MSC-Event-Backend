@@ -34,6 +34,46 @@ const cards = [
     ]
   },
   {
+    key: 'driver:66666666-6666-4666-8666-666666666666',
+    kind: 'driver',
+    personId: '66666666-6666-4666-8666-666666666666',
+    personName: 'Brade Erik',
+    starts: [
+      { className: 'Sonderlauf', startNumber: '991' },
+      { className: 'Klasse 1 · Motorräder bis Baujahr 1949', startNumber: '4' }
+    ]
+  },
+  {
+    key: 'driver:77777777-7777-4777-8777-777777777777',
+    kind: 'driver',
+    personId: '77777777-7777-4777-8777-777777777777',
+    personName: 'William Klar',
+    starts: [
+      { className: 'Klasse 1 · Motorräder bis Baujahr 1949', startNumber: '71' },
+      { className: 'Klasse 4 · Rennmotorräder 250 cm³', startNumber: '51' },
+      { className: 'Klasse 7 · Seitenwagen offen', startNumber: '65' },
+      { className: 'Sonderklasse historische Fahrzeuge', startNumber: '117' }
+    ]
+  },
+  {
+    key: 'driver:88888888-8888-4888-8888-888888888888',
+    kind: 'driver',
+    personId: '88888888-8888-4888-8888-888888888888',
+    personName: 'Alexander von Beispielhausen',
+    starts: [{ className: 'Klasse 5 · Rennmotorräder 350–400 cm³', startNumber: '77' }]
+  },
+  {
+    key: 'driver:99999999-9999-4999-8999-999999999999',
+    kind: 'driver',
+    personId: '99999999-9999-4999-8999-999999999999',
+    personName: 'Felix Hauswald',
+    starts: [
+      { className: 'Sonderlauf', startNumber: '99' },
+      { className: 'Klasse 2 · Motorräder bis Baujahr 1965', startNumber: '118' },
+      { className: 'Klasse 6 · Rennmotorräder 500–1000 cm³', startNumber: '205' }
+    ]
+  },
+  {
     key: 'regular:33333333-3333-4333-8333-333333333333',
     kind: 'regular_codriver',
     personId: '33333333-3333-4333-8333-333333333333',
@@ -42,12 +82,28 @@ const cards = [
     starts: [{ className: 'Klasse 7 · Seitenwagen offen', startNumber: '65' }]
   },
   {
+    key: 'regular:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    kind: 'regular_codriver',
+    personId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    personName: 'Maximilian Mustermann-Schmidt',
+    driverNames: ['Alexander von Beispielhausen'],
+    starts: [{ className: 'Klasse 7 · Seitenwagen offen', startNumber: '77' }]
+  },
+  {
     key: 'charity:44444444-4444-4444-8444-444444444444',
     kind: 'charity_codriver',
     registrationId: '44444444-4444-4444-8444-444444444444',
     personName: 'Maria Musterfrau',
     driverNames: ['Dietmar Zimmermann'],
     starts: [{ className: 'Charity-Runde · Seitenwagen', startNumber: '65' }]
+  },
+  {
+    key: 'charity:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    kind: 'charity_codriver',
+    registrationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    personName: 'Sophie Beispiel',
+    driverNames: ['Felix Hauswald'],
+    starts: [{ className: 'Charity-Runde · Seitenwagen', startNumber: '99' }]
   }
 ];
 

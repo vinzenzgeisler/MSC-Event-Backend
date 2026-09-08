@@ -54,7 +54,19 @@ const draftSchema = z.object({
 const createSessionSchema = z.object({
   deviceSessionId: z.string().uuid(),
   workflowType: workflowTypeSchema,
-  entryIds: z.array(z.string().uuid()).min(1).max(20)
+  entryIds: z.array(z.string().uuid()).min(1).max(20),
+  operation: z.enum(['create', 'edit']).optional().default('create'),
+  participantPersonId: z.string().uuid().optional()
+}).superRefine((value, context) => {
+  if (value.operation === 'edit' && value.workflowType !== 'regular_codriver_registration') {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['operation'], message: 'Only regular co-drivers can be edited' });
+  }
+  if (value.operation === 'edit' && !value.participantPersonId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['participantPersonId'], message: 'participantPersonId is required for editing' });
+  }
+  if (value.operation === 'create' && value.participantPersonId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['participantPersonId'], message: 'participantPersonId is only allowed for editing' });
+  }
 });
 
 const approveSchema = z.object({
@@ -217,6 +229,20 @@ const loadWorkflowContext = async (entryIds: string[]) => {
   return { first, rows };
 };
 
+const assertRegularCodriverOperation = (
+  rows: Array<{ codriverPersonId: string | null }>,
+  operation: 'create' | 'edit',
+  participantPersonId?: string
+) => {
+  if (operation === 'edit') {
+    if (!participantPersonId || rows.some((row) => row.codriverPersonId !== participantPersonId)) {
+      throw new Error('CODRIVER_ASSIGNMENT_CHANGED');
+    }
+    return;
+  }
+  if (rows.some((row) => row.codriverPersonId)) throw new Error('CODRIVER_ALREADY_ASSIGNED');
+};
+
 export const createParticipantTerminalSession = async (
   input: z.infer<typeof createSessionSchema>,
   actorUserId: string | null,
@@ -229,7 +255,7 @@ export const createParticipantTerminalSession = async (
   if (input.workflowType === 'charity_codriver_registration' && input.entryIds.length !== 1) throw new Error('CHARITY_SINGLE_ENTRY_REQUIRED');
   if (context.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
   if (input.workflowType === 'regular_codriver_registration') {
-    if (context.rows.some((row) => row.codriverPersonId)) throw new Error('CODRIVER_ALREADY_ASSIGNED');
+    assertRegularCodriverOperation(context.rows, input.operation, input.participantPersonId);
   }
   const now = new Date();
   const driverIdentity = standardPersonIdentity({
@@ -249,6 +275,8 @@ export const createParticipantTerminalSession = async (
     status: 'pending',
     sessionPayload: {
       workflowType: input.workflowType,
+      operation: input.operation,
+      participantPersonId: input.participantPersonId ?? null,
       event: { id: context.first.eventId, name: context.first.eventName, startsAt: String(context.first.eventStartsAt), endsAt: String(context.first.eventEndsAt) },
       driver: {
         id: context.first.driverPersonId,
@@ -268,7 +296,7 @@ export const createParticipantTerminalSession = async (
     createdAt: now,
     updatedAt: now
   }).returning();
-  await writeAuditLog(db as never, { eventId: context.first.eventId, actorUserId, action: 'terminal_participant_session_started', entityType: 'signing_session', entityId: created.id, payload: { workflowType: input.workflowType, entryIds: input.entryIds, deviceSessionId: input.deviceSessionId } });
+  await writeAuditLog(db as never, { eventId: context.first.eventId, actorUserId, action: 'terminal_participant_session_started', entityType: 'signing_session', entityId: created.id, payload: { workflowType: input.workflowType, operation: input.operation, participantPersonId: input.participantPersonId, entryIds: input.entryIds, deviceSessionId: input.deviceSessionId } });
   return projectParticipantSessionWithLiveIdentity(db, created);
 };
 
@@ -287,13 +315,24 @@ export const submitParticipantDraft = async (sessionId: string, draft: Participa
   if (age < 6 || age > 100) throw new Error('BIRTHDATE_OUT_OF_RANGE');
   if (age < 18 && (!draft.guardianFullName || !draft.guardianEmail || !draft.guardianPhone || !draft.guardianRelationship)) throw new Error('GUARDIAN_REQUIRED');
   const [knownPerson] = await db
-    .select({ publicationName: person.publicationName })
+    .select({ id: person.id, publicationName: person.publicationName })
     .from(person)
     .where(sql`lower(${person.email}) = ${draft.email}`)
     .limit(1);
-  const storedDraft = { ...draft, publicationName: knownPerson?.publicationName ?? null };
+  if (context.operation === 'edit' && knownPerson && knownPerson.id !== context.participantPersonId) {
+    throw new Error('EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
+  }
+  const [editedPerson] = context.operation === 'edit'
+    ? await db.select({ publicationName: person.publicationName }).from(person).where(eq(person.id, context.participantPersonId)).limit(1)
+    : [null];
+  const storedDraft = { ...draft, publicationName: editedPerson?.publicationName ?? knownPerson?.publicationName ?? null };
   const [updated] = await db.update(signingSession).set({
     draftPayload: storedDraft,
+    sessionPayload: {
+      ...context,
+      isMinor: age < 18,
+      requiresMedicalCertificate: session.workflowType === 'regular_codriver_registration' && age >= 70
+    },
     workflowStage: 'awaiting_operator_approval',
     submittedAt: new Date(),
     updatedAt: new Date()
@@ -311,8 +350,8 @@ export const approveParticipantTerminalSession = async (sessionId: string, prech
   const entryIds = (context.entries as Array<{ id: string }>).map((item) => item.id);
   const liveContext = await loadWorkflowContext(entryIds);
   if (liveContext.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
-  if (session.workflowType === 'regular_codriver_registration' && liveContext.rows.some((row) => row.codriverPersonId)) {
-    throw new Error('CODRIVER_ALREADY_ASSIGNED');
+  if (session.workflowType === 'regular_codriver_registration') {
+    assertRegularCodriverOperation(liveContext.rows, context.operation ?? 'create', context.participantPersonId ?? undefined);
   }
   const age = ageAt(draft.birthdate, context.event.startsAt);
   if (session.workflowType === 'regular_codriver_registration' && age >= 70 && !prechecks.medicalCertificateCheckedAt) throw new Error('SIGNING_PRECHECK_INCOMPLETE');
@@ -354,13 +393,19 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   const entryIds = (context.entries as Array<{ id: string }>).map((item) => item.id);
   const liveContext = await loadWorkflowContext(entryIds);
   if (liveContext.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
-  if (session.workflowType === 'regular_codriver_registration' && liveContext.rows.some((row) => row.codriverPersonId)) {
-    throw new Error('CODRIVER_ALREADY_ASSIGNED');
+  if (session.workflowType === 'regular_codriver_registration') {
+    assertRegularCodriverOperation(liveContext.rows, context.operation ?? 'create', context.participantPersonId ?? undefined);
   }
   const existingPeople = await db.select().from(person).where(sql`lower(${person.email}) = ${draft.email}`).limit(1);
-  const existingPerson = existingPeople[0] ?? null;
-  if (existingPerson && (`${existingPerson.firstName} ${existingPerson.lastName}`.trim().toLowerCase() !== `${draft.firstName} ${draft.lastName}`.trim().toLowerCase())) throw new Error('EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
-  const participantId = existingPerson?.id ?? randomUUID();
+  const emailPerson = existingPeople[0] ?? null;
+  const [editedPerson] = context.operation === 'edit'
+    ? await db.select().from(person).where(eq(person.id, context.participantPersonId)).limit(1)
+    : [null];
+  if (context.operation === 'edit' && !editedPerson) throw new Error('CODRIVER_ASSIGNMENT_CHANGED');
+  if (context.operation === 'edit' && emailPerson && emailPerson.id !== editedPerson?.id) throw new Error('EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
+  const existingPerson = editedPerson ?? emailPerson;
+  if (!editedPerson && existingPerson && (`${existingPerson.firstName} ${existingPerson.lastName}`.trim().toLowerCase() !== `${draft.firstName} ${draft.lastName}`.trim().toLowerCase())) throw new Error('EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
+  const participantId = editedPerson?.id ?? emailPerson?.id ?? randomUUID();
   if (session.workflowType === 'charity_codriver_registration' && existingPerson) {
     const [activeRegistration] = await db
       .select({ id: entryCharityCodriver.id })
@@ -413,14 +458,16 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   const updatedSession = await db.transaction(async (tx) => {
     const now = new Date();
     if (existingPerson) {
-      await tx.update(person).set({ birthdate: draft.birthdate, country: draft.country, street: draft.street, zip: draft.zip, city: draft.city, phone: draft.phone, emergencyContactFirstName: draft.emergencyContactFirstName, emergencyContactLastName: draft.emergencyContactLastName, emergencyContactPhone: draft.emergencyContactPhone, motorsportHistory: draft.motorsportHistory ?? null, updatedAt: now }).where(eq(person.id, participantId));
+      await tx.update(person).set({ email: draft.email, firstName: draft.firstName, lastName: draft.lastName, birthdate: draft.birthdate, country: draft.country, street: draft.street, zip: draft.zip, city: draft.city, phone: draft.phone, emergencyContactFirstName: draft.emergencyContactFirstName, emergencyContactLastName: draft.emergencyContactLastName, emergencyContactPhone: draft.emergencyContactPhone, motorsportHistory: draft.motorsportHistory ?? null, updatedAt: now }).where(eq(person.id, participantId));
     } else {
       await tx.insert(person).values({ id: participantId, email: draft.email, firstName: draft.firstName, lastName: draft.lastName, birthdate: draft.birthdate, country: draft.country, street: draft.street, zip: draft.zip, city: draft.city, phone: draft.phone, emergencyContactFirstName: draft.emergencyContactFirstName, emergencyContactLastName: draft.emergencyContactLastName, emergencyContactPhone: draft.emergencyContactPhone, motorsportHistory: draft.motorsportHistory ?? null, createdAt: now, updatedAt: now });
     }
     if (session.workflowType === 'regular_codriver_registration') {
-      const updatedEntries = await tx.update(entry).set({ codriverPersonId: participantId, updatedAt: now })
-        .where(and(inArray(entry.id, entryIds), sql`${entry.codriverPersonId} is null`)).returning({ id: entry.id });
-      if (updatedEntries.length !== entryIds.length) throw new Error('CODRIVER_ALREADY_ASSIGNED');
+      if (context.operation !== 'edit') {
+        const updatedEntries = await tx.update(entry).set({ codriverPersonId: participantId, updatedAt: now })
+          .where(and(inArray(entry.id, entryIds), sql`${entry.codriverPersonId} is null`)).returning({ id: entry.id });
+        if (updatedEntries.length !== entryIds.length) throw new Error('CODRIVER_ALREADY_ASSIGNED');
+      }
     }
     let charityRegistrationId: string | null = null;
     if (session.workflowType === 'charity_codriver_registration') {
@@ -431,8 +478,8 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
     }
     const documents = await tx.insert(document).values(entryIds.map((entryId) => ({ eventId: session.eventId, entryId, driverPersonId: participantId, signingSessionId: sessionId, type: 'waiver_signed', templateVariant: draft.locale, templateVersion: context.contract.version, sha256: documentSha256, s3Key: documentS3Key, status: 'generated', createdBy: session.operatorUserId }))).returning();
     await tx.insert(consentEvidence).values(entryIds.map((entryId) => ({ entryId, personId: participantId, participantRole: session.workflowType === 'charity_codriver_registration' ? 'charity_codriver' : 'codriver', terminalSessionId: sessionId, consentVersion: context.contract.version, consentTextHash: context.contract.textHash, locale: draft.locale, consentSource: 'admin_ui', termsAccepted: false, privacyAccepted: true, waiverAccepted: true, mediaAccepted: false, clubInfoAccepted: false, guardianFullName: draft.guardianFullName ?? null, guardianEmail: draft.guardianEmail ?? null, guardianPhone: draft.guardianPhone ?? null, guardianRelationship: draft.guardianRelationship ?? null, guardianConsentAccepted: context.isMinor === true, capturedAt: new Date(input.signedAt), createdAt: now })));
-    const [updated] = await tx.update(signingSession).set({ status: 'completed', workflowStage: 'completed', signedAt: new Date(input.signedAt), documentId: documents[0]?.id ?? null, evidenceAuditS3Key: auditS3Key, resultPayload: { participantId, charityRegistrationId, entryIds }, draftPayload: null, updatedAt: now }).where(eq(signingSession.id, sessionId)).returning();
-    await writeAuditLog(tx as never, { eventId: session.eventId, actorUserId: session.operatorUserId, action: 'terminal_participant_session_completed', entityType: 'signing_session', entityId: sessionId, payload: { workflowType: session.workflowType, participantId, charityRegistrationId, entryIds, documentIds: documents.map((item) => item.id) } });
+    const [updated] = await tx.update(signingSession).set({ status: 'completed', workflowStage: 'completed', signedAt: new Date(input.signedAt), documentId: documents[0]?.id ?? null, evidenceAuditS3Key: auditS3Key, resultPayload: { participantId, charityRegistrationId, entryIds, operation: context.operation ?? 'create' }, draftPayload: null, updatedAt: now }).where(eq(signingSession.id, sessionId)).returning();
+    await writeAuditLog(tx as never, { eventId: session.eventId, actorUserId: session.operatorUserId, action: 'terminal_participant_session_completed', entityType: 'signing_session', entityId: sessionId, payload: { workflowType: session.workflowType, operation: context.operation ?? 'create', participantId, charityRegistrationId, entryIds, documentIds: documents.map((item) => item.id) } });
     return updated;
   });
 

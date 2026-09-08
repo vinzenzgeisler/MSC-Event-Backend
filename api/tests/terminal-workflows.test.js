@@ -4,6 +4,10 @@ const { validateCreateParticipantTerminalSession, validateParticipantDraft, vali
 const deviceSessionId = '11111111-1111-4111-8111-111111111111';
 const entryId = '22222222-2222-4222-8222-222222222222';
 assert.equal(validateCreateParticipantTerminalSession({ workflowType: 'charity_codriver_registration', deviceSessionId, entryIds: [entryId] }).workflowType, 'charity_codriver_registration');
+assert.equal(validateCreateParticipantTerminalSession({ workflowType: 'regular_codriver_registration', deviceSessionId, entryIds: [entryId] }).operation, 'create');
+assert.equal(validateCreateParticipantTerminalSession({ workflowType: 'regular_codriver_registration', operation: 'edit', participantPersonId: deviceSessionId, deviceSessionId, entryIds: [entryId] }).operation, 'edit');
+assert.throws(() => validateCreateParticipantTerminalSession({ workflowType: 'regular_codriver_registration', operation: 'edit', deviceSessionId, entryIds: [entryId] }));
+assert.throws(() => validateCreateParticipantTerminalSession({ workflowType: 'charity_codriver_registration', operation: 'edit', participantPersonId: deviceSessionId, deviceSessionId, entryIds: [entryId] }));
 
 const draft = validateParticipantDraft({
   locale: 'pl-PL', firstName: 'Anna', lastName: 'Nowak', birthdate: '1990-02-03', country: 'PL',

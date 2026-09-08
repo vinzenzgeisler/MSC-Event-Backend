@@ -17,6 +17,8 @@ const entriesSource = read('src/routes/adminEntries.ts');
 assert.match(entriesSource, /export const revokeCharityCodriver/);
 assert.match(entriesSource, /eq\(entryCharityCodriver\.status, 'active'\)/);
 assert.match(entriesSource, /action: 'charity_codriver_revoked'/);
+assert.match(entriesSource, /export const removeRegularCodriver/);
+assert.match(entriesSource, /action: 'regular_codriver_removed'/);
 assert.match(entriesSource, /waiverSigners:/);
 
 const signingSource = read('src/routes/adminSigning.ts');
@@ -37,10 +39,12 @@ assert.match(exportSource, /eq\(entryCharityCodriver\.status, 'active'\)/);
 
 const apiStack = read('../infra/lib/stacks/api-stack.ts');
 assert.match(apiStack, /path: '\/admin\/entries\/\{id\}\/charity-codrivers\/\{registrationId\}\/revoke'/);
+assert.match(apiStack, /path: '\/admin\/entries\/\{id\}\/codriver'/);
 assert.match(apiStack, /path: '\/admin\/documents\/\{id\}\/resend-waiver-mail'/);
 
 const openapi = JSON.parse(read('openapi.json'));
 assert.ok(openapi.paths['/admin/entries/{id}/charity-codrivers/{registrationId}/revoke']);
+assert.ok(openapi.paths['/admin/entries/{id}/codriver']);
 assert.ok(openapi.paths['/admin/documents/{id}/resend-waiver-mail']);
 
 console.log('participant operations tests passed');

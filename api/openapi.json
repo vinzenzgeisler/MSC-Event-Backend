@@ -285,6 +285,28 @@
         "responses": { "200": { "description": "Charity co-driver card revoked" }, "400": { "description": "A revocation reason is required" }, "404": { "description": "Active registration not found" } }
       }
     },
+    "/admin/entries/{id}/codriver": {
+      "delete": {
+        "operationId": "delete_admin_entry_codriver",
+        "tags": ["admin"],
+        "summary": "Remove the regular co-driver assignment while retaining signed evidence",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["reason"],
+                "properties": { "reason": { "type": "string", "minLength": 1, "maxLength": 500 } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Regular co-driver assignment removed" }, "400": { "description": "A removal reason is required" }, "404": { "description": "Assignment not found" } }
+      }
+    },
     "/admin/documents/{id}/resend-waiver-mail": {
       "post": {
         "operationId": "post_admin_document_resend_waiver_mail",
@@ -317,8 +339,26 @@
       "post": {
         "operationId": "post_admin_terminal_participant_session",
         "tags": ["admin"],
-        "summary": "Start a regular or charity co-driver registration on a paired terminal",
+        "summary": "Start a regular co-driver creation/edit or charity registration on a paired terminal",
         "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["workflowType", "deviceSessionId", "entryIds"],
+                "properties": {
+                  "workflowType": { "type": "string", "enum": ["regular_codriver_registration", "charity_codriver_registration"] },
+                  "deviceSessionId": { "type": "string", "format": "uuid" },
+                  "entryIds": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "type": "string", "format": "uuid" } },
+                  "operation": { "type": "string", "enum": ["create", "edit"], "default": "create" },
+                  "participantPersonId": { "type": "string", "format": "uuid", "description": "Required only when operation is edit" }
+                }
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "Terminal session created" } }
       }
     },

@@ -903,6 +903,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/entries/{id}/codriver',
+      methods: [apigwv2.HttpMethod.DELETE],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/documents/waiver',
       methods: [apigwv2.HttpMethod.POST],
       integration,

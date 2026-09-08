@@ -37,6 +37,7 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   entry_soft_deleted: ['classId', 'driverPersonId', 'registrationStatus', 'acceptanceStatus', 'startNumberNorm', 'deleteReason'],
   entry_restored: [],
   charity_codriver_revoked: ['entryId', 'personId', 'reason'],
+  regular_codriver_removed: ['entryId', 'personId', 'reason'],
   event_created: ['status'],
   event_activated: ['isCurrent'],
   event_closed: ['status'],
@@ -59,9 +60,13 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   registration_invitation_consumed: ['registrationGroupId'],
   privacy_retention_run: ['windowStart', 'windowEnd', 'dryRun', 'deletedRows', 'errors']
   ,
-  signing_session_started: ['entryIds', 'deviceSessionId'],
-  signing_session_completed: ['documentId', 'documentSha256', 'auditS3Key', 'entryIds'],
+  signing_session_started: ['entryIds', 'deviceSessionId', 'workflowType', 'operation', 'participantPersonId'],
+  signing_session_completed: ['documentId', 'documentSha256', 'auditS3Key', 'entryIds', 'workflowType', 'operation', 'participantId', 'charityRegistrationId', 'documentIds'],
   signing_session_cancelled: ['deviceSessionId'],
+  terminal_participant_session_started: ['entryIds', 'deviceSessionId', 'workflowType', 'operation', 'participantPersonId'],
+  terminal_participant_session_approved: ['workflowType'],
+  terminal_participant_session_returned: [],
+  terminal_participant_session_completed: ['entryIds', 'workflowType', 'operation', 'participantId', 'charityRegistrationId', 'documentIds'],
   waiver_signed_mail_queued: ['signingSessionId', 'outboxId', 'recipient'],
   waiver_signed_mail_resent: ['signingSessionId', 'outboxId', 'recipient']
 };

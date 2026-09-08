@@ -68,6 +68,7 @@ import {
   listCheckinEntries,
   listDeletedEntries,
   listEntries,
+  removeRegularCodriver,
   revokeCharityCodriver,
   restoreEntry,
   getEntryDetail,
@@ -91,6 +92,7 @@ import {
   validateEntryPaymentAmountsPatchInput,
   validateEntryDeleteInput,
   validateCharityCodriverRevocationInput,
+  validateRegularCodriverRemovalInput,
   validateListEntriesQuery
 } from './routes/adminEntries';
 import {
@@ -540,7 +542,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'SIGNING_DEVICE_UNAUTHORIZED') {
         return errorJson(401, 'Terminal device unauthorized', undefined, error.message);
       }
-      if (error instanceof Error && error.message.startsWith('PARTICIPANT_')) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('EMAIL_') || error.message.startsWith('BIRTHDATE_') || error.message.startsWith('GUARDIAN_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       return errorJson(500, 'Save participant data failed');
@@ -1693,6 +1695,23 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
       return errorJson(500, 'Revoke charity co-driver failed');
+    }
+  }
+
+  const adminRegularCodriverMatch = path.match(/^\/admin\/entries\/([^/]+)\/codriver$/);
+  if (method === 'DELETE' && adminRegularCodriverMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.participants.write')) return errorJson(403, 'Forbidden');
+    try {
+      const input = validateRegularCodriverRemovalInput(parseJsonBody(event));
+      const removed = await removeRegularCodriver(adminRegularCodriverMatch[1], input, auth.sub);
+      return removed
+        ? json(200, { ok: true, removed })
+        : errorJson(404, 'Regular co-driver assignment not found', undefined, 'CODRIVER_NOT_FOUND');
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      return errorJson(500, 'Remove regular co-driver failed');
     }
   }
 

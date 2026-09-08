@@ -232,6 +232,10 @@ const charityCodriverRevocationSchema = z.object({
   reason: z.string().trim().min(1).max(500)
 });
 
+const regularCodriverRemovalSchema = z.object({
+  reason: z.string().trim().min(1).max(500)
+});
+
 const loadProtectedEntryIdentities = async (db: any, entryId: string): Promise<PersonIdentitySource[]> => db
   .select({ firstName: person.firstName, lastName: person.lastName, publicationName: person.publicationName })
   .from(person)
@@ -257,6 +261,7 @@ type EntryPaymentStatusPatch = z.infer<typeof entryPaymentStatusPatchSchema>;
 type EntryPaymentAmountsPatch = z.infer<typeof entryPaymentAmountsPatchSchema>;
 type EntryDeleteInput = z.infer<typeof entryDeleteSchema>;
 type CharityCodriverRevocationInput = z.infer<typeof charityCodriverRevocationSchema>;
+type RegularCodriverRemovalInput = z.infer<typeof regularCodriverRemovalSchema>;
 
 const toVehicleLabel = (make: string | null, model: string | null, startNumberNorm: string | null): string => {
   const label = [make, model].filter((part) => !!part && part.trim().length > 0).join(' ');
@@ -2679,6 +2684,36 @@ export const revokeCharityCodriver = async (
   return replaceProtectedLegalNamesInValue(updated, await loadProtectedEntryIdentities(db, entryId)) as typeof updated;
 };
 
+export const removeRegularCodriver = async (
+  entryId: string,
+  input: RegularCodriverRemovalInput,
+  actorUserId: string | null
+) => {
+  const db = await getDb();
+  const now = new Date();
+  const [current] = await db
+    .select({ id: entry.id, eventId: entry.eventId, codriverPersonId: entry.codriverPersonId })
+    .from(entry)
+    .where(and(eq(entry.id, entryId), sql`${entry.codriverPersonId} is not null`, sql`${entry.deletedAt} is null`))
+    .limit(1);
+  if (!current?.codriverPersonId) return null;
+  const [updated] = await db
+    .update(entry)
+    .set({ codriverPersonId: null, updatedAt: now })
+    .where(and(eq(entry.id, entryId), eq(entry.codriverPersonId, current.codriverPersonId), sql`${entry.deletedAt} is null`))
+    .returning({ id: entry.id, eventId: entry.eventId });
+  if (!updated) return null;
+  await writeAuditLog(db as never, {
+    eventId: updated.eventId,
+    actorUserId,
+    action: 'regular_codriver_removed',
+    entityType: 'entry',
+    entityId: updated.id,
+    payload: { entryId, personId: current.codriverPersonId, reason: input.reason }
+  });
+  return { entryId: updated.id, personId: current.codriverPersonId, removedAt: now, reason: input.reason };
+};
+
 export const restoreEntry = async (entryId: string, actorUserId: string | null) => {
   const db = await getDb();
   const rows = await db
@@ -2800,3 +2835,4 @@ export const validateEntryPaymentStatusPatchInput = (payload: unknown) => entryP
 export const validateEntryPaymentAmountsPatchInput = (payload: unknown) => entryPaymentAmountsPatchSchema.parse(payload);
 export const validateEntryDeleteInput = (payload: unknown) => entryDeleteSchema.parse(payload);
 export const validateCharityCodriverRevocationInput = (payload: unknown) => charityCodriverRevocationSchema.parse(payload);
+export const validateRegularCodriverRemovalInput = (payload: unknown) => regularCodriverRemovalSchema.parse(payload);

@@ -36,6 +36,7 @@ type CandidateRow = {
   person_email: string | null;
   first_name: string;
   last_name: string;
+  publication_name: string | null;
   birthdate: string;
   registration_status: string;
   acceptance_status: string;
@@ -337,6 +338,7 @@ const candidateRowsSql = `
     p.email as person_email,
     p.first_name,
     p.last_name,
+    p.publication_name,
     p.birthdate::text,
     e.registration_status,
     e.acceptance_status,
@@ -508,7 +510,7 @@ const notify = async (client: Client, options: CliOptions) => {
           template.version,
           JSON.stringify({
             eventName: manifest.eventName,
-            driverName: `${canonical.first_name} ${canonical.last_name}`.trim(),
+            driverName: canonical.publication_name?.trim() || `${canonical.first_name} ${canonical.last_name}`.trim(),
             locale: 'de',
             preheader: 'Information zur Zusammenführung deiner Nennungen',
             headerTitle: 'Nennungen werden zusammengeführt',

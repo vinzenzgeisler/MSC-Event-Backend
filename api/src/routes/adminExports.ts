@@ -5,8 +5,9 @@ import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { entry, entryCharityCodriver, event as eventTable, eventClass, exportJob, invoice, person, vehicle } from '../db/schema';
-import { getPresignedDownloadUrl, uploadFile } from '../docs/storage';
+import { entry, entryCharityCodriver, event as eventTable, eventClass, exportJob, exportJobPerson, invoice, person, vehicle } from '../db/schema';
+import { deleteDocumentObject, getPresignedDownloadUrl, uploadFile } from '../docs/storage';
+import { standardPersonIdentity } from '../domain/personIdentity';
 import {
   getClassHeaders,
   getClassRowValues,
@@ -28,6 +29,37 @@ const createExportSchema = z.object({
 });
 
 type CreateExportInput = z.infer<typeof createExportSchema>;
+type ExportPersonRef = { personId: string; publicationNameVersion: number };
+
+const registerExportPeople = async (db: any, jobId: string, people: ExportPersonRef[]) => {
+  const unique = Array.from(new Map(people.map((item) => [item.personId, item])).values());
+  if (unique.length > 0) {
+    await db.insert(exportJobPerson).values(unique.map((item) => ({
+      exportJobId: jobId,
+      personId: item.personId,
+      publicationNameVersion: item.publicationNameVersion
+    }))).onConflictDoNothing();
+  }
+};
+
+const finalizeExport = async (db: any, jobId: string, key: string) => db.transaction(async (tx: any) => {
+  const snapshots = await tx
+    .select({ expected: exportJobPerson.publicationNameVersion, current: person.publicationNameVersion })
+    .from(exportJobPerson)
+    .innerJoin(person, eq(exportJobPerson.personId, person.id))
+    .where(eq(exportJobPerson.exportJobId, jobId))
+    .for('update');
+  if (snapshots.some((item: { expected: number; current: number }) => item.expected !== item.current)) {
+    await tx.update(exportJob).set({ status: 'invalidated', errorLast: 'PUBLICATION_NAME_CHANGED', completedAt: new Date() }).where(eq(exportJob.id, jobId));
+    return null;
+  }
+  const [updated] = await tx
+    .update(exportJob)
+    .set({ status: 'succeeded', s3Key: key, completedAt: new Date() })
+    .where(and(eq(exportJob.id, jobId), eq(exportJob.status, 'processing')))
+    .returning();
+  return updated ?? null;
+});
 
 const escapeCsv = (value: unknown): string => {
   const raw = value === null || value === undefined ? '' : String(value);
@@ -103,12 +135,16 @@ export const createEntriesExport = async (
         startNumberNorm: entry.startNumberNorm,
         driverFirstName: person.firstName,
         driverLastName: person.lastName,
+        driverPublicationName: person.publicationName,
+        driverPublicationNameVersion: person.publicationNameVersion,
         driverEmail: person.email,
         driverPersonId: person.id,
         driverBirthdate: person.birthdate,
         codriverPersonId: entry.codriverPersonId,
         codriverFirstName: codriverPerson.firstName,
         codriverLastName: codriverPerson.lastName,
+        codriverPublicationName: codriverPerson.publicationName,
+        codriverPublicationNameVersion: codriverPerson.publicationNameVersion,
         codriverEmail: codriverPerson.email,
         codriverBirthdate: codriverPerson.birthdate,
         codriverProcessingRestricted: codriverPerson.processingRestricted,
@@ -124,7 +160,14 @@ export const createEntriesExport = async (
       .where(and(...conditions))
       .orderBy(asc(eventClass.name), asc(entry.createdAt));
 
-    const mappedRowsBase = rows.map((row) => ({
+    await registerExportPeople(db, job.id, rows.flatMap((row) => [
+      { personId: row.driverPersonId, publicationNameVersion: row.driverPublicationNameVersion },
+      ...(row.codriverPersonId ? [{ personId: row.codriverPersonId, publicationNameVersion: row.codriverPublicationNameVersion ?? 0 }] : [])
+    ]));
+
+    const mappedRowsBase = rows.map((row) => {
+      const identity = standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName });
+      return ({
       entryId: row.entryId,
       className: row.className,
       registrationStatus: row.registrationStatus,
@@ -133,34 +176,41 @@ export const createEntriesExport = async (
       checkinIdVerified: row.checkinIdVerified ? 'true' : 'false',
       techStatus: row.techStatus,
       startNumber: row.startNumberNorm ?? '',
-      driverName: redactSensitiveFields ? '' : `${row.driverFirstName} ${row.driverLastName}`,
-      driverEmail: redactSensitiveFields ? '' : (row.driverEmail ?? '')
-    }));
+      driverName: redactSensitiveFields ? '' : identity.displayName,
+      driverEmail: redactSensitiveFields || identity.identityProtected ? '' : (row.driverEmail ?? '')
+    });
+    });
 
     let typedRows: Array<Record<string, unknown>>;
     if (input.type === 'participants_csv') {
       const regularParticipantRows = rows.flatMap((row) => {
+        const driverIdentity = standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName });
         const driverRow = {
           entryId: row.entryId,
           className: row.className,
           startNumber: row.startNumberNorm ?? '',
           participantRole: 'driver',
           personId: row.driverPersonId,
-          firstName: redactSensitiveFields ? '' : row.driverFirstName,
-          lastName: redactSensitiveFields ? '' : row.driverLastName,
-          email: redactSensitiveFields ? '' : (row.driverEmail ?? ''),
-          birthdate: redactSensitiveFields ? '' : (row.driverBirthdate ?? ''),
+          displayName: redactSensitiveFields ? '' : driverIdentity.displayName,
+          identityProtected: driverIdentity.identityProtected ? 'true' : 'false',
+          firstName: redactSensitiveFields || driverIdentity.identityProtected ? '' : row.driverFirstName,
+          lastName: redactSensitiveFields || driverIdentity.identityProtected ? '' : row.driverLastName,
+          email: redactSensitiveFields || driverIdentity.identityProtected ? '' : (row.driverEmail ?? ''),
+          birthdate: redactSensitiveFields || driverIdentity.identityProtected ? '' : (row.driverBirthdate ?? ''),
           waiverSigned: row.driverWaiverSigned ? 'true' : 'false',
           registeredAt: ''
         };
         if (!row.codriverPersonId) return [driverRow];
-        const codriverRestricted = redactSensitiveFields || row.codriverProcessingRestricted || row.codriverObjectionFlag;
+        const codriverIdentity = standardPersonIdentity({ firstName: row.codriverFirstName, lastName: row.codriverLastName, publicationName: row.codriverPublicationName });
+        const codriverRestricted = redactSensitiveFields || row.codriverProcessingRestricted || row.codriverObjectionFlag || codriverIdentity.identityProtected;
         return [driverRow, {
           entryId: row.entryId,
           className: row.className,
           startNumber: row.startNumberNorm ?? '',
           participantRole: 'codriver',
           personId: row.codriverPersonId,
+          displayName: redactSensitiveFields ? '' : codriverIdentity.displayName,
+          identityProtected: codriverIdentity.identityProtected ? 'true' : 'false',
           firstName: codriverRestricted ? '' : (row.codriverFirstName ?? ''),
           lastName: codriverRestricted ? '' : (row.codriverLastName ?? ''),
           email: codriverRestricted ? '' : (row.codriverEmail ?? ''),
@@ -181,6 +231,8 @@ export const createEntriesExport = async (
               personId: entryCharityCodriver.personId,
               firstName: charityPerson.firstName,
               lastName: charityPerson.lastName,
+              publicationName: charityPerson.publicationName,
+              publicationNameVersion: charityPerson.publicationNameVersion,
               email: charityPerson.email,
               birthdate: charityPerson.birthdate,
               processingRestricted: charityPerson.processingRestricted,
@@ -194,14 +246,18 @@ export const createEntriesExport = async (
             .innerJoin(charityPerson, eq(entryCharityCodriver.personId, charityPerson.id))
             .where(and(eq(entryCharityCodriver.status, 'active'), inArray(entryCharityCodriver.entryId, exportedEntryIds)))
             .orderBy(asc(eventClass.name), asc(entry.startNumberNorm), asc(entryCharityCodriver.createdAt));
+      await registerExportPeople(db, job.id, charityRows.map((row) => ({ personId: row.personId, publicationNameVersion: row.publicationNameVersion })));
       typedRows = [...regularParticipantRows, ...charityRows.map((row) => {
-        const restricted = redactSensitiveFields || row.processingRestricted || row.objectionFlag;
+        const identity = standardPersonIdentity(row);
+        const restricted = redactSensitiveFields || row.processingRestricted || row.objectionFlag || identity.identityProtected;
         return {
           entryId: row.entryId,
           className: row.className,
           startNumber: row.startNumber ?? '',
           participantRole: 'charity_codriver',
           personId: row.personId,
+          displayName: redactSensitiveFields ? '' : identity.displayName,
+          identityProtected: identity.identityProtected ? 'true' : 'false',
           firstName: restricted ? '' : row.firstName,
           lastName: restricted ? '' : row.lastName,
           email: restricted ? '' : (row.email ?? ''),
@@ -244,15 +300,11 @@ export const createEntriesExport = async (
     const key = `exports/${input.eventId}/${input.type}/${randomUUID()}.csv`;
     await uploadFile(key, Buffer.from(csv, 'utf8'), 'text/csv; charset=utf-8');
 
-    const [updated] = await db
-      .update(exportJob)
-      .set({
-        status: 'succeeded',
-        s3Key: key,
-        completedAt: new Date()
-      })
-      .where(eq(exportJob.id, job.id))
-      .returning();
+    const updated = await finalizeExport(db, job.id, key);
+    if (!updated) {
+      await deleteDocumentObject(key);
+      throw new Error('EXPORT_INVALIDATED');
+    }
 
     await writeAuditLog(db as never, {
       eventId: input.eventId,
@@ -277,7 +329,7 @@ export const createEntriesExport = async (
         errorLast: message,
         completedAt: new Date()
       })
-      .where(eq(exportJob.id, job.id));
+      .where(and(eq(exportJob.id, job.id), eq(exportJob.status, 'processing')));
     throw error;
   }
 };
@@ -322,6 +374,16 @@ export const getExportDownload = async (id: string, actorUserId: string | null) 
   if (!job.s3Key || job.status !== 'succeeded') {
     throw new Error('EXPORT_NOT_READY');
   }
+  const mismatches = await db
+    .select({ expected: exportJobPerson.publicationNameVersion, current: person.publicationNameVersion })
+    .from(exportJobPerson)
+    .innerJoin(person, eq(exportJobPerson.personId, person.id))
+    .where(eq(exportJobPerson.exportJobId, id));
+  if (mismatches.some((item) => item.expected !== item.current)) {
+    await db.update(exportJob).set({ status: 'invalidated', errorLast: 'PUBLICATION_NAME_CHANGED', completedAt: new Date() }).where(eq(exportJob.id, id));
+    await deleteDocumentObject(job.s3Key);
+    throw new Error('EXPORT_INVALIDATED');
+  }
   const url = await getPresignedDownloadUrl(job.s3Key, 300);
 
   await writeAuditLog(db as never, {
@@ -358,8 +420,8 @@ const buildClassSheet = (
   const withCodriver = isClassSeven(className);
   const cols = getClassHeaders(className);
   const colWidths = withCodriver
-    ? [10, 14, 16, 14, 16, 10, 22, 16, 18, 10, 10, 8]
-    : [10, 14, 16, 10, 22, 16, 18, 10, 10, 8];
+    ? [10, 24, 24, 10, 22, 16, 18, 10, 10, 8]
+    : [10, 24, 10, 22, 16, 18, 10, 10, 8];
   const n = cols.length;
 
   // Row 1: Event title
@@ -401,7 +463,7 @@ const buildClassSheet = (
         dataRow.getCell(i + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ZEBRA_BG } };
       }
     });
-    dataRow.getCell(withCodriver ? 6 : 4).numFmt = '@';
+    dataRow.getCell(withCodriver ? 4 : 3).numFmt = '@';
   });
 
   // Footer: starter count
@@ -452,13 +514,19 @@ export const createProgrammheftExport = async (
       .select({
         startNumber: entry.startNumberNorm,
         className: eventClass.name,
+        driverPersonId: driverPerson.id,
         driverFirstName: driverPerson.firstName,
         driverLastName: driverPerson.lastName,
+        driverPublicationName: driverPerson.publicationName,
+        driverPublicationNameVersion: driverPerson.publicationNameVersion,
         driverZip: driverPerson.zip,
         driverCity: driverPerson.city,
         driverCountry: driverPerson.country,
+        codriverPersonId: codriverPerson.id,
         codriverFirstName: codriverPerson.firstName,
         codriverLastName: codriverPerson.lastName,
+        codriverPublicationName: codriverPerson.publicationName,
+        codriverPublicationNameVersion: codriverPerson.publicationNameVersion,
         vehicleMake: vehicle.make,
         vehicleModel: vehicle.model,
         vehicleYear: vehicle.year,
@@ -483,9 +551,24 @@ export const createProgrammheftExport = async (
         sql`CASE WHEN ${entry.startNumberNorm} ~ '^[0-9]+$' THEN ${entry.startNumberNorm}::integer ELSE 999999 END`
       );
 
+    await registerExportPeople(db, job.id, rows.flatMap((row) => [
+      { personId: row.driverPersonId, publicationNameVersion: row.driverPublicationNameVersion },
+      ...(row.codriverPersonId ? [{ personId: row.codriverPersonId, publicationNameVersion: row.codriverPublicationNameVersion ?? 0 }] : [])
+    ]));
+    const publicationRows: ProgrammheftRow[] = rows.map((row) => ({
+      ...row,
+      driverDisplayName: standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName }).displayName,
+      driverZip: row.driverPublicationName ? null : row.driverZip,
+      driverCity: row.driverPublicationName ? null : row.driverCity,
+      driverCountry: row.driverPublicationName ? null : row.driverCountry,
+      codriverDisplayName: row.codriverPersonId
+        ? standardPersonIdentity({ firstName: row.codriverFirstName, lastName: row.codriverLastName, publicationName: row.codriverPublicationName }).displayName
+        : null
+    }));
+
     // Group by class
-    const byClass = new Map<string, { rows: typeof rows }>();
-    for (const row of rows) {
+    const byClass = new Map<string, { rows: ProgrammheftRow[] }>();
+    for (const row of publicationRows) {
       if (!byClass.has(row.className)) {
         byClass.set(row.className, { rows: [] });
       }
@@ -520,7 +603,7 @@ export const createProgrammheftExport = async (
         c.border = { bottom: { style: 'thin' } };
       });
 
-      rows.forEach((r, idx) => {
+      publicationRows.forEach((r, idx) => {
         const dr = gesamtWs.getRow(3 + idx);
         const vals = getOverallRowValues(r);
         vals.forEach((v, i) => {
@@ -532,7 +615,7 @@ export const createProgrammheftExport = async (
         dr.getCell(4).numFmt = '@';
       });
 
-      [12, 14, 16, 12, 22, 16, 18, 10, 10, 18, 40].forEach((w, i) => { gesamtWs.getColumn(i + 1).width = w; });
+      [12, 26, 12, 22, 16, 18, 10, 10, 18, 40].forEach((w, i) => { gesamtWs.getColumn(i + 1).width = w; });
     }
 
     // Per-class sheets
@@ -552,11 +635,11 @@ export const createProgrammheftExport = async (
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     );
 
-    const [updated] = await db
-      .update(exportJob)
-      .set({ status: 'succeeded', s3Key: key, completedAt: new Date() })
-      .where(eq(exportJob.id, job.id))
-      .returning();
+    const updated = await finalizeExport(db, job.id, key);
+    if (!updated) {
+      await deleteDocumentObject(key);
+      throw new Error('EXPORT_INVALIDATED');
+    }
 
     await writeAuditLog(db as never, {
       eventId: input.eventId,
@@ -573,7 +656,7 @@ export const createProgrammheftExport = async (
     await db
       .update(exportJob)
       .set({ status: 'failed', errorLast: message, completedAt: new Date() })
-      .where(eq(exportJob.id, job.id));
+      .where(and(eq(exportJob.id, job.id), eq(exportJob.status, 'processing')));
     throw error;
   }
 };

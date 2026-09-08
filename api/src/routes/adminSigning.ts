@@ -3,6 +3,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
+import { standardPersonIdentity } from '../domain/personIdentity';
 import {
   consentEvidence,
   document,
@@ -129,6 +130,7 @@ type SigningPersonSnapshot = {
   email: string | null;
   phone: string | null;
   country: string | null;
+  publicationName?: string | null;
 };
 
 type SigningCasePayload = {
@@ -348,6 +350,7 @@ const buildSigningCasePayload = async (sourceEntryId: string, signerPersonId?: s
       eventEndsAt: event.endsAt,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      driverPublicationName: person.publicationName,
       driverBirthdate: person.birthdate,
       driverEmail: person.email,
       driverPhone: person.phone,
@@ -395,7 +398,8 @@ const buildSigningCasePayload = async (sourceEntryId: string, signerPersonId?: s
           birthdate: person.birthdate,
           email: person.email,
           phone: person.phone,
-          country: person.country
+          country: person.country,
+          publicationName: person.publicationName
         })
         .from(person)
         .where(inArray(person.id, codriverIds))
@@ -426,7 +430,8 @@ const buildSigningCasePayload = async (sourceEntryId: string, signerPersonId?: s
     birthdate: source.driverBirthdate?.toString() ?? null,
     email: source.driverEmail,
     phone: source.driverPhone,
-    country: source.driverCountry
+    country: source.driverCountry,
+    publicationName: source.driverPublicationName
   };
   const requestedSignerId = signerPersonId ?? source.driverPersonId;
   const codriverSnapshot = codriverById.get(requestedSignerId);
@@ -442,6 +447,7 @@ const buildSigningCasePayload = async (sourceEntryId: string, signerPersonId?: s
             email: codriverSnapshot.email,
             phone: codriverSnapshot.phone,
             country: codriverSnapshot.country,
+            publicationName: codriverSnapshot.publicationName,
             role: 'codriver' as const,
             label: 'Beifahrer'
           }
@@ -536,13 +542,148 @@ const buildSigningCasePayload = async (sourceEntryId: string, signerPersonId?: s
               birthdate: codriver.birthdate?.toString() ?? null,
               email: codriver.email,
               phone: codriver.phone,
-              country: codriver.country
+              country: codriver.country,
+              publicationName: codriver.publicationName
             }
           : null,
         vehicles
       };
     })
   };
+};
+
+type LivePublicationIdentity = {
+  id: string;
+  email: string | null;
+  firstName: string;
+  lastName: string;
+  publicationName: string | null;
+};
+
+const projectSigningPerson = (
+  source: any,
+  identityById = new Map<string, LivePublicationIdentity>(),
+  identityByEmail = new Map<string, LivePublicationIdentity>()
+) => {
+  if (!source) return source;
+  const liveIdentity = (typeof source.id === 'string' ? identityById.get(source.id) : undefined)
+    ?? (typeof source.email === 'string' ? identityByEmail.get(source.email.trim().toLowerCase()) : undefined);
+  const identity = standardPersonIdentity({
+    firstName: source.firstName ?? liveIdentity?.firstName ?? null,
+    lastName: source.lastName ?? liveIdentity?.lastName ?? null,
+    publicationName: liveIdentity ? liveIdentity.publicationName : source.publicationName ?? null
+  });
+  return {
+    ...source,
+    displayName: identity.displayName,
+    identityProtected: identity.identityProtected,
+    firstName: identity.firstName,
+    lastName: identity.lastName,
+    birthdate: identity.identityProtected ? null : source.birthdate,
+    email: identity.identityProtected ? null : source.email,
+    phone: identity.identityProtected ? null : source.phone,
+    country: identity.identityProtected ? null : source.country,
+    publicationName: undefined
+  };
+};
+
+const projectSigningCasePayload = (
+  payload: any,
+  identityById = new Map<string, LivePublicationIdentity>(),
+  identityByEmail = new Map<string, LivePublicationIdentity>()
+) => {
+  if (!payload || typeof payload !== 'object') return payload;
+  const driver = projectSigningPerson(payload.driver, identityById, identityByEmail);
+  return {
+    ...payload,
+    driver,
+    signer: projectSigningPerson(payload.signer, identityById, identityByEmail),
+    participant: projectSigningPerson(payload.participant, identityById, identityByEmail),
+    entries: Array.isArray(payload.entries) ? payload.entries.map((item: any) => ({
+      ...item,
+      codriver: projectSigningPerson(item.codriver, identityById, identityByEmail),
+      vehicles: Array.isArray(item.vehicles) ? item.vehicles.map((vehicleItem: any) => ({
+        ...vehicleItem,
+        ownerName: driver?.identityProtected ? null : vehicleItem.ownerName
+      })) : []
+    })) : []
+  };
+};
+
+const projectSigningSession = (
+  session: any,
+  identityById = new Map<string, LivePublicationIdentity>(),
+  identityByEmail = new Map<string, LivePublicationIdentity>()
+) => session
+  ? {
+      ...session,
+      sessionPayload: projectSigningCasePayload(session.sessionPayload, identityById, identityByEmail),
+      draftPayload: session.draftPayload
+        ? (() => {
+            const projected = projectSigningPerson(session.draftPayload, identityById, identityByEmail);
+            return projected.identityProtected
+              ? {
+                  displayName: projected.displayName,
+                  identityProtected: true,
+                  firstName: null,
+                  lastName: null,
+                  birthdate: null,
+                  country: null,
+                  street: null,
+                  zip: null,
+                  city: null,
+                  email: null,
+                  phone: null,
+                  emergencyContactFirstName: null,
+                  emergencyContactLastName: null,
+                  emergencyContactPhone: null,
+                  motorsportHistory: null,
+                  guardianFullName: null,
+                  guardianEmail: null,
+                  guardianPhone: null,
+                  guardianRelationship: null
+                }
+              : session.draftPayload;
+          })()
+        : session.draftPayload
+    }
+  : session;
+
+const projectSigningSessionWithLiveIdentity = async (db: any, session: any) => {
+  if (!session) return session;
+  const payload = session.sessionPayload as any;
+  const personIds = Array.from(new Set<string>([
+    session.driverPersonId,
+    payload?.driver?.id,
+    payload?.signer?.id,
+    payload?.participant?.id,
+    ...(Array.isArray(payload?.entries) ? payload.entries.map((item: any) => item?.codriver?.id) : [])
+  ].filter((id): id is string => typeof id === 'string' && id.length > 0)));
+  const liveRows: LivePublicationIdentity[] = personIds.length > 0
+    ? await db.select({
+        id: person.id,
+        email: person.email,
+        firstName: person.firstName,
+        lastName: person.lastName,
+        publicationName: person.publicationName
+      }).from(person).where(inArray(person.id, personIds))
+    : [];
+  const draftEmail = typeof session.draftPayload?.email === 'string'
+    ? session.draftPayload.email.trim().toLowerCase()
+    : null;
+  if (draftEmail && !liveRows.some((item) => item.email?.trim().toLowerCase() === draftEmail)) {
+    const [draftPerson] = await db.select({
+      id: person.id,
+      email: person.email,
+      firstName: person.firstName,
+      lastName: person.lastName,
+      publicationName: person.publicationName
+    }).from(person).where(sql`lower(${person.email}) = ${draftEmail}`).limit(1);
+    if (draftPerson) liveRows.push(draftPerson);
+  }
+  const identityById = new Map(liveRows.map((item) => [item.id, item]));
+  const identityByEmail = new Map(liveRows.flatMap((item) => item.email ? [[item.email.trim().toLowerCase(), item] as const] : []));
+  return projectSigningSession(session, identityById, identityByEmail);
 };
 
 export const createSigningPairingCode = async (actorUserId: string | null) => {
@@ -660,7 +801,7 @@ export const getSigningRequirements = async (entryId: string) => {
   return {
     entryId,
     caseId: payload.id,
-    driverName: `${payload.driver.firstName} ${payload.driver.lastName}`.trim(),
+    driverName: standardPersonIdentity(payload.driver).displayName,
     isMinor: payload.isMinor,
     requiresMedicalCertificate: payload.requiresMedicalCertificate,
     signerType: payload.isMinor ? 'guardian' : 'driver',
@@ -678,7 +819,7 @@ export const getSigningRequirements = async (entryId: string) => {
         personId: item.id,
         role: item.role,
         label: item.label,
-        name: `${item.firstName} ${item.lastName}`.trim(),
+        name: standardPersonIdentity(item).displayName,
         isMinor: signerAge !== null && signerAge < 18,
         requiresMedicalCertificate: signerAge !== null && signerAge >= 70,
         signed: Boolean(signed),
@@ -686,7 +827,7 @@ export const getSigningRequirements = async (entryId: string) => {
         documentId: signed?.documentId ?? null
       };
     }),
-    entries: payload.entries
+    entries: projectSigningCasePayload(payload).entries
   };
 };
 
@@ -784,14 +925,14 @@ export const createSigningSession = async (input: CreateSigningSessionInput, act
     }
   });
 
-  return { session: created, signingCase: payload };
+  return { session: projectSigningSession(created), signingCase: projectSigningCasePayload(payload) };
 };
 
 export const getSigningSession = async (sessionId: string) => {
   const db = await getDb();
   await expireOpenSigningSessions(db);
   const rows = await db.select().from(signingSession).where(eq(signingSession.id, sessionId)).limit(1);
-  return rows[0] ?? null;
+  return projectSigningSessionWithLiveIdentity(db, rows[0] ?? null);
 };
 
 export const cancelSigningSession = async (sessionId: string, actorUserId: string | null) => {
@@ -814,7 +955,7 @@ export const cancelSigningSession = async (sessionId: string, actorUserId: strin
       deviceSessionId: updated.deviceSessionId
     }
   });
-  return updated;
+  return projectSigningSessionWithLiveIdentity(db, updated);
 };
 
 export const getCurrentDeviceSigningSession = async (deviceToken: string) => {
@@ -837,9 +978,9 @@ export const getCurrentDeviceSigningSession = async (deviceToken: string) => {
       .update(signingSession)
       .set({ status: 'displayed', displayedAt: now, updatedAt: now })
       .where(eq(signingSession.id, current.id));
-    return { ...current, status: 'displayed' };
+    return projectSigningSessionWithLiveIdentity(db, { ...current, status: 'displayed' });
   }
-  return current;
+  return projectSigningSessionWithLiveIdentity(db, current);
 };
 
 export const completeDeviceSigningSession = async (sessionId: string, input: CompleteSigningSessionInput, deviceToken: string) => {
@@ -860,7 +1001,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     return null;
   }
   if (current.status === 'completed') {
-    return current;
+    return projectSigningSessionWithLiveIdentity(db, current);
   }
   if (current.status !== 'pending' && current.status !== 'displayed') {
     throw new Error('SIGNING_SESSION_NOT_ACTIVE');
@@ -1019,13 +1160,13 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     const recipientEmail = payload.signer.email?.trim();
     const signerName = signer.type === 'guardian' && signer.guardianName?.trim()
       ? signer.guardianName.trim()
-      : `${payload.signer.firstName ?? payload.driver.firstName ?? ''} ${payload.signer.lastName ?? payload.driver.lastName ?? ''}`.trim();
+      : standardPersonIdentity(payload.signer).displayName;
     if (!recipientEmail) {
       throw new Error('WAIVER_MAIL_RECIPIENT_MISSING');
     }
     await queueWaiverSignedMail(db, {
       toEmail: recipientEmail,
-      driverName: `${payload.driver.firstName ?? ''} ${payload.driver.lastName ?? ''}`.trim(),
+      driverName: standardPersonIdentity(payload.driver).displayName,
       signerName,
       signerRole: signer.type === 'guardian' ? 'Erziehungsberechtigte Person' : payload.signer.label,
       eventId: payload.event.id,
@@ -1039,7 +1180,8 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
       signingSessionId: current.id,
       queueAudit: {
         actorUserId: current.operatorUserId,
-        entityId: current.id
+        entityId: current.id,
+        redactRecipient: standardPersonIdentity(payload.signer).identityProtected
       }
     });
   } catch (error) {
@@ -1053,7 +1195,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
       .where(eq(signingSession.id, current.id));
   }
 
-  return updated;
+  return projectSigningSessionWithLiveIdentity(db, updated);
 };
 
 export const queueWaiverSignedMail = async (
@@ -1076,6 +1218,7 @@ export const queueWaiverSignedMail = async (
     queueAudit?: {
       actorUserId: string | null;
       entityId: string;
+      redactRecipient?: boolean;
     };
   }
 ): Promise<{ outboxId: string }> => {
@@ -1168,7 +1311,7 @@ export const queueWaiverSignedMail = async (
         payload: {
           signingSessionId: input.signingSessionId ?? input.sessionId,
           outboxId: resolvedOutboxId,
-          recipient: toEmail
+          recipient: input.queueAudit.redactRecipient ? 'geschützt' : toEmail
         }
       });
     }
@@ -1218,9 +1361,22 @@ export const resendSignedWaiverMail = async (documentId: string, actorUserId: st
   if (!recipientEmail) {
     throw new Error('WAIVER_MAIL_RECIPIENT_MISSING');
   }
+  const identityIds = Array.from(new Set([payload.driver?.id, recipient.id].filter((id): id is string => Boolean(id))));
+  const livePeople = identityIds.length > 0
+    ? await db.select({
+        id: person.id,
+        email: person.email,
+        firstName: person.firstName,
+        lastName: person.lastName,
+        publicationName: person.publicationName
+      }).from(person).where(inArray(person.id, identityIds))
+    : [];
+  const liveById = new Map(livePeople.map((item) => [item.id, item]));
+  const recipientIdentity = standardPersonIdentity(liveById.get(recipient.id) ?? recipient);
+  const driverIdentity = standardPersonIdentity(liveById.get(payload.driver?.id) ?? payload.driver);
   const signerName = signerInput.type === 'guardian' && signerInput.guardianName?.trim()
     ? signerInput.guardianName.trim()
-    : `${recipient.firstName ?? ''} ${recipient.lastName ?? ''}`.trim();
+    : recipientIdentity.displayName;
   const signerRole = signerInput.type === 'guardian'
     ? 'Erziehungsberechtigte Person'
     : row.workflowType === 'charity_codriver_registration'
@@ -1230,7 +1386,7 @@ export const resendSignedWaiverMail = async (documentId: string, actorUserId: st
         : payload.signer?.label ?? 'Fahrer';
   const queued = await queueWaiverSignedMail(db, {
     toEmail: recipientEmail,
-    driverName: `${payload.driver?.firstName ?? ''} ${payload.driver?.lastName ?? ''}`.trim(),
+    driverName: driverIdentity.displayName,
     signerName,
     signerRole,
     eventId: row.eventId,
@@ -1256,9 +1412,13 @@ export const resendSignedWaiverMail = async (documentId: string, actorUserId: st
     action: 'waiver_signed_mail_resent',
     entityType: 'document',
     entityId: row.documentId,
-    payload: { signingSessionId: row.sessionId, outboxId: queued.outboxId, recipient: recipientEmail }
+    payload: {
+      signingSessionId: row.sessionId,
+      outboxId: queued.outboxId,
+      recipient: recipientIdentity.identityProtected ? 'geschützt' : recipientEmail
+    }
   });
-  return { outboxId: queued.outboxId, recipient: recipientEmail };
+  return { outboxId: queued.outboxId, recipient: recipientIdentity.identityProtected ? 'geschützt' : recipientEmail };
 };
 
 export const listSigningSessions = async (opts: {
@@ -1310,6 +1470,18 @@ export const listSigningSessions = async (opts: {
     .from(signingSession)
     .where(where);
 
+  const signerIds = Array.from(new Set(rows.map((row) => (row.sessionPayload as any)?.signer?.id).filter((id): id is string => Boolean(id))));
+  const liveSigners = signerIds.length > 0
+    ? await db.select({
+        id: person.id,
+        email: person.email,
+        firstName: person.firstName,
+        lastName: person.lastName,
+        publicationName: person.publicationName
+      }).from(person).where(inArray(person.id, signerIds))
+    : [];
+  const liveSignerById = new Map(liveSigners.map((item) => [item.id, item]));
+
   const sessions = rows.map((row) => {
     const payload = row.sessionPayload as SigningCasePayload;
     const signer = payload?.signer;
@@ -1323,7 +1495,7 @@ export const listSigningSessions = async (opts: {
       deviceSessionId: row.deviceSessionId,
       deviceName: row.deviceName ?? null,
       operatorDisplay: row.operatorDisplay ?? null,
-      signerName: signer ? `${signer.firstName} ${signer.lastName}`.trim() : null,
+      signerName: signer ? standardPersonIdentity(liveSignerById.get(signer.id) ?? signer).displayName : null,
       signerRole: signer?.role ?? null,
       signedAt: row.signedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),

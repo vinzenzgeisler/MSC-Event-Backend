@@ -93,7 +93,8 @@ void (async () => {
       entryId: 'entry-1',
       personId: 'person-current',
       oldEmail: 'old@example.org',
-      newEmail: 'new@example.org'
+      newEmail: 'new@example.org',
+      identityProtected: false
     });
     assert.equal(unusedDb.updates.length, 3);
     assert.equal(unusedDb.updates[0].table, schema.person);
@@ -108,6 +109,25 @@ void (async () => {
       oldEmail: 'old@example.org',
       newEmail: 'new@example.org'
     });
+  });
+
+  // Protected identities never echo contact data through the response or audit payload.
+  const protectedDb = createDb([
+    [entryRow],
+    [groupRow],
+    [{ email: 'max.mustermann@example.org', publicationName: 'Der Blitz' }],
+    []
+  ]);
+  await runWithDb(protectedDb, async (auditCalls) => {
+    const result = await patchEntryDriverEmail('entry-1', 'new.name@example.org', 'admin-1');
+    assert.deepEqual(result, {
+      entryId: 'entry-1',
+      personId: 'person-current',
+      oldEmail: null,
+      newEmail: null,
+      identityProtected: true
+    });
+    assert.deepEqual(auditCalls[0].payload, { oldEmail: 'geschützt', newEmail: 'geschützt' });
   });
 
   // Successful update clears the email on an orphaned blocking person first.

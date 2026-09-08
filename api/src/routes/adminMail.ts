@@ -38,6 +38,7 @@ import {
 import { getOrCreateEntryConfirmationAttachment } from '../docs/entryConfirmation';
 import { buildEntryConfirmationConfigFallback, overlayEntryConfirmationConfig } from '../domain/entryConfirmationConfig';
 import { buildPaymentReference } from '../domain/paymentReference';
+import { replaceLegalNameInText, sanitizeProtectedStructuredData, standardPersonIdentity } from '../domain/personIdentity';
 import { getEntryLineTotalCents, sumEntryLineTotalCents } from '../domain/pricingSnapshot';
 import { getEntryConfirmationDefaults } from './adminConfig';
 
@@ -435,6 +436,10 @@ type RegistrationContext = {
   firstName: string | null;
   lastName: string | null;
   driverName: string | null;
+  identityProtected: boolean;
+  legalFirstName: string | null;
+  legalLastName: string | null;
+  publicationName: string | null;
 };
 
 type QueuedAttachmentRef = {
@@ -1148,7 +1153,8 @@ const resolveRegistrationContext = async (
         registrationGroupId: entry.registrationGroupId,
         eventName: event.name,
         driverFirstName: person.firstName,
-        driverLastName: person.lastName
+        driverLastName: person.lastName,
+        driverPublicationName: person.publicationName
       })
       .from(entry)
       .innerJoin(event, eq(entry.eventId, event.id))
@@ -1157,15 +1163,20 @@ const resolveRegistrationContext = async (
       .limit(1);
     const row = rows[0];
     if (row) {
-      const firstName = row.driverFirstName?.trim() ?? null;
-      const lastName = row.driverLastName?.trim() ?? null;
+      const identity = standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName });
+      const firstName = identity.identityProtected ? identity.displayName : row.driverFirstName?.trim() ?? null;
+      const lastName = identity.identityProtected ? null : row.driverLastName?.trim() ?? null;
       return {
         entryId: row.entryId,
         registrationGroupId: row.registrationGroupId,
         eventName: row.eventName,
         firstName,
         lastName,
-        driverName: [firstName, lastName].filter((item): item is string => Boolean(item && item.length > 0)).join(' ').trim() || null
+        driverName: identity.displayName,
+        identityProtected: identity.identityProtected,
+        legalFirstName: row.driverFirstName,
+        legalLastName: row.driverLastName,
+        publicationName: row.driverPublicationName
       };
     }
   }
@@ -1176,7 +1187,8 @@ const resolveRegistrationContext = async (
       registrationGroupId: entry.registrationGroupId,
       eventName: event.name,
       driverFirstName: person.firstName,
-      driverLastName: person.lastName
+      driverLastName: person.lastName,
+      driverPublicationName: person.publicationName
     })
     .from(entry)
     .innerJoin(event, eq(entry.eventId, event.id))
@@ -1192,18 +1204,27 @@ const resolveRegistrationContext = async (
       eventName: isNonEmptyString(templateData?.eventName) ? templateData.eventName : null,
       firstName: isNonEmptyString(templateData?.firstName) ? templateData.firstName : null,
       lastName: isNonEmptyString(templateData?.lastName) ? templateData.lastName : null,
-      driverName: isNonEmptyString(templateData?.driverName) ? templateData.driverName : null
+      driverName: isNonEmptyString(templateData?.driverName) ? templateData.driverName : null,
+      identityProtected: false,
+      legalFirstName: null,
+      legalLastName: null,
+      publicationName: null
     };
   }
-  const firstName = row.driverFirstName?.trim() ?? null;
-  const lastName = row.driverLastName?.trim() ?? null;
+  const identity = standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName });
+  const firstName = identity.identityProtected ? identity.displayName : row.driverFirstName?.trim() ?? null;
+  const lastName = identity.identityProtected ? null : row.driverLastName?.trim() ?? null;
   return {
     entryId: row.entryId,
     registrationGroupId: row.registrationGroupId,
     eventName: row.eventName,
     firstName,
     lastName,
-    driverName: [firstName, lastName].filter((item): item is string => Boolean(item && item.length > 0)).join(' ').trim() || null
+    driverName: identity.displayName,
+    identityProtected: identity.identityProtected,
+    legalFirstName: row.driverFirstName,
+    legalLastName: row.driverLastName,
+    publicationName: row.driverPublicationName
   };
 };
 
@@ -1524,15 +1545,16 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
       };
 
       templateData = await enrichEntryContextTemplateData(input.eventId, templateData, target);
+      const outputIdentityContext = await resolveRegistrationContext(input.eventId, target, templateData);
 
       if (templateContract.scope === 'campaign') {
-        const recipientContext = await resolveRegistrationContext(input.eventId, target, templateData);
+        const recipientContext = outputIdentityContext;
         templateData = {
           ...templateData,
           eventName: isNonEmptyString(templateData.eventName) ? templateData.eventName : recipientContext.eventName,
-          firstName: isNonEmptyString(templateData.firstName) ? templateData.firstName : recipientContext.firstName,
-          lastName: isNonEmptyString(templateData.lastName) ? templateData.lastName : recipientContext.lastName,
-          driverName: isNonEmptyString(templateData.driverName) ? templateData.driverName : recipientContext.driverName,
+          firstName: recipientContext.identityProtected ? recipientContext.firstName : (isNonEmptyString(templateData.firstName) ? templateData.firstName : recipientContext.firstName),
+          lastName: recipientContext.identityProtected ? null : (isNonEmptyString(templateData.lastName) ? templateData.lastName : recipientContext.lastName),
+          driverName: recipientContext.identityProtected ? recipientContext.driverName : (isNonEmptyString(templateData.driverName) ? templateData.driverName : recipientContext.driverName),
           entryId: isNonEmptyString(templateData.entryId) ? templateData.entryId : recipientContext.entryId
         };
       }
@@ -1542,7 +1564,7 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         template.templateKey === 'email_confirmation' ||
         template.templateKey === 'email_confirmation_reminder'
       ) {
-        const context = await resolveRegistrationContext(input.eventId, target, input.templateData);
+        const context = outputIdentityContext;
         let generatedVerificationUrl: string | null = null;
         if (context.entryId && context.registrationGroupId) {
           const token = await upsertRegistrationGroupVerificationToken(context.registrationGroupId, target.email);
@@ -1551,9 +1573,9 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
             ...templateData,
             entryId: context.entryId,
             eventName: isNonEmptyString(templateData.eventName) ? templateData.eventName : context.eventName,
-            firstName: isNonEmptyString(templateData.firstName) ? templateData.firstName : context.firstName,
-            lastName: isNonEmptyString(templateData.lastName) ? templateData.lastName : context.lastName,
-            driverName: isNonEmptyString(templateData.driverName) ? templateData.driverName : context.driverName,
+            firstName: context.identityProtected ? context.firstName : (isNonEmptyString(templateData.firstName) ? templateData.firstName : context.firstName),
+            lastName: context.identityProtected ? null : (isNonEmptyString(templateData.lastName) ? templateData.lastName : context.lastName),
+            driverName: context.identityProtected ? context.driverName : (isNonEmptyString(templateData.driverName) ? templateData.driverName : context.driverName),
             verificationToken: token,
             verificationUrl: generatedVerificationUrl ?? (isNonEmptyString(templateData.verificationUrl) ? templateData.verificationUrl : null)
           };
@@ -1561,9 +1583,9 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
           templateData = {
             ...templateData,
             eventName: isNonEmptyString(templateData.eventName) ? templateData.eventName : context.eventName,
-            firstName: isNonEmptyString(templateData.firstName) ? templateData.firstName : context.firstName,
-            lastName: isNonEmptyString(templateData.lastName) ? templateData.lastName : context.lastName,
-            driverName: isNonEmptyString(templateData.driverName) ? templateData.driverName : context.driverName
+            firstName: context.identityProtected ? context.firstName : (isNonEmptyString(templateData.firstName) ? templateData.firstName : context.firstName),
+            lastName: context.identityProtected ? null : (isNonEmptyString(templateData.lastName) ? templateData.lastName : context.lastName),
+            driverName: context.identityProtected ? context.driverName : (isNonEmptyString(templateData.driverName) ? templateData.driverName : context.driverName)
           };
         }
         if (!isNonEmptyString(templateData.verificationUrl) && generatedVerificationUrl) {
@@ -1577,9 +1599,19 @@ export const queueMail = async (input: QueueMailInput, actorUserId: string | nul
         }
       }
 
-      const subjectTemplate = localizedContent?.subject ?? template.subjectTemplate;
-      const bodyTextTemplate = localizedContent?.bodyText ?? input.bodyOverride ?? template.bodyTextTemplate;
-      const bodyHtmlTemplate = localizedContent?.bodyHtml ?? input.bodyHtmlOverride ?? template.bodyHtmlTemplate;
+      const identitySource = {
+        firstName: outputIdentityContext.legalFirstName,
+        lastName: outputIdentityContext.legalLastName,
+        publicationName: outputIdentityContext.publicationName
+      };
+      if (outputIdentityContext.identityProtected) {
+        templateData = sanitizeProtectedStructuredData(templateData, identitySource) as Record<string, unknown>;
+      }
+      const subjectTemplate = replaceLegalNameInText(localizedContent?.subject ?? template.subjectTemplate, identitySource);
+      const bodyTextTemplate = replaceLegalNameInText(localizedContent?.bodyText ?? input.bodyOverride ?? template.bodyTextTemplate, identitySource);
+      const bodyHtmlTemplate = (localizedContent?.bodyHtml ?? input.bodyHtmlOverride ?? template.bodyHtmlTemplate)
+        ? replaceLegalNameInText((localizedContent?.bodyHtml ?? input.bodyHtmlOverride ?? template.bodyHtmlTemplate) as string, identitySource)
+        : null;
       const hasContentOverride = Boolean(
         localizedContent?.bodyText || localizedContent?.bodyHtml || input.bodyOverride || input.bodyHtmlOverride
       );
@@ -1668,6 +1700,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
       email: person.email,
       firstName: person.firstName,
       lastName: person.lastName,
+      publicationName: person.publicationName,
       eventName: event.name
     })
     .from(entry)
@@ -1767,11 +1800,12 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
           ? `Przy wspólnej płatności za już zaakceptowane zgłoszenia aktualna łączna kwota wynosi ${acceptedEntriesTotal}.`
           : `Bei gemeinsamer Überweisung deiner bereits zugelassenen Nennungen beträgt der aktuelle Gesamtbetrag ${acceptedEntriesTotal}.`
     : '';
+  const currentIdentity = standardPersonIdentity(current);
   const paymentReference = buildPaymentReference({
     prefix: entryConfirmationConfig.paymentReferencePrefix,
     orgaCode: current.orgaCode,
-    firstName: current.firstName,
-    lastName: current.lastName
+    firstName: currentIdentity.displayName,
+    lastName: ''
   });
 
   const idempotencyKey = buildDedupeKey(
@@ -1799,7 +1833,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
     ...(input.templateData ?? {}),
     entryId: current.entryId,
     driverPersonId: current.driverPersonId,
-    driverName: `${current.firstName} ${current.lastName}`,
+    driverName: currentIdentity.displayName,
     eventName: current.eventName,
     locale,
     totalCents: focusedEntryFeeCents,
@@ -1844,6 +1878,14 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
       combinedTransferHint
     })
   };
+  const paymentSubject = replaceLegalNameInText(template.subjectTemplate, current);
+  if (currentIdentity.identityProtected) {
+    templateData = sanitizeProtectedStructuredData({
+      ...templateData,
+      bodyTextOverride: replaceLegalNameInText(template.bodyTextTemplate, current),
+      bodyHtmlOverride: template.bodyHtmlTemplate ? replaceLegalNameInText(template.bodyHtmlTemplate, current) : null
+    }, current) as Record<string, unknown>;
+  }
 
   let createdId: string | null = null;
   try {
@@ -1852,7 +1894,7 @@ export const queuePaymentReminders = async (input: ReminderInput, actorUserId: s
       .values({
         eventId: input.eventId,
         toEmail: current.email,
-        subject: template.subjectTemplate,
+        subject: paymentSubject,
         templateId: template.templateKey,
         templateVersion: template.templateVersion,
         templateData,
@@ -1946,6 +1988,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       email: person.email,
       firstName: person.firstName,
       lastName: person.lastName,
+      publicationName: person.publicationName,
     })
     .from(entry)
     .innerJoin(event, eq(entry.eventId, event.id))
@@ -1983,7 +2026,8 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
 
   const row = rows[0];
   const email = row.email as string;
-  const driverName = `${row.firstName} ${row.lastName}`;
+  const driverIdentity = standardPersonIdentity(row);
+  const driverName = driverIdentity.displayName;
   const siblingEntries =
     template.templateKey === 'accepted_open_payment'
       ? await db
@@ -2178,8 +2222,8 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
   const paymentReference = buildPaymentReference({
     prefix: entryConfirmationConfig.paymentReferencePrefix,
     orgaCode: row.orgaCode,
-    firstName: row.firstName,
-    lastName: row.lastName
+    firstName: driverIdentity.displayName,
+    lastName: ''
   });
   const paymentInstructionText =
     template.templateKey === 'accepted_open_payment'
@@ -2258,18 +2302,26 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
     }
   }
 
+  const lifecycleSubjectOutput = replaceLegalNameInText(lifecycleSubjectTemplate, row);
+  const lifecycleBodyTextOutput = replaceLegalNameInText(lifecycleBodyTextTemplate, row);
+  const lifecycleBodyHtmlOutput = template.bodyHtmlTemplate
+    ? replaceLegalNameInText(template.bodyHtmlTemplate, row)
+    : null;
   templateData = {
     ...templateData,
-    bodyTextOverride: lifecycleBodyTextTemplate,
-    bodyHtmlOverride: null,
+    bodyTextOverride: lifecycleBodyTextOutput,
+    bodyHtmlOverride: driverIdentity.identityProtected ? lifecycleBodyHtmlOutput : null,
     renderOptions: normalizeRenderOptions(template.templateKey, undefined)
   };
+  if (driverIdentity.identityProtected) {
+    templateData = sanitizeProtectedStructuredData(templateData, row) as Record<string, unknown>;
+  }
 
   const renderValidation = renderMailContract({
     templateKey: template.templateKey,
-    subjectTemplate: lifecycleSubjectTemplate,
-    bodyTextTemplate: lifecycleBodyTextTemplate,
-    bodyHtmlTemplate: template.bodyHtmlTemplate,
+    subjectTemplate: lifecycleSubjectOutput,
+    bodyTextTemplate: lifecycleBodyTextOutput,
+    bodyHtmlTemplate: lifecycleBodyHtmlOutput,
     data: templateData,
     renderOptions: normalizeRenderOptions(template.templateKey, undefined),
     hasContentOverride: true
@@ -2342,7 +2394,7 @@ export const queueLifecycleMail = async (input: LifecycleInput, actorUserId: str
       .values({
         eventId: input.eventId,
         toEmail: email,
-        subject: lifecycleSubjectTemplate,
+        subject: lifecycleSubjectOutput,
         templateId: template.templateKey,
         templateVersion: template.templateVersion,
         templateData,
@@ -2433,6 +2485,7 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
       driverPersonId: entry.driverPersonId,
       firstName: person.firstName,
       lastName: person.lastName,
+      publicationName: person.publicationName,
       paymentStatus: invoice.paymentStatus
     })
     .from(entry)
@@ -2474,7 +2527,10 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
         eventName: row.eventName,
         entryId: row.entryId,
         driverPersonId: row.driverPersonId,
-        driverName: `${row.firstName} ${row.lastName}`,
+        firstName: row.firstName,
+        lastName: row.lastName,
+        publicationName: row.publicationName,
+        driverName: standardPersonIdentity(row).displayName,
         paymentStatus: row.paymentStatus ?? null
       }
     ])
@@ -2482,16 +2538,27 @@ export const queueBroadcastMail = async (input: BroadcastInput, actorUserId: str
 
   const outboxRows = targets.map((target) => {
     const source = sourceByEmail.get(target.email.toLowerCase());
+    const identity = source ? standardPersonIdentity(source) : null;
+    const identitySource = source ?? { firstName: null, lastName: null, publicationName: null };
+    let templateData: Record<string, unknown> = {
+      eventName: source?.eventName ?? null,
+      entryId: source?.entryId ?? null,
+      driverPersonId: source?.driverPersonId ?? null,
+      driverName: source?.driverName ?? null,
+      paymentStatus: source?.paymentStatus ?? null,
+      locale: resolveMailLocale({}, 'de')
+    };
+    if (identity?.identityProtected) {
+      templateData = sanitizeProtectedStructuredData({
+        ...templateData,
+        bodyTextOverride: replaceLegalNameInText(template.bodyTextTemplate, identitySource),
+        bodyHtmlOverride: template.bodyHtmlTemplate ? replaceLegalNameInText(template.bodyHtmlTemplate, identitySource) : null
+      }, identitySource) as Record<string, unknown>;
+    }
     return {
       toEmail: target.email,
-      templateData: {
-        eventName: source?.eventName ?? null,
-        entryId: source?.entryId ?? null,
-        driverPersonId: source?.driverPersonId ?? null,
-        driverName: source?.driverName ?? null,
-        paymentStatus: source?.paymentStatus ?? null,
-        locale: resolveMailLocale({}, 'de')
-      },
+      subject: replaceLegalNameInText(template.subjectTemplate, identitySource),
+      templateData,
       idempotencyKey: buildDedupeKey(
         'broadcast',
         input.eventId,
@@ -2546,6 +2613,10 @@ export const listOutbox = async (input: ListOutboxInput) => {
       eventId: emailOutbox.eventId,
       batchId: emailOutbox.batchId,
       toEmail: emailOutbox.toEmail,
+      identityProtected: sql<boolean>`exists(select 1 from "person" p where lower(p."email") = lower(${emailOutbox.toEmail}) and p."publication_name" is not null)`,
+      protectedFirstName: sql<string | null>`(select p."first_name" from "person" p where lower(p."email") = lower(${emailOutbox.toEmail}) and p."publication_name" is not null limit 1)`,
+      protectedLastName: sql<string | null>`(select p."last_name" from "person" p where lower(p."email") = lower(${emailOutbox.toEmail}) and p."publication_name" is not null limit 1)`,
+      publicationName: sql<string | null>`(select p."publication_name" from "person" p where lower(p."email") = lower(${emailOutbox.toEmail}) and p."publication_name" is not null limit 1)`,
       subject: emailOutbox.subject,
       templateId: emailOutbox.templateId,
       templateVersion: emailOutbox.templateVersion,
@@ -2572,7 +2643,20 @@ export const listOutbox = async (input: ListOutboxInput) => {
     'asc'
   );
 
-  return paginateAndSortRows(rows, paginationQuery);
+  const page = paginateAndSortRows(rows, paginationQuery);
+  return {
+    ...page,
+    items: page.items.map(({ protectedFirstName, protectedLastName, publicationName, ...item }) => {
+      const identitySource = { firstName: protectedFirstName, lastName: protectedLastName, publicationName };
+      return {
+        ...item,
+        toEmail: item.identityProtected ? 'geschützt' : item.toEmail,
+        subject: replaceLegalNameInText(item.subject, identitySource),
+        errorLast: item.identityProtected ? null : item.errorLast,
+        identityProtected: item.identityProtected
+      };
+    })
+  };
 };
 
 type EntryMailHistoryRow = {
@@ -2659,8 +2743,12 @@ export const listEntryMailHistory = async (entryId: string, query: EntryMailHist
       eventId: entry.eventId,
       driverPersonId: entry.driverPersonId,
       registrationGroupId: entry.registrationGroupId
+      ,firstName: person.firstName
+      ,lastName: person.lastName
+      ,publicationName: person.publicationName
     })
     .from(entry)
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
     .where(and(eq(entry.id, entryId), sql`${entry.deletedAt} is null`))
     .limit(1);
 
@@ -2719,14 +2807,15 @@ export const listEntryMailHistory = async (entryId: string, query: EntryMailHist
     order by o.created_at desc, o.id desc
   `);
 
+  const targetIdentity = standardPersonIdentity(target);
   const rows = normalizeRows(result.rows).map((row) => ({
     id: String(row.id ?? ''),
     eventId: row.eventId ? String(row.eventId) : null,
-    toEmail: String(row.toEmail ?? ''),
-    subject: String(row.subject ?? ''),
+    toEmail: targetIdentity.identityProtected ? 'geschützt' : String(row.toEmail ?? ''),
+    subject: replaceLegalNameInText(String(row.subject ?? ''), target),
     templateId: String(row.templateId ?? ''),
     templateVersion: Number(row.templateVersion ?? 1) || 1,
-    templateData: normalizeTemplateData(row.templateData),
+    templateData: sanitizeProtectedStructuredData(normalizeTemplateData(row.templateData), target) as Record<string, unknown>,
     status: String(row.status ?? 'queued'),
     attemptCount: Number(row.attemptCount ?? 0) || 0,
     maxAttempts: Number(row.maxAttempts ?? 0) || 0,
@@ -2738,13 +2827,14 @@ export const listEntryMailHistory = async (entryId: string, query: EntryMailHist
     deliveryStatus: row.deliveryStatus ? String(row.deliveryStatus) : null,
     sesMessageId: row.sesMessageId ? String(row.sesMessageId) : null,
     sentAt: (row.sentAt as Date | string | null) ?? null,
-    providerResponse: row.providerResponse ?? null,
+    providerResponse: targetIdentity.identityProtected ? null : row.providerResponse ?? null,
     relation: String(row.relation ?? 'unknown')
   })).filter((row) => row.id && row.templateId);
 
   const mails = await Promise.all(
     rows.map(async (row) => {
-      const rendered = await renderEntryMailHistoryContent(row);
+      const renderedRaw = await renderEntryMailHistoryContent(row);
+      const rendered = sanitizeProtectedStructuredData(renderedRaw, target) as typeof renderedRaw;
       return {
         id: row.id,
         eventId: row.eventId,
@@ -2794,12 +2884,23 @@ export const retryOutboxMail = async (outboxId: string, actorUserId: string | nu
     throw new Error('OUTBOX_RETRY_FORBIDDEN_STATUS');
   }
 
+  const protectedRows = await db
+    .select({ firstName: person.firstName, lastName: person.lastName, publicationName: person.publicationName })
+    .from(person)
+    .where(and(sql`lower(${person.email}) = lower(${existing.toEmail})`, sql`${person.publicationName} is not null`))
+    .limit(1);
+  const protectedSource = protectedRows[0] ?? null;
+
   const [updated] = await db
     .update(emailOutbox)
     .set({
       status: 'queued',
       sendAfter: now,
       errorLast: null,
+      subject: protectedSource ? replaceLegalNameInText(existing.subject, protectedSource) : existing.subject,
+      templateData: protectedSource
+        ? sanitizeProtectedStructuredData(existing.templateData ?? {}, protectedSource)
+        : existing.templateData,
       updatedAt: now
     })
     .where(eq(emailOutbox.id, outboxId))
@@ -2816,7 +2917,16 @@ export const retryOutboxMail = async (outboxId: string, actorUserId: string | nu
     }
   });
 
-  return updated ?? null;
+  if (!updated) return null;
+  if (!protectedSource) return updated;
+  return {
+    ...updated,
+    toEmail: 'geschützt',
+    subject: replaceLegalNameInText(updated.subject, protectedSource),
+    templateData: sanitizeProtectedStructuredData(updated.templateData ?? {}, protectedSource),
+    errorLast: null,
+    identityProtected: true
+  };
 };
 
 const formatAmountOpen = (totalCents: number, paidAmountCents: number): string =>
@@ -3138,6 +3248,7 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
       className: eventClass.name,
       firstName: person.firstName,
       lastName: person.lastName,
+      publicationName: person.publicationName,
       startNumber: entry.startNumberNorm,
       orgaCode: entry.orgaCode,
       vehicleType: vehicle.vehicleType,
@@ -3169,13 +3280,14 @@ const buildPreviewDataFromEntry = async (entryId: string): Promise<Record<string
     overlayEntryConfirmationConfig(buildEntryConfirmationConfigFallback(), globalEntryConfirmationDefaults),
     row.eventEntryConfirmationConfig ?? {}
   );
+  const identity = standardPersonIdentity(row);
   return {
     eventId: row.eventId,
     eventName: row.eventName,
     eventDateText: formatEventDateText(row.eventStartsAt ?? null, row.eventEndsAt ?? null),
-    firstName: row.firstName,
-    lastName: row.lastName,
-    driverName: `${row.firstName} ${row.lastName}`.trim(),
+    firstName: identity.identityProtected ? identity.displayName : row.firstName,
+    lastName: identity.identityProtected ? null : row.lastName,
+    driverName: identity.displayName,
     className: row.className,
     startNumber: row.startNumber,
     orgaCode: row.orgaCode,
@@ -3521,9 +3633,10 @@ export const searchMailRecipients = async (input: SearchRecipientsInput) => {
     const like = `%${input.q.trim().toLowerCase()}%`;
     conditions.push(
       sql`(
-        lower(${person.firstName}) like ${like}
-        or lower(${person.lastName}) like ${like}
-        or lower(${person.email}) like ${like}
+        (${person.publicationName} is null and lower(${person.firstName}) like ${like})
+        or (${person.publicationName} is null and lower(${person.lastName}) like ${like})
+        or lower(${person.publicationName}) like ${like}
+        or (${person.publicationName} is null and lower(${person.email}) like ${like})
         or lower(${entry.startNumberNorm}) like ${like}
       )`
     );
@@ -3532,8 +3645,9 @@ export const searchMailRecipients = async (input: SearchRecipientsInput) => {
   const query = db
     .select({
       driverPersonId: person.id,
-      driverName: sql<string>`trim(coalesce(${person.firstName}, '') || ' ' || coalesce(${person.lastName}, ''))`,
+      driverName: sql<string>`coalesce(${person.publicationName}, trim(coalesce(${person.firstName}, '') || ' ' || coalesce(${person.lastName}, '')))`,
       driverEmail: person.email,
+      identityProtected: sql<boolean>`${person.publicationName} is not null`,
       entryId: entry.id,
       className: eventClass.name,
       startNumber: entry.startNumberNorm
@@ -3564,7 +3678,8 @@ export const searchMailRecipients = async (input: SearchRecipientsInput) => {
   return Array.from(deduped.values()).map((row) => ({
     driverPersonId: row.driverPersonId,
     driverName: row.driverName,
-    driverEmail: row.driverEmail as string,
+    driverEmail: row.identityProtected ? null : row.driverEmail as string,
+    identityProtected: row.identityProtected,
     entryId: row.entryId,
     className: row.className,
     startNumber: row.startNumber

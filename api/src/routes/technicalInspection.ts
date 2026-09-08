@@ -5,6 +5,7 @@ import { buildGiroCodeMatrix, buildQrCodeMatrix, renderGiroCodePng } from '../do
 import { getDb } from '../db/client';
 import {
   entry,
+  entryCharityCodriver,
   event,
   eventClass,
   person,
@@ -16,6 +17,7 @@ import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/sto
 import type { AuthContext } from '../http/auth';
 import { sendEmail } from '../mail/ses';
 import { resolveIamUserDisplayNames } from './adminIam';
+import { replaceProtectedLegalNamesInValue, standardPersonIdentity, type PersonIdentitySource } from '../domain/personIdentity';
 
 // Standalone build keeps Lambda PDF rendering independent from host font files.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -68,13 +70,26 @@ type InspectionDecisionInput = z.infer<typeof inspectionDecisionSchema>;
 type InspectionNoteInput = z.infer<typeof inspectionNoteSchema>;
 type InspectorAssignmentInput = z.infer<typeof inspectorAssignmentSchema>;
 
+const loadProtectedInspectionPeople = async (db: any, entryId: string): Promise<PersonIdentitySource[]> => db
+  .select({ firstName: person.firstName, lastName: person.lastName, publicationName: person.publicationName })
+  .from(person)
+  .where(and(
+    sql`${person.publicationName} is not null`,
+    sql`${person.id} in (
+      select e."driver_person_id" from "entry" e where e."id" = ${entryId}::uuid
+      union
+      select e."codriver_person_id" from "entry" e where e."id" = ${entryId}::uuid and e."codriver_person_id" is not null
+      union
+      select ecc."person_id" from ${entryCharityCodriver} ecc where ecc."entry_id" = ${entryId}::uuid
+    )`
+  ));
+
 type InspectionDecisionEmailInput = {
   techStatus: 'pending' | 'passed' | 'failed';
   target: 'primary' | 'backup';
   note: string | null;
   driverEmail: string | null;
-  driverFirstName: string;
-  driverLastName: string;
+  driverDisplayName: string;
   vehicleMake: string | null;
   vehicleModel: string | null;
   startNumber: string | null;
@@ -89,7 +104,7 @@ async function sendInspectionDecisionEmail(input: InspectionDecisionEmailInput):
     [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || 'Ihr Fahrzeug';
   const vehicleLabel =
     input.target === 'backup' ? `${vehicleName} (Ersatzfahrzeug)` : vehicleName;
-  const driverName = `${input.driverFirstName} ${input.driverLastName}`.trim();
+  const driverName = input.driverDisplayName;
   const startInfo = input.startNumber ? ` · Startnummer #${input.startNumber}` : '';
   const eventInfo = input.eventName ?? 'MSC Oberlausitzer Dreiländereck';
 
@@ -204,12 +219,13 @@ export const searchInspectionEntries = async (auth: AuthContext, input: Inspecti
   }
   const db = await getDb();
   const pattern = `%${input.q}%`;
-  return db
+  const rows = await db
     .select({
       id: entry.id,
       startNumber: entry.startNumberNorm,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      driverPublicationName: person.publicationName,
       className: eventClass.name,
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
@@ -230,13 +246,18 @@ export const searchInspectionEntries = async (auth: AuthContext, input: Inspecti
         or(
           ilike(entry.startNumberNorm, pattern),
           ilike(entry.orgaCode, pattern),
-          ilike(person.firstName, pattern),
-          ilike(person.lastName, pattern),
-          sql`lower(trim(coalesce(${person.firstName}, '') || ' ' || coalesce(${person.lastName}, ''))) like lower(${pattern})`
+          and(sql`${person.publicationName} is null`, ilike(person.firstName, pattern)),
+          and(sql`${person.publicationName} is null`, ilike(person.lastName, pattern)),
+          ilike(person.publicationName, pattern),
+          sql`lower(case when ${person.publicationName} is not null then ${person.publicationName} else trim(coalesce(${person.firstName}, '') || ' ' || coalesce(${person.lastName}, '')) end) like lower(${pattern})`
         )
       )
     )
     .limit(input.limit);
+  return rows.map((row) => {
+    const identity = standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName });
+    return { ...row, driverDisplayName: identity.displayName, identityProtected: identity.identityProtected, driverFirstName: identity.firstName, driverLastName: identity.lastName, driverPublicationName: undefined };
+  });
 };
 
 export const getInspectionEntry = async (auth: AuthContext, entryId: string) => {
@@ -250,6 +271,7 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
       acceptanceStatus: entry.acceptanceStatus,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      driverPublicationName: person.publicationName,
       driverEmail: person.email,
       driverPhone: person.phone,
       eventName: event.name,
@@ -302,6 +324,7 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
           .select({
             firstName: person.firstName,
             lastName: person.lastName,
+            publicationName: person.publicationName,
             birthdate: person.birthdate,
             country: person.country
           })
@@ -332,14 +355,34 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
     getVehicleImageUrl(result.vehicleImageS3Key),
     getVehicleImageUrl(backupVehicle?.imageS3Key ?? null)
   ]);
-  const { vehicleImageS3Key: _vehicleImageS3Key, ...entryResult } = result;
+  const identity = standardPersonIdentity({ firstName: result.driverFirstName, lastName: result.driverLastName, publicationName: result.driverPublicationName });
+  const { vehicleImageS3Key: _vehicleImageS3Key, driverPublicationName: _driverPublicationName, ...entryResult } = result;
   const backupVehicleResult = backupVehicle
     ? (({ imageS3Key: _imageS3Key, ...vehicleResult }) => vehicleResult)(backupVehicle)
     : null;
-  return {
+  const response = {
     ...entryResult,
+    driverDisplayName: identity.displayName,
+    identityProtected: identity.identityProtected,
+    driverFirstName: identity.firstName,
+    driverLastName: identity.lastName,
+    driverEmail: identity.identityProtected ? null : entryResult.driverEmail,
+    driverPhone: identity.identityProtected ? null : entryResult.driverPhone,
+    vehicleHistory: identity.identityProtected ? null : entryResult.vehicleHistory,
     vehicleImageUrl,
-    codriver: codriverRows[0] ?? null,
+    codriver: codriverRows[0]
+      ? (() => {
+          const codriverIdentity = standardPersonIdentity(codriverRows[0]);
+          return {
+            displayName: codriverIdentity.displayName,
+            identityProtected: codriverIdentity.identityProtected,
+            firstName: codriverIdentity.firstName,
+            lastName: codriverIdentity.lastName,
+            birthdate: codriverIdentity.identityProtected ? null : codriverRows[0].birthdate,
+            country: codriverIdentity.identityProtected ? null : codriverRows[0].country
+          };
+        })()
+      : null,
     backupVehicle: backupVehicleResult
       ? {
           ...backupVehicleResult,
@@ -347,6 +390,11 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
         }
       : null
   };
+  const protectedPeople: PersonIdentitySource[] = [
+    { firstName: result.driverFirstName, lastName: result.driverLastName, publicationName: result.driverPublicationName },
+    ...codriverRows.filter((item) => item.publicationName)
+  ].filter((item) => Boolean(item.publicationName));
+  return replaceProtectedLegalNamesInValue(response, protectedPeople) as typeof response;
 };
 
 export const getInspectionParticipant = async (auth: AuthContext, eventId: string, personId: string) => {
@@ -370,6 +418,8 @@ export const getInspectionParticipant = async (auth: AuthContext, eventId: strin
     event: assignedEvent,
     driver: {
       personId,
+      displayName: entries[0].driverDisplayName,
+      identityProtected: entries[0].identityProtected,
       firstName: entries[0].driverFirstName,
       lastName: entries[0].driverLastName
     },
@@ -448,13 +498,21 @@ export const updateInspectionDecision = async (
     return { entry: updated, decision };
   });
 
+  const [delivery] = await db
+    .select({ email: person.email, firstName: person.firstName, lastName: person.lastName, publicationName: person.publicationName })
+    .from(entry)
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .where(eq(entry.id, entryId))
+    .limit(1);
+  const protectedPeople = await loadProtectedInspectionPeople(db, entryId);
+  const safeNote = replaceProtectedLegalNamesInValue(note, protectedPeople) as string | null;
+
   void sendInspectionDecisionEmail({
     techStatus: input.techStatus,
     target: input.target,
-    note: note ?? null,
-    driverEmail: existing.driverEmail,
-    driverFirstName: existing.driverFirstName,
-    driverLastName: existing.driverLastName,
+    note: safeNote,
+    driverEmail: delivery?.email ?? null,
+    driverDisplayName: existing.driverDisplayName,
     vehicleMake:
       input.target === 'backup' ? (existing.backupVehicle?.make ?? null) : existing.vehicleMake,
     vehicleModel:
@@ -465,7 +523,7 @@ export const updateInspectionDecision = async (
     console.error('[inspection-mail] Failed to send decision email:', mailError);
   });
 
-  return result;
+  return replaceProtectedLegalNamesInValue(result, protectedPeople) as typeof result;
 };
 
 export const updateInspectionNote = async (
@@ -493,7 +551,7 @@ export const updateInspectionNote = async (
 
   const db = await getDb();
   const now = new Date();
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     await tx
       .update(entry)
       .set(
@@ -514,6 +572,7 @@ export const updateInspectionNote = async (
 
     return { changed: true, note, target: input.target };
   });
+  return replaceProtectedLegalNamesInValue(result, await loadProtectedInspectionPeople(db, entryId)) as typeof result;
 };
 
 export const listInspectionHistory = async (auth: AuthContext, entryId: string) => {
@@ -531,10 +590,11 @@ export const listInspectionHistory = async (auth: AuthContext, entryId: string) 
   const displayNames = await resolveIamUserDisplayNames(
     Array.from(new Set(rows.map((row) => row.inspectorUserId).filter(Boolean)))
   );
-  return rows.map((row) => ({
+  const result = rows.map((row) => ({
     ...row,
     inspectorDisplay: displayNames.get(row.inspectorUserId) ?? row.inspectorEmail ?? null
   }));
+  return replaceProtectedLegalNamesInValue(result, await loadProtectedInspectionPeople(db, entryId)) as typeof result;
 };
 
 export const listInspectorAssignments = async (eventId?: string) => {
@@ -650,6 +710,7 @@ export const createInspectionQrSheet = async (eventId: string, entryIds: string[
       startNumber: entry.startNumberNorm,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      driverPublicationName: person.publicationName,
       className: eventClass.name
     })
     .from(entry)
@@ -683,7 +744,7 @@ export const createInspectionQrSheet = async (eventId: string, entryIds: string[
       });
       doc.restore();
       doc.fontSize(20).text(`#${row.startNumber ?? '-'}`, x + 132, y + 15, { width: 115 });
-      doc.fontSize(10).text(`${row.driverFirstName} ${row.driverLastName}`, x + 132, y + 48, { width: 115 });
+      doc.fontSize(10).text(standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName }).displayName, x + 132, y + 48, { width: 115 });
       doc.fontSize(9).text(row.className, x + 132, y + 82, { width: 115 });
     });
     doc.end();

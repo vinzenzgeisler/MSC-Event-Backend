@@ -31,6 +31,7 @@ import {
 } from '../domain/runGroups';
 import { deriveEntryPaymentStatus, deriveInvoicePaymentStatus, resolveEntryTotalCents } from '../domain/invoiceStatus';
 import { getEntryLineTotalCents, getForecastEntryLineTotalCents, getManualEntryTotalOverrideCents } from '../domain/pricingSnapshot';
+import { replaceProtectedLegalNamesInValue, standardPersonIdentity, type PersonIdentitySource } from '../domain/personIdentity';
 import { isPgUniqueViolation } from '../http/dbErrors';
 import { decodeCursor, encodeCursor, parseListQuery } from '../http/pagination';
 import { recalculateInvoices, recalculateInvoicesInTransaction } from './adminFinance';
@@ -231,6 +232,20 @@ const charityCodriverRevocationSchema = z.object({
   reason: z.string().trim().min(1).max(500)
 });
 
+const loadProtectedEntryIdentities = async (db: any, entryId: string): Promise<PersonIdentitySource[]> => db
+  .select({ firstName: person.firstName, lastName: person.lastName, publicationName: person.publicationName })
+  .from(person)
+  .where(and(
+    sql`${person.publicationName} is not null`,
+    sql`${person.id} in (
+      select e."driver_person_id" from "entry" e where e."id" = ${entryId}::uuid
+      union
+      select e."codriver_person_id" from "entry" e where e."id" = ${entryId}::uuid and e."codriver_person_id" is not null
+      union
+      select ecc."person_id" from "entry_charity_codriver" ecc where ecc."entry_id" = ${entryId}::uuid
+    )`
+  ));
+
 type ListEntriesQuery = z.infer<typeof listEntriesQuerySchema>;
 type EntryStatusPatch = z.infer<typeof entryStatusPatchSchema>;
 type TechStatusPatch = z.infer<typeof techStatusPatchSchema>;
@@ -316,12 +331,13 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
     const tokenConditions = tokens.map((token) => {
       const pattern = `%${token}%`;
       return or(
-        ilike(person.firstName, pattern),
-        ilike(person.lastName, pattern),
-        ilike(person.email, pattern),
+        and(sql`${person.publicationName} is null`, ilike(person.firstName, pattern)),
+        and(sql`${person.publicationName} is null`, ilike(person.lastName, pattern)),
+        ilike(person.publicationName, pattern),
+        and(sql`${person.publicationName} is null`, ilike(person.email, pattern)),
         ilike(entry.orgaCode, pattern),
         ilike(entry.startNumberNorm, pattern),
-        sql`lower(trim(coalesce(${person.firstName}, '') || ' ' || coalesce(${person.lastName}, ''))) like lower(${pattern})`
+        sql`lower(case when ${person.publicationName} is not null then ${person.publicationName} else trim(coalesce(${person.firstName}, '') || ' ' || coalesce(${person.lastName}, '')) end) like lower(${pattern})`
       ) as SQL<unknown>;
     });
     if (tokenConditions.length > 0) {
@@ -348,9 +364,9 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
   const numericStartNumber = sql<number>`case when ${entry.startNumberNorm} ~ '^[0-9]+$' then ${entry.startNumberNorm}::int end`;
   const orderBy =
     paginationQuery.sortBy === 'driverLastName'
-      ? [orderTerm(person.lastName), orderTerm(person.firstName), orderTerm(entry.id)]
+      ? [orderTerm(sql`case when ${person.publicationName} is not null then ${person.publicationName} else ${person.lastName} end`), orderTerm(entry.id)]
       : paginationQuery.sortBy === 'driverFirstName'
-        ? [orderTerm(person.firstName), orderTerm(person.lastName), orderTerm(entry.id)]
+        ? [orderTerm(sql`case when ${person.publicationName} is not null then ${person.publicationName} else ${person.firstName} end`), orderTerm(entry.id)]
         : paginationQuery.sortBy === 'createdAt'
           ? [orderTerm(entry.createdAt), orderTerm(entry.id)]
           : paginationQuery.sortBy === 'updatedAt'
@@ -364,7 +380,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
                 ]
               : paginationQuery.sortBy === 'deletedAt'
                 ? [orderTerm(entry.deletedAt), orderTerm(entry.id)]
-                : [orderTerm(eventClass.name), orderTerm(person.lastName), orderTerm(person.firstName), orderTerm(entry.id)];
+                : [orderTerm(eventClass.name), orderTerm(sql`coalesce(${person.publicationName}, ${person.lastName})`), orderTerm(entry.id)];
 
   const rows = await db
     .select({
@@ -407,6 +423,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       driverObjectionFlag: person.objectionFlag,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      driverPublicationName: person.publicationName,
       driverEmail: person.email,
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
@@ -516,7 +533,8 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       row.acceptanceStatus === 'accepted' && (paymentStatus === 'paid' || paymentStatus === 'not_required');
     const vehicleLabel = toVehicleLabel(row.vehicleMake, row.vehicleModel, row.startNumberNorm);
     const vehicleThumbUrl = await getVehicleThumbUrl(row.vehicleImageS3Key);
-    const shouldRedactSensitiveFields = redactSensitiveFields || row.driverProcessingRestricted || row.driverObjectionFlag;
+    const identity = standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName });
+    const shouldRedactSensitiveFields = redactSensitiveFields || row.driverProcessingRestricted || row.driverObjectionFlag || identity.identityProtected;
     const {
       invoicePricingSnapshot: _pricingSnapshot,
       invoicePaymentStatus: _invoicePaymentStatus,
@@ -526,12 +544,15 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       codriverWaiverSignedAt: _codriverWaiverSignedAt,
       ...publicRow
     } = row;
-    return {
+    const mappedRow = {
       ...publicRow,
       paymentStatus,
       completionStatus: completed ? 'completed' : 'open',
       vehicleLabel,
       vehicleThumbUrl,
+      displayName: identity.displayName,
+      identityProtected: identity.identityProtected,
+      publicationName: row.driverPublicationName,
       confirmationMailSent: row.confirmationMailSentAt !== null,
       confirmationMailVerified: row.confirmationMailVerifiedAt !== null,
       waiverSigned: {
@@ -558,10 +579,15 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       deletedByUserId: row.deletedBy,
       deletedByDisplay: row.deletedByDisplay ?? (row.deletedBy && row.deletedBy.includes('@') ? row.deletedBy : null),
       deleteReason: row.deleteReason,
-      driverFirstName: shouldRedactSensitiveFields ? null : row.driverFirstName,
-      driverLastName: shouldRedactSensitiveFields ? null : row.driverLastName,
+      driverFirstName: shouldRedactSensitiveFields ? null : identity.firstName,
+      driverLastName: shouldRedactSensitiveFields ? null : identity.lastName,
       driverEmail: shouldRedactSensitiveFields ? null : row.driverEmail
     };
+    return replaceProtectedLegalNamesInValue(mappedRow, identity.identityProtected ? [{
+      firstName: row.driverFirstName,
+      lastName: row.driverLastName,
+      publicationName: row.driverPublicationName
+    }] : []) as typeof mappedRow;
   }));
 
   const nextOffset = offset + mapped.length;
@@ -628,6 +654,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       driverObjectionFlag: person.objectionFlag,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      driverPublicationName: person.publicationName,
       driverEmail: person.email,
       driverBirthdate: person.birthdate,
       driverCountry: person.country,
@@ -679,6 +706,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
             objectionFlag: person.objectionFlag,
             firstName: person.firstName,
             lastName: person.lastName,
+            publicationName: person.publicationName,
             email: person.email,
             birthdate: person.birthdate,
             country: person.country,
@@ -702,6 +730,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       personId: person.id,
       firstName: person.firstName,
       lastName: person.lastName,
+      publicationName: person.publicationName,
       email: person.email,
       birthdate: person.birthdate,
       processingRestricted: person.processingRestricted,
@@ -896,10 +925,17 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     getVehicleThumbUrl(current.vehicleImageS3Key),
     getVehicleThumbUrl(backupVehicle?.imageS3Key ?? null)
   ]);
-  const driverRestricted = redactSensitiveFields || current.driverProcessingRestricted || current.driverObjectionFlag;
-  const codriverRestricted = redactSensitiveFields || Boolean(codriver?.processingRestricted) || Boolean(codriver?.objectionFlag);
+  const driverIdentity = standardPersonIdentity({ firstName: current.driverFirstName, lastName: current.driverLastName, publicationName: current.driverPublicationName });
+  const codriverIdentity = codriver ? standardPersonIdentity(codriver) : null;
+  const driverRestricted = redactSensitiveFields || current.driverProcessingRestricted || current.driverObjectionFlag || driverIdentity.identityProtected;
+  const codriverRestricted = redactSensitiveFields || Boolean(codriver?.processingRestricted) || Boolean(codriver?.objectionFlag) || Boolean(codriverIdentity?.identityProtected);
 
-  return {
+  const protectedIdentitySources: PersonIdentitySource[] = [
+    { firstName: current.driverFirstName, lastName: current.driverLastName, publicationName: current.driverPublicationName },
+    ...(codriver?.publicationName ? [codriver] : []),
+    ...charityCodriverRows.filter((item) => item.publicationName)
+  ].filter((item) => Boolean(item.publicationName));
+  const response = {
     entry: {
       ids: {
         entryId: current.id,
@@ -951,8 +987,11 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       },
       person: {
         driver: {
-          firstName: driverRestricted ? null : current.driverFirstName,
-          lastName: driverRestricted ? null : current.driverLastName,
+          displayName: driverIdentity.displayName,
+          identityProtected: driverIdentity.identityProtected,
+          publicationName: current.driverPublicationName,
+          firstName: driverRestricted ? null : driverIdentity.firstName,
+          lastName: driverRestricted ? null : driverIdentity.lastName,
           email: driverRestricted ? null : current.driverEmail,
           birthdate: driverRestricted ? null : current.driverBirthdate,
           country: driverRestricted ? null : current.driverCountry,
@@ -969,8 +1008,11 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         codriver: codriver
           ? {
               id: codriver.id,
-              firstName: codriverRestricted ? null : codriver.firstName,
-              lastName: codriverRestricted ? null : codriver.lastName,
+              displayName: codriverIdentity!.displayName,
+              identityProtected: codriverIdentity!.identityProtected,
+              publicationName: codriver.publicationName,
+              firstName: codriverRestricted ? null : codriverIdentity!.firstName,
+              lastName: codriverRestricted ? null : codriverIdentity!.lastName,
               email: codriverRestricted ? null : codriver.email,
               birthdate: codriverRestricted ? null : codriver.birthdate,
               country: codriverRestricted ? null : codriver.country,
@@ -986,12 +1028,16 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
             }
           : null,
         charityCodrivers: charityCodriverRows.map((item) => {
-          const restricted = redactSensitiveFields || item.processingRestricted || item.objectionFlag;
+          const identity = standardPersonIdentity(item);
+          const restricted = redactSensitiveFields || item.processingRestricted || item.objectionFlag || identity.identityProtected;
           return {
             registrationId: item.registrationId,
             personId: item.personId,
-            firstName: restricted ? null : item.firstName,
-            lastName: restricted ? null : item.lastName,
+            displayName: identity.displayName,
+            identityProtected: identity.identityProtected,
+            publicationName: item.publicationName,
+            firstName: restricted ? null : identity.firstName,
+            lastName: restricted ? null : identity.lastName,
             email: restricted ? null : item.email,
             birthdate: restricted ? null : item.birthdate,
             createdAt: item.createdAt,
@@ -1026,8 +1072,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
         engineType: current.vehicleEngineType,
         cylinders: current.vehicleCylinders,
         brakes: current.vehicleBrakes,
-        ownerName: current.vehicleOwnerName,
-        vehicleHistory: current.vehicleHistory,
+        ownerName: driverIdentity.identityProtected ? null : current.vehicleOwnerName,
+        vehicleHistory: driverIdentity.identityProtected ? null : current.vehicleHistory,
         imageS3Key: current.vehicleImageS3Key
       },
       backupVehicle: backupVehicle
@@ -1092,6 +1138,7 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       actorDisplay: row.actorUserId ? actorDisplayNames.get(row.actorUserId) ?? null : 'System'
     }))
   };
+  return replaceProtectedLegalNamesInValue(response, protectedIdentitySources) as typeof response;
 };
 
 export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch, actorUserId: string | null) => {
@@ -1235,7 +1282,9 @@ export const patchEntryStatus = async (entryId: string, input: EntryStatusPatch,
     );
   }
 
-  return updated ?? null;
+  return updated
+    ? replaceProtectedLegalNamesInValue(updated, await loadProtectedEntryIdentities(db, entryId)) as typeof updated
+    : null;
 };
 
 export const patchEntryTechStatus = async (entryId: string, input: TechStatusPatch, actorUserId: string | null) => {
@@ -1620,6 +1669,7 @@ export const patchEntryAssignment = async (
         driverEmail: person.email,
         driverFirstName: person.firstName,
         driverLastName: person.lastName,
+        driverPublicationName: person.publicationName,
         processingRestricted: person.processingRestricted,
         objectionFlag: person.objectionFlag,
         deletedAt: entry.deletedAt
@@ -1826,7 +1876,7 @@ export const patchEntryAssignment = async (
         templateData: {
           entryId,
           driverPersonId: existing.driverPersonId,
-          driverName: `${existing.driverFirstName} ${existing.driverLastName}`.trim(),
+          driverName: standardPersonIdentity({ firstName: existing.driverFirstName, lastName: existing.driverLastName, publicationName: existing.driverPublicationName }).displayName,
           eventName: existing.eventName,
           className: targetClass.name,
           startNumber: input.startNumber,
@@ -1896,6 +1946,9 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
     return null;
   }
 
+  const protectedPeople = await loadProtectedEntryIdentities(db, entryId);
+  const protectOutput = <T>(value: T): T => replaceProtectedLegalNamesInValue(value, protectedPeople) as T;
+
   const nextInternalNote = input.internalNote === undefined ? existing.internalNote : input.internalNote;
   const nextDriverNote = input.driverNote === undefined ? existing.driverNote : input.driverNote;
   const nextInspectionNote = input.inspectionNote === undefined ? existing.inspectionNote : input.inspectionNote;
@@ -1904,14 +1957,14 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
     nextDriverNote === existing.driverNote &&
     nextInspectionNote === existing.inspectionNote
   ) {
-    return {
+    return protectOutput({
       id: existing.id,
       eventId: existing.eventId,
       internalNote: existing.internalNote,
       driverNote: existing.driverNote,
       inspectionNote: existing.inspectionNote,
       updatedAt: existing.updatedAt
-    };
+    });
   }
 
   const now = new Date();
@@ -1946,7 +1999,7 @@ export const patchEntryNotes = async (entryId: string, input: EntryNotesPatch, a
     }
   });
 
-  return updated ?? null;
+  return updated ? protectOutput(updated) : null;
 };
 
 export const patchEntryDriverEmail = async (
@@ -1987,7 +2040,7 @@ export const patchEntryDriverEmail = async (
       }
 
       const currentPersonRows = await tx
-        .select({ email: person.email })
+        .select({ email: person.email, publicationName: person.publicationName })
         .from(person)
         .where(eq(person.id, group.driverPersonId))
         .limit(1);
@@ -2053,16 +2106,17 @@ export const patchEntryDriverEmail = async (
         entityType: 'entry',
         entityId: entryId,
         payload: {
-          oldEmail: currentPerson.email,
-          newEmail
+          oldEmail: currentPerson.publicationName ? 'geschützt' : currentPerson.email,
+          newEmail: currentPerson.publicationName ? 'geschützt' : newEmail
         }
       });
 
       return {
         entryId,
         personId: group.driverPersonId,
-        oldEmail: currentPerson.email,
-        newEmail
+        oldEmail: currentPerson.publicationName ? null : currentPerson.email,
+        newEmail: currentPerson.publicationName ? null : newEmail,
+        identityProtected: Boolean(currentPerson.publicationName)
       };
     });
   } catch (error) {
@@ -2577,12 +2631,13 @@ export const deleteEntry = async (
     return null;
   }
 
-  return {
+  const response = {
     deletedEntryId: result.deletedEntryId,
     deletedReason: result.deletedReason,
     deletedByUserId: result.deletedByUserId,
     deletedByDisplay: result.deletedByDisplay
   };
+  return replaceProtectedLegalNamesInValue(response, await loadProtectedEntryIdentities(db, entryId)) as typeof response;
 };
 
 export const revokeCharityCodriver = async (
@@ -2621,7 +2676,7 @@ export const revokeCharityCodriver = async (
     entityId: updated.id,
     payload: { entryId, personId: updated.personId, reason: input.reason }
   });
-  return updated;
+  return replaceProtectedLegalNamesInValue(updated, await loadProtectedEntryIdentities(db, entryId)) as typeof updated;
 };
 
 export const restoreEntry = async (entryId: string, actorUserId: string | null) => {

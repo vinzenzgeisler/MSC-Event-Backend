@@ -16,6 +16,7 @@ import {
   vehicle
 } from '../db/schema';
 import { renderSignedWaiverEvidencePdf } from '../docs/pdf';
+import { standardPersonIdentity } from '../domain/personIdentity';
 import { uploadFile, uploadPdf } from '../docs/storage';
 import { computeConsentTextHash, getLegalTexts, type LegalUiLocale } from './publicLegalTextsSource';
 import {
@@ -77,6 +78,80 @@ export type ParticipantDraft = z.infer<typeof draftSchema>;
 type Prechecks = z.infer<typeof approveSchema>;
 type CompleteInput = z.infer<typeof completeSchema>;
 
+const projectParticipantSession = (session: any) => {
+  const draft = session?.draftPayload as (ParticipantDraft & { publicationName?: string | null }) | null | undefined;
+  if (!session || !draft?.publicationName) return session;
+  const identity = standardPersonIdentity(draft);
+  return {
+    ...session,
+    draftPayload: {
+      displayName: identity.displayName,
+      identityProtected: true,
+      firstName: null,
+      lastName: null,
+      birthdate: null,
+      country: null,
+      street: null,
+      zip: null,
+      city: null,
+      email: null,
+      phone: null,
+      emergencyContactFirstName: null,
+      emergencyContactLastName: null,
+      emergencyContactPhone: null,
+      motorsportHistory: null,
+      guardianFullName: null,
+      guardianEmail: null,
+      guardianPhone: null,
+      guardianRelationship: null
+    }
+  };
+};
+
+const projectParticipantSessionWithLiveIdentity = async (db: any, session: any) => {
+  if (!session) return session;
+  let projected = projectParticipantSession(session);
+  const driverId = session.sessionPayload?.driver?.id ?? session.driverPersonId;
+  if (typeof driverId === 'string') {
+    const [liveDriver] = await db.select({
+      firstName: person.firstName,
+      lastName: person.lastName,
+      publicationName: person.publicationName
+    }).from(person).where(eq(person.id, driverId)).limit(1);
+    if (liveDriver?.publicationName) {
+      const identity = standardPersonIdentity(liveDriver);
+      projected = {
+        ...projected,
+        sessionPayload: {
+          ...projected.sessionPayload,
+          driver: {
+            ...projected.sessionPayload?.driver,
+            displayName: identity.displayName,
+            identityProtected: true,
+            firstName: null,
+            lastName: null,
+            email: null
+          }
+        }
+      };
+    }
+  }
+  const draftEmail = typeof session.draftPayload?.email === 'string' ? session.draftPayload.email.trim().toLowerCase() : null;
+  if (draftEmail) {
+    const [liveParticipant] = await db.select({ publicationName: person.publicationName })
+      .from(person)
+      .where(sql`lower(${person.email}) = ${draftEmail}`)
+      .limit(1);
+    if (liveParticipant?.publicationName) {
+      projected = projectParticipantSession({
+        ...projected,
+        draftPayload: { ...session.draftPayload, publicationName: liveParticipant.publicationName }
+      });
+    }
+  }
+  return projected;
+};
+
 const ageAt = (birthdate: string, startsAt: string) => {
   const born = new Date(`${birthdate}T12:00:00Z`);
   const eventDate = new Date(`${startsAt}T12:00:00Z`);
@@ -120,6 +195,7 @@ const loadWorkflowContext = async (entryIds: string[]) => {
       eventEndsAt: event.endsAt,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      driverPublicationName: person.publicationName,
       driverEmail: person.email,
       vehicleId: vehicle.id,
       vehicleType: vehicle.vehicleType,
@@ -156,6 +232,11 @@ export const createParticipantTerminalSession = async (
     if (context.rows.some((row) => row.codriverPersonId)) throw new Error('CODRIVER_ALREADY_ASSIGNED');
   }
   const now = new Date();
+  const driverIdentity = standardPersonIdentity({
+    firstName: context.first.driverFirstName,
+    lastName: context.first.driverLastName,
+    publicationName: context.first.driverPublicationName
+  });
   await db.update(signingSession).set({ status: 'cancelled', workflowStage: 'cancelled', draftPayload: null, updatedAt: now })
     .where(and(eq(signingSession.deviceSessionId, input.deviceSessionId), sql`${signingSession.status} in ('pending', 'displayed')`));
   const [created] = await db.insert(signingSession).values({
@@ -169,7 +250,14 @@ export const createParticipantTerminalSession = async (
     sessionPayload: {
       workflowType: input.workflowType,
       event: { id: context.first.eventId, name: context.first.eventName, startsAt: String(context.first.eventStartsAt), endsAt: String(context.first.eventEndsAt) },
-      driver: { id: context.first.driverPersonId, firstName: context.first.driverFirstName, lastName: context.first.driverLastName, email: context.first.driverEmail },
+      driver: {
+        id: context.first.driverPersonId,
+        displayName: driverIdentity.displayName,
+        identityProtected: driverIdentity.identityProtected,
+        firstName: driverIdentity.firstName,
+        lastName: driverIdentity.lastName,
+        email: driverIdentity.identityProtected ? null : context.first.driverEmail
+      },
       entries: context.rows.map((row) => ({ id: row.entryId, className: row.className, startNumber: row.startNumber }))
     },
     precheckPayload: {},
@@ -181,7 +269,7 @@ export const createParticipantTerminalSession = async (
     updatedAt: now
   }).returning();
   await writeAuditLog(db as never, { eventId: context.first.eventId, actorUserId, action: 'terminal_participant_session_started', entityType: 'signing_session', entityId: created.id, payload: { workflowType: input.workflowType, entryIds: input.entryIds, deviceSessionId: input.deviceSessionId } });
-  return created;
+  return projectParticipantSessionWithLiveIdentity(db, created);
 };
 
 export const submitParticipantDraft = async (sessionId: string, draft: ParticipantDraft, deviceToken: string) => {
@@ -192,18 +280,25 @@ export const submitParticipantDraft = async (sessionId: string, draft: Participa
   if (!session) return null;
   if (!['collecting_data', 'awaiting_operator_approval'].includes(session.workflowStage) || !['pending', 'displayed'].includes(session.status)) throw new Error('TERMINAL_SESSION_NOT_EDITABLE');
   const context = session.sessionPayload as any;
-  if (draft.email === String(context.driver?.email ?? '').toLowerCase()) throw new Error('CODRIVER_EMAIL_MUST_DIFFER');
-  if (`${draft.firstName} ${draft.lastName}`.trim().toLowerCase() === `${context.driver?.firstName ?? ''} ${context.driver?.lastName ?? ''}`.trim().toLowerCase()) throw new Error('CODRIVER_NAME_MUST_DIFFER');
+  const liveContext = await loadWorkflowContext((context.entries as Array<{ id: string }>).map((item) => item.id));
+  if (draft.email === String(liveContext.first.driverEmail ?? '').toLowerCase()) throw new Error('CODRIVER_EMAIL_MUST_DIFFER');
+  if (`${draft.firstName} ${draft.lastName}`.trim().toLowerCase() === `${liveContext.first.driverFirstName} ${liveContext.first.driverLastName}`.trim().toLowerCase()) throw new Error('CODRIVER_NAME_MUST_DIFFER');
   const age = ageAt(draft.birthdate, context.event.startsAt);
   if (age < 6 || age > 100) throw new Error('BIRTHDATE_OUT_OF_RANGE');
   if (age < 18 && (!draft.guardianFullName || !draft.guardianEmail || !draft.guardianPhone || !draft.guardianRelationship)) throw new Error('GUARDIAN_REQUIRED');
+  const [knownPerson] = await db
+    .select({ publicationName: person.publicationName })
+    .from(person)
+    .where(sql`lower(${person.email}) = ${draft.email}`)
+    .limit(1);
+  const storedDraft = { ...draft, publicationName: knownPerson?.publicationName ?? null };
   const [updated] = await db.update(signingSession).set({
-    draftPayload: draft,
+    draftPayload: storedDraft,
     workflowStage: 'awaiting_operator_approval',
     submittedAt: new Date(),
     updatedAt: new Date()
   }).where(eq(signingSession.id, sessionId)).returning();
-  return { ...updated, requirements: { isMinor: age < 18, requiresMedicalCertificate: session.workflowType === 'regular_codriver_registration' && age >= 70 } };
+  return { ...await projectParticipantSessionWithLiveIdentity(db, updated), requirements: { isMinor: age < 18, requiresMedicalCertificate: session.workflowType === 'regular_codriver_registration' && age >= 70 } };
 };
 
 export const approveParticipantTerminalSession = async (sessionId: string, prechecks: Prechecks, actorUserId: string | null) => {
@@ -235,7 +330,7 @@ export const approveParticipantTerminalSession = async (sessionId: string, prech
     updatedAt: new Date()
   }).where(eq(signingSession.id, sessionId)).returning();
   await writeAuditLog(db as never, { eventId: session.eventId, actorUserId, action: 'terminal_participant_session_approved', entityType: 'signing_session', entityId: sessionId, payload: { workflowType: session.workflowType } });
-  return updated;
+  return projectParticipantSessionWithLiveIdentity(db, updated);
 };
 
 export const returnParticipantSessionToForm = async (sessionId: string, actorUserId: string | null) => {
@@ -243,7 +338,7 @@ export const returnParticipantSessionToForm = async (sessionId: string, actorUse
   const [updated] = await db.update(signingSession).set({ workflowStage: 'collecting_data', approvedAt: null, precheckPayload: {}, updatedAt: new Date() })
     .where(and(eq(signingSession.id, sessionId), sql`${signingSession.status} in ('pending', 'displayed')`)).returning();
   if (updated) await writeAuditLog(db as never, { eventId: updated.eventId, actorUserId, action: 'terminal_participant_session_returned', entityType: 'signing_session', entityId: sessionId, payload: {} });
-  return updated ?? null;
+  return projectParticipantSessionWithLiveIdentity(db, updated ?? null);
 };
 
 export const completeParticipantTerminalSession = async (sessionId: string, input: CompleteInput, deviceToken: string) => {
@@ -252,7 +347,7 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   const db = await getDb();
   const [session] = await db.select().from(signingSession).where(and(eq(signingSession.id, sessionId), eq(signingSession.deviceSessionId, device.id))).limit(1);
   if (!session) return null;
-  if (session.status === 'completed') return session;
+  if (session.status === 'completed') return projectParticipantSessionWithLiveIdentity(db, session);
   if (session.workflowStage !== 'ready_to_sign' || !session.draftPayload || session.expiresAt <= new Date()) throw new Error('TERMINAL_SESSION_NOT_READY');
   const draft = session.draftPayload as ParticipantDraft;
   const context = session.sessionPayload as any;
@@ -281,7 +376,16 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   const payload = {
     ...context,
     id: `terminal-case:${session.id}`,
-    driver: { ...context.driver, birthdate: null, phone: null, country: null },
+    driver: {
+      ...context.driver,
+      firstName: liveContext.first.driverFirstName,
+      lastName: liveContext.first.driverLastName,
+      displayName: undefined,
+      identityProtected: undefined,
+      birthdate: null,
+      phone: null,
+      country: null
+    },
     signer: { id: participantId, firstName: draft.firstName, lastName: draft.lastName, birthdate: draft.birthdate, email: draft.email, phone: draft.phone, country: draft.country, role: 'codriver', label: session.workflowType === 'charity_codriver_registration' ? 'Charity-Beifahrer' : 'Beifahrer' },
     entries: context.entries.map((item: any) => ({ ...item, orgaCode: null, codriver: null, vehicles: [] })),
     status: 'open',
@@ -334,14 +438,19 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
 
   try {
     const terminalSigner = session.signerPayload as { type?: string; guardianName?: string | null };
+    const participantIdentity = standardPersonIdentity({
+      firstName: draft.firstName,
+      lastName: draft.lastName,
+      publicationName: existingPerson?.publicationName
+    });
     await queueWaiverSignedMail(db, {
       toEmail: terminalSigner.type === 'guardian' && draft.guardianEmail?.trim()
         ? draft.guardianEmail.trim().toLowerCase()
         : draft.email,
-      driverName: `${draft.firstName} ${draft.lastName}`,
+      driverName: participantIdentity.displayName,
       signerName: terminalSigner.type === 'guardian' && terminalSigner.guardianName?.trim()
         ? terminalSigner.guardianName.trim()
-        : `${draft.firstName} ${draft.lastName}`,
+        : participantIdentity.displayName,
       signerRole: terminalSigner.type === 'guardian'
         ? 'Erziehungsberechtigte Person'
         : session.workflowType === 'charity_codriver_registration' ? 'Charity-Beifahrer' : 'Beifahrer',
@@ -356,7 +465,8 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
       signingSessionId: sessionId,
       queueAudit: {
         actorUserId: session.operatorUserId,
-        entityId: sessionId
+        entityId: sessionId,
+        redactRecipient: participantIdentity.identityProtected
       }
     });
   } catch (error) {
@@ -366,7 +476,7 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
     }).where(eq(signingSession.id, sessionId));
   }
 
-  return updatedSession;
+  return projectParticipantSessionWithLiveIdentity(db, updatedSession);
 };
 
 export const validateCreateParticipantTerminalSession = (payload: unknown) => createSessionSchema.parse(payload);

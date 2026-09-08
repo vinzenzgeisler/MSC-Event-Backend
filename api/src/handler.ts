@@ -94,6 +94,10 @@ import {
   validateListEntriesQuery
 } from './routes/adminEntries';
 import {
+  patchPersonPublicationName,
+  validatePublicationNamePatchInput
+} from './routes/adminPersonIdentity';
+import {
   getPricingRules,
   listInvoicePayments,
   listInvoices,
@@ -2956,6 +2960,28 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  const personPublicationNameMatch = path.match(/^\/admin\/persons\/([^/]+)\/publication-name$/);
+  if (method === 'PATCH' && personPublicationNameMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.publication_name.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const input = validatePublicationNamePatchInput(parseJsonBody(event));
+      const result = await patchPersonPublicationName(personPublicationNameMatch[1], input, auth.sub);
+      return result
+        ? json(200, { ok: true, ...result })
+        : errorJson(404, 'Person not found', undefined, 'PERSON_NOT_FOUND');
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'PUBLICATION_NAME_EQUALS_LEGAL_NAME') {
+        return errorJson(409, 'Publication name must differ from legal name', undefined, error.message);
+      }
+      return errorJson(500, 'Update publication name failed');
+    }
+  }
+
   if (method === 'GET' && path === '/admin/entries/deleted') {
     const auth = getAuthContext(event);
     if (!hasPermissionOrAutomation(auth, 'entries.read')) {
@@ -3870,6 +3896,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'EXPORT_NOT_READY') {
         return errorJson(409, 'Export not ready');
       }
+      if (error instanceof Error && error.message === 'EXPORT_INVALIDATED') {
+        return errorJson(409, 'Export invalidated after publication name change', undefined, 'EXPORT_INVALIDATED');
+      }
       return errorJson(500, 'Get export download failed');
     }
   }
@@ -4156,6 +4185,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     } catch (error) {
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'EXPORT_INVALIDATED') {
+        return errorJson(409, 'Export invalidated after publication name change', undefined, 'EXPORT_INVALIDATED');
+      }
       console.error('stamp_card_export_failed', {
         name: error instanceof Error ? error.name : 'UnknownError',
         message: error instanceof Error ? error.message : String(error)

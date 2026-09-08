@@ -1,13 +1,11 @@
 export type ProgrammheftRow = {
   startNumber: string | null;
   className: string;
-  driverFirstName: string;
-  driverLastName: string;
+  driverDisplayName: string;
   driverZip: string | null;
   driverCity: string | null;
   driverCountry: string | null;
-  codriverFirstName: string | null;
-  codriverLastName: string | null;
+  codriverDisplayName: string | null;
   vehicleMake: string | null;
   vehicleModel: string | null;
   vehicleYear: number | null;
@@ -18,8 +16,7 @@ export type ProgrammheftCellValue = string | number;
 
 export const NORMAL_CLASS_HEADERS = [
   'Start-Nr.',
-  'Vorname',
-  'Nachname',
+  'Fahrer',
   'PLZ',
   'Ort',
   'Fahrzeug',
@@ -32,9 +29,7 @@ export const NORMAL_CLASS_HEADERS = [
 export const CLASS_SEVEN_HEADERS = [
   'Start-Nr.',
   'Fahrer',
-  '',
   'Beifahr.',
-  '',
   'PLZ',
   'Ort',
   'Fahrzeug',
@@ -46,8 +41,7 @@ export const CLASS_SEVEN_HEADERS = [
 
 export const OVERALL_HEADERS = [
   'Startnummer',
-  'Fahrer Vorname',
-  'Fahrer Nachname',
+  'Fahrer',
   'Fahrer PLZ',
   'Fahrer Ort',
   'Fabrikat',
@@ -103,24 +97,20 @@ export const getClassRowValues = (row: ProgrammheftRow): ProgrammheftCellValue[]
   return isClassSeven(row.className)
     ? [
         row.startNumber ?? '',
-        normalizeProgrammheftName(row.driverFirstName),
-        normalizeProgrammheftName(row.driverLastName),
-        normalizeProgrammheftName(row.codriverFirstName),
-        normalizeProgrammheftName(row.codriverLastName),
+        normalizeProgrammheftName(row.driverDisplayName),
+        normalizeProgrammheftName(row.codriverDisplayName),
         ...commonTail
       ]
     : [
         row.startNumber ?? '',
-        normalizeProgrammheftName(row.driverFirstName),
-        normalizeProgrammheftName(row.driverLastName),
+        normalizeProgrammheftName(row.driverDisplayName),
         ...commonTail
       ];
 };
 
 export const getOverallRowValues = (row: ProgrammheftRow): ProgrammheftCellValue[] => [
   row.startNumber ?? '',
-  normalizeProgrammheftName(row.driverFirstName),
-  normalizeProgrammheftName(row.driverLastName),
+  normalizeProgrammheftName(row.driverDisplayName),
   row.driverZip ?? '',
   normalizeProgrammheftCity(row.driverCity),
   row.vehicleMake ?? '',

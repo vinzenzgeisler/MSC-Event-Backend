@@ -167,6 +167,10 @@ export const handler = async () => {
      set "email" = null,
          "first_name" = 'Anonymisiert',
          "last_name" = 'Teilnehmer',
+         "publication_name" = null,
+         "publication_name_version" = "publication_name_version" + case when "publication_name" is null then 0 else 1 end,
+         "publication_name_updated_at" = null,
+         "publication_name_updated_by" = null,
          "birthdate" = null,
          "nationality" = null,
          "street" = null,
@@ -196,6 +200,7 @@ export const handler = async () => {
      )
        and (
          "email" is not null
+         or "publication_name" is not null
          or "birthdate" is not null
          or "nationality" is not null
          or "street" is not null

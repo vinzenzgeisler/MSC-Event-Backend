@@ -243,7 +243,7 @@ export class ApiStack extends Stack {
       );
       apiHandler.addToRolePolicy(
         new iam.PolicyStatement({
-          actions: ['s3:GetObject', 's3:PutObject'],
+          actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
           resources: [`${bucket.bucketArn}/*`]
         })
       );
@@ -1297,6 +1297,13 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/inspection/entries/{id}/history',
       methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/persons/{id}/publication-name',
+      methods: [apigwv2.HttpMethod.PATCH],
       integration,
       authorizer: jwtAuthorizer
     });

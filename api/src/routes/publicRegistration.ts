@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
+import { standardPersonIdentity } from '../domain/personIdentity';
 import {
   classPricingRule,
   entry,
@@ -1135,7 +1136,17 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
       };
     });
 
-    const driverName = `${input.driver.firstName} ${input.driver.lastName}`.trim();
+    const [storedDriver] = await db
+      .select({ firstName: person.firstName, lastName: person.lastName, publicationName: person.publicationName })
+      .from(person)
+      .where(sql`lower(${person.email}) = ${input.driver.email.toLowerCase()}`)
+      .limit(1);
+    const driverIdentity = standardPersonIdentity(storedDriver ?? {
+      firstName: input.driver.firstName,
+      lastName: input.driver.lastName,
+      publicationName: null
+    });
+    const driverName = driverIdentity.displayName;
 
     if (created.replay && created.response.confirmationMailSent) {
       try {
@@ -1218,7 +1229,7 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
         groupId: created.response.groupId,
         eventName: created.eventName ?? 'Unbekannte Veranstaltung',
         driverName,
-        driverEmail: input.driver.email
+        driverEmail: driverIdentity.identityProtected ? 'geschützt' : input.driver.email
       });
     } catch {
       // Admin alert is informational only and must not block registration completion.
@@ -1290,7 +1301,8 @@ const queueCodriverInfoMails = async (
       id: person.id,
       email: person.email,
       firstName: person.firstName,
-      lastName: person.lastName
+      lastName: person.lastName,
+      publicationName: person.publicationName
     })
     .from(person)
     .where(inArray(person.id, codriverIds));
@@ -1300,7 +1312,7 @@ const queueCodriverInfoMails = async (
       row.id,
       {
         email: row.email,
-        codriverName: `${row.firstName ?? ''} ${row.lastName ?? ''}`.trim() || 'Beifahrer'
+        codriverName: standardPersonIdentity(row).displayName
       }
     ])
   );

@@ -7097,8 +7097,13 @@
                       "nullable": true
                     },
                     "newEmail": {
-                      "type": "string",
-                      "format": "email"
+                      "oneOf": [
+                        { "type": "string", "format": "email" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "identityProtected": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -7106,7 +7111,8 @@
                     "entryId",
                     "personId",
                     "oldEmail",
-                    "newEmail"
+                    "newEmail",
+                    "identityProtected"
                   ]
                 }
               }
@@ -7350,6 +7356,35 @@
               }
             }
           }
+        }
+      }
+    },
+    "/admin/persons/{id}/publication-name": {
+      "patch": {
+        "operationId": "patch_admin_person_publication_name",
+        "tags": ["admin"],
+        "summary": "Set, change or explicitly remove a person's publication name",
+        "description": "Requires entries.publication_name.write. Protected identities are represented by displayName in every non-official output. Removing protection requires confirmation and a reason.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "format": "uuid" }
+        }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PublicationNamePatch" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Publication identity updated and stale exports invalidated",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PublicationNamePatchResponse" } } }
+          },
+          "400": { "description": "Validation failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "403": { "description": "Missing entries.publication_name.write", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "404": { "description": "Person not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "409": { "description": "Publication name equals legal name", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
         }
       }
     },
@@ -9985,6 +10020,45 @@
           "history"
         ]
       },
+      "PublicationNamePatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["publicationName"],
+        "properties": {
+          "publicationName": {
+            "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 100 }, { "type": "null" }]
+          },
+          "confirmLegalNameExposure": { "type": "boolean", "enum": [true] },
+          "reason": { "type": "string", "minLength": 5, "maxLength": 500 }
+        }
+      },
+      "PublicationNamePatchResponse": {
+        "type": "object",
+        "required": ["ok", "person", "invalidation"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "person": {
+            "type": "object",
+            "required": ["id", "displayName", "identityProtected", "publicationName", "publicationNameVersion"],
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "displayName": { "type": "string" },
+              "identityProtected": { "type": "boolean" },
+              "publicationName": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+              "publicationNameVersion": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "invalidation": {
+            "type": "object",
+            "required": ["invalidatedExportCount", "deletedObjectCount", "cleanupPendingCount"],
+            "properties": {
+              "invalidatedExportCount": { "type": "integer", "minimum": 0 },
+              "deletedObjectCount": { "type": "integer", "minimum": 0 },
+              "cleanupPendingCount": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      },
       "AdminEntry": {
         "type": "object",
         "properties": {
@@ -10085,6 +10159,16 @@
               }
             ],
             "description": "Null when sensitive driver data is redacted."
+          },
+          "displayName": {
+            "type": "string",
+            "description": "Publication name for a protected identity; otherwise the legal full name."
+          },
+          "identityProtected": {
+            "type": "boolean"
+          },
+          "publicationName": {
+            "oneOf": [{ "type": "string" }, { "type": "null" }]
           },
           "driverLastName": {
             "oneOf": [

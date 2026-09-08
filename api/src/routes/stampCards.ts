@@ -4,9 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { entry, entryCharityCodriver, event, eventClass, person } from '../db/schema';
+import { entry, entryCharityCodriver, event, eventClass, exportJob, exportJobPerson, person } from '../db/schema';
 import { buildQrCodeMatrix, type QrCodeMatrix } from '../docs/girocode';
-import { getAssetObjectBuffer, getPresignedDownloadUrl, uploadPdf } from '../docs/storage';
+import { deleteDocumentObject, getAssetObjectBuffer, getPresignedDownloadUrl, uploadPdf } from '../docs/storage';
+import { standardPersonIdentity } from '../domain/personIdentity';
 
 // Lambda uses the standalone build so rendering never depends on host fonts.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -35,6 +36,8 @@ export type StampCard = {
   personName: string;
   driverNames?: string[];
   personId?: string;
+  publicationNameVersion?: number;
+  relatedPersonSnapshots?: Array<{ personId: string; publicationNameVersion: number }>;
   registrationId?: string;
   starts: CardStart[];
 };
@@ -85,9 +88,6 @@ const loadStampCardAssets = async (): Promise<StampCardRenderAssets> => {
   return resolved;
 };
 
-const nameOf = (firstName: string | null, lastName: string | null) =>
-  `${firstName ?? ''} ${lastName ?? ''}`.trim() || 'Unbekannt';
-
 const naturalCompare = (a: string, b: string) =>
   a.localeCompare(b, 'de', { numeric: true, sensitivity: 'base' });
 
@@ -124,9 +124,13 @@ const resolveCards = async (input: StampCardExportInput): Promise<{ cards: Stamp
       driverPersonId: entry.driverPersonId,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      driverPublicationName: person.publicationName,
+      driverPublicationNameVersion: person.publicationNameVersion,
       codriverPersonId: entry.codriverPersonId,
       codriverFirstName: codriverPerson.firstName,
       codriverLastName: codriverPerson.lastName,
+      codriverPublicationName: codriverPerson.publicationName,
+      codriverPublicationNameVersion: codriverPerson.publicationNameVersion,
       className: eventClass.name,
       startNumber: entry.startNumberNorm
     })
@@ -145,7 +149,8 @@ const resolveCards = async (input: StampCardExportInput): Promise<{ cards: Stamp
       key: driverKey,
       kind: 'driver' as const,
       personId: row.driverPersonId,
-      personName: nameOf(row.driverFirstName, row.driverLastName),
+      personName: standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName }).displayName,
+      publicationNameVersion: row.driverPublicationNameVersion,
       starts: []
     };
     mergeStart(driver, start);
@@ -157,12 +162,14 @@ const resolveCards = async (input: StampCardExportInput): Promise<{ cards: Stamp
         key,
         kind: 'regular_codriver' as const,
         personId: row.codriverPersonId,
-        personName: nameOf(row.codriverFirstName, row.codriverLastName),
+        personName: standardPersonIdentity({ firstName: row.codriverFirstName, lastName: row.codriverLastName, publicationName: row.codriverPublicationName }).displayName,
+        publicationNameVersion: row.codriverPublicationNameVersion ?? 0,
+        relatedPersonSnapshots: [{ personId: row.driverPersonId, publicationNameVersion: row.driverPublicationNameVersion }],
         driverNames: [],
         starts: []
       };
       mergeStart(codriver, start);
-      mergeDriverName(codriver, nameOf(row.driverFirstName, row.driverLastName));
+      mergeDriverName(codriver, standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName }).displayName);
       cards.set(key, codriver);
     }
   }
@@ -181,10 +188,16 @@ const resolveCards = async (input: StampCardExportInput): Promise<{ cards: Stamp
       ? await db
           .select({
             registrationId: entryCharityCodriver.id,
+            personId: entryCharityCodriver.personId,
             personFirstName: charityPerson.firstName,
             personLastName: charityPerson.lastName,
+            personPublicationName: charityPerson.publicationName,
+            personPublicationNameVersion: charityPerson.publicationNameVersion,
             driverFirstName: driverPerson.firstName,
             driverLastName: driverPerson.lastName,
+            driverPublicationName: driverPerson.publicationName,
+            driverPersonId: driverPerson.id,
+            driverPublicationNameVersion: driverPerson.publicationNameVersion,
             className: eventClass.name,
             startNumber: entry.startNumberNorm
           })
@@ -204,8 +217,11 @@ const resolveCards = async (input: StampCardExportInput): Promise<{ cards: Stamp
       key: `charity:${row.registrationId}`,
       kind: 'charity_codriver',
       registrationId: row.registrationId,
-      personName: nameOf(row.personFirstName, row.personLastName),
-      driverNames: [nameOf(row.driverFirstName, row.driverLastName)],
+      personId: row.personId,
+      publicationNameVersion: row.personPublicationNameVersion,
+      relatedPersonSnapshots: [{ personId: row.driverPersonId, publicationNameVersion: row.driverPublicationNameVersion }],
+      personName: standardPersonIdentity({ firstName: row.personFirstName, lastName: row.personLastName, publicationName: row.personPublicationName }).displayName,
+      driverNames: [standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName }).displayName],
       starts: [{ className: row.className, startNumber: row.startNumber ?? '-' }]
     }]));
     resolved = subjects.flatMap((subject) => {
@@ -583,30 +599,76 @@ export const renderStampCardPdf = ({ cards, eventId, startSlot, year, accentColo
 export const createStampCardExport = async (input: StampCardExportInput, actorUserId: string | null) => {
   const resolved = await resolveCards(input);
   if (resolved.cards.length === 0) throw new Error('STAMP_CARD_NO_SUBJECTS');
-  const assets = await loadStampCardAssets();
-  const data = await renderStampCardPdf({
-    cards: resolved.cards,
-    eventId: input.eventId,
-    startSlot: input.startSlot,
-    year: resolved.year,
-    accentColor: resolved.accentColor,
-    assets
-  });
-  const pageCount = Math.ceil((input.startSlot - 1 + resolved.cards.length) / 10);
-  const filename = `stempelkarten-${resolved.year}.pdf`;
-  const s3Key = `exports/${input.eventId}/stamp-cards/${randomUUID()}.pdf`;
-  await uploadPdf(s3Key, data);
-  const downloadUrl = await getPresignedDownloadUrl(s3Key, 300, filename);
   const db = await getDb();
-  await writeAuditLog(db as never, {
+  const [job] = await db.insert(exportJob).values({
     eventId: input.eventId,
-    actorUserId,
-    action: 'stamp_cards_exported',
-    entityType: 'event',
-    entityId: input.eventId,
-    payload: { cardCount: resolved.cards.length, pageCount, startSlot: input.startSlot, selectionType: input.selection.type }
-  });
-  return { downloadUrl, filename, cardCount: resolved.cards.length, pageCount, year: resolved.year };
+    type: 'stamp_cards_pdf',
+    filters: input,
+    status: 'processing',
+    createdBy: actorUserId,
+    createdAt: new Date()
+  }).returning();
+  if (!job) throw new Error('EXPORT_JOB_CREATE_FAILED');
+  let unfinalizedS3Key: string | null = null;
+  try {
+    const people = Array.from(new Map(resolved.cards.flatMap((card) => [
+      ...(card.personId && card.publicationNameVersion !== undefined
+        ? [{ personId: card.personId, publicationNameVersion: card.publicationNameVersion }]
+        : []),
+      ...(card.relatedPersonSnapshots ?? [])
+    ]).map((snapshot) => [snapshot.personId, { exportJobId: job.id, ...snapshot }])).values());
+    if (people.length > 0) await db.insert(exportJobPerson).values(people).onConflictDoNothing();
+    const assets = await loadStampCardAssets();
+    const data = await renderStampCardPdf({
+      cards: resolved.cards,
+      eventId: input.eventId,
+      startSlot: input.startSlot,
+      year: resolved.year,
+      accentColor: resolved.accentColor,
+      assets
+    });
+    const pageCount = Math.ceil((input.startSlot - 1 + resolved.cards.length) / 10);
+    const filename = `stempelkarten-${resolved.year}.pdf`;
+    const s3Key = `exports/${input.eventId}/stamp-cards/v2/${randomUUID()}.pdf`;
+    await uploadPdf(s3Key, data);
+    unfinalizedS3Key = s3Key;
+    const finalized = await db.transaction(async (tx) => {
+      const snapshots = await tx.select({ expected: exportJobPerson.publicationNameVersion, current: person.publicationNameVersion })
+        .from(exportJobPerson)
+        .innerJoin(person, eq(exportJobPerson.personId, person.id))
+        .where(eq(exportJobPerson.exportJobId, job.id))
+        .for('update');
+      if (snapshots.some((item) => item.expected !== item.current)) return null;
+      const [updated] = await tx.update(exportJob)
+        .set({ status: 'succeeded', s3Key, completedAt: new Date() })
+        .where(and(eq(exportJob.id, job.id), eq(exportJob.status, 'processing')))
+        .returning();
+      return updated ?? null;
+    });
+    if (!finalized) throw new Error('EXPORT_INVALIDATED');
+    unfinalizedS3Key = null;
+    const downloadUrl = await getPresignedDownloadUrl(s3Key, 300, filename);
+    await writeAuditLog(db as never, {
+      eventId: input.eventId,
+      actorUserId,
+      action: 'stamp_cards_exported',
+      entityType: 'event',
+      entityId: input.eventId,
+      payload: { cardCount: resolved.cards.length, pageCount, startSlot: input.startSlot, selectionType: input.selection.type }
+    });
+    return { downloadUrl, filename, cardCount: resolved.cards.length, pageCount, year: resolved.year };
+  } catch (error) {
+    if (unfinalizedS3Key) {
+      await deleteDocumentObject(unfinalizedS3Key).catch(() => undefined);
+    }
+    const message = error instanceof Error ? error.message : 'Stamp-card export failed';
+    await db.update(exportJob).set({
+      status: message === 'EXPORT_INVALIDATED' ? 'invalidated' : 'failed',
+      errorLast: message,
+      completedAt: new Date()
+    }).where(and(eq(exportJob.id, job.id), eq(exportJob.status, 'processing')));
+    throw error;
+  }
 };
 
 export const validateStampCardExportInput = (payload: unknown) => exportSchema.parse(payload);

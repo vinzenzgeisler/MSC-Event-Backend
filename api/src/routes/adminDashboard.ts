@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/client';
+import { standardPersonIdentity } from '../domain/personIdentity';
 import { queueLifecycleMail } from './adminMail';
 import { emailOutbox, entry, event, eventClass, exportJob, geoLocationCache, invoice, person, vehicle } from '../db/schema';
 
@@ -142,8 +143,8 @@ export const getDashboardWarnings = async (query: DashboardWarningsQuery) => {
              to_char(e.updated_at at time zone 'Europe/Berlin', 'YYYY-MM-DD HH24:MI:SS') as "updatedAtBerlin",
              e.start_number_norm as "startNumber",
              c.name as "className",
-             trim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '')) as "driverName",
-             left(coalesce(p.email, ''), 2) || '***@' || split_part(coalesce(p.email, ''), '@', 2) as "emailMasked"
+             coalesce(p.publication_name, trim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, ''))) as "driverName",
+             case when p.publication_name is not null then 'geschützt' else left(coalesce(p.email, ''), 2) || '***@' || split_part(coalesce(p.email, ''), '@', 2) end as "emailMasked"
       from entry e
       join event ev on ev.id = e.event_id
       join class c on c.id = e.class_id
@@ -544,6 +545,7 @@ export const getDashboardSummary = async (eventId: string) => {
         entryId: entry.id,
         driverFirstName: person.firstName,
         driverLastName: person.lastName,
+        driverPublicationName: person.publicationName,
         className: eventClass.name,
         createdAt: entry.createdAt
       })
@@ -558,6 +560,7 @@ export const getDashboardSummary = async (eventId: string) => {
         driverPersonId: entry.driverPersonId,
         driverFirstName: person.firstName,
         driverLastName: person.lastName,
+        driverPublicationName: person.publicationName,
         className: eventClass.name,
         birthdate: person.birthdate
       })
@@ -604,7 +607,7 @@ export const getDashboardSummary = async (eventId: string) => {
     }
     ageRowsByDriver.set(row.driverPersonId, {
       age,
-      driverLabel: `${row.driverFirstName} ${row.driverLastName}`.trim(),
+      driverLabel: standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName }).displayName,
       className: row.className
     });
   });
@@ -651,7 +654,7 @@ export const getDashboardSummary = async (eventId: string) => {
     classDistribution,
     recentEntries: recentEntryRows.map((row) => ({
       entryId: row.entryId,
-      driverName: `${row.driverFirstName} ${row.driverLastName}`.trim(),
+      driverName: standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName }).displayName,
       className: row.className,
       createdAt: row.createdAt
     })),
@@ -1088,6 +1091,7 @@ export const getDashboardDriverLocations = async (query: DriverLocationQuery) =>
       driverPersonId: entry.driverPersonId,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
+      driverPublicationName: person.publicationName,
       country: person.country,
       zip: person.zip,
       city: person.city,
@@ -1104,7 +1108,7 @@ export const getDashboardDriverLocations = async (query: DriverLocationQuery) =>
     .innerJoin(person, eq(entry.driverPersonId, person.id))
     .innerJoin(eventClass, eq(entry.classId, eventClass.id))
     .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
-    .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`))
+    .where(and(eq(entry.eventId, eventId), sql`${entry.deletedAt} is null`, sql`${person.publicationName} is null`))
     .orderBy(desc(entry.createdAt));
 
   const groups = new Map<
@@ -1156,7 +1160,7 @@ export const getDashboardDriverLocations = async (query: DriverLocationQuery) =>
     if (!existing.drivers.has(row.driverPersonId)) {
       existing.drivers.set(row.driverPersonId, {
         entryId: row.entryId,
-        driverName: `${row.driverFirstName} ${row.driverLastName}`.trim() || 'Fahrer',
+        driverName: standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName }).displayName,
         className: row.className,
         startNumber: row.startNumber ?? '-',
         vehicleLabel: vehicleLabelFromParts(row),

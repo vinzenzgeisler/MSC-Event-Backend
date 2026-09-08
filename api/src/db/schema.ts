@@ -144,6 +144,10 @@ export const person = pgTable(
     emergencyContactLastName: text('emergency_contact_last_name'),
     emergencyContactPhone: text('emergency_contact_phone'),
     motorsportHistory: text('motorsport_history'),
+    publicationName: text('publication_name'),
+    publicationNameVersion: integer('publication_name_version').notNull().default(0),
+    publicationNameUpdatedAt: timestamp('publication_name_updated_at', { withTimezone: true }),
+    publicationNameUpdatedBy: text('publication_name_updated_by'),
     processingRestricted: boolean('processing_restricted').notNull().default(false),
     objectionFlag: boolean('objection_flag').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -1340,11 +1344,28 @@ export const exportJob = pgTable(
   (table) => ({
     typeCheck: check(
       'export_job_type_check',
-      sql`${table.type} in ('entries_csv', 'startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv', 'programmheft_xlsx')`
+      sql`${table.type} in ('entries_csv', 'startlist_csv', 'participants_csv', 'payments_open_csv', 'checkin_status_csv', 'programmheft_xlsx', 'stamp_cards_pdf')`
     ),
-    statusCheck: check('export_job_status_check', sql`${table.status} in ('queued', 'processing', 'succeeded', 'failed')`),
+    statusCheck: check('export_job_status_check', sql`${table.status} in ('queued', 'processing', 'succeeded', 'failed', 'invalidated')`),
     statusIndex: index('export_job_status_idx').on(table.status, table.createdAt),
     eventTypeIndex: index('export_job_event_type_idx').on(table.eventId, table.type)
+  })
+);
+
+export const exportJobPerson = pgTable(
+  'export_job_person',
+  {
+    exportJobId: uuid('export_job_id')
+      .notNull()
+      .references(() => exportJob.id, { onDelete: 'cascade' }),
+    personId: uuid('person_id')
+      .notNull()
+      .references(() => person.id, { onDelete: 'cascade' }),
+    publicationNameVersion: integer('publication_name_version').notNull()
+  },
+  (table) => ({
+    primary: uniqueIndex('export_job_person_unique').on(table.exportJobId, table.personId),
+    personIndex: index('export_job_person_person_idx').on(table.personId, table.exportJobId)
   })
 );
 

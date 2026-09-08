@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
+import { standardPersonIdentity } from '../domain/personIdentity';
 import { codriverInvitation, consentEvidence, entry, event, eventClass, person } from '../db/schema';
 import { validateParticipantDraft, type ParticipantDraft } from './terminalWorkflows';
 import { CONSENT_VERSION, computeConsentTextHash } from './publicLegalTextsSource';
@@ -45,6 +46,7 @@ const loadEntryContext = async (entryIds: string[]) => {
     driverPersonId: entry.driverPersonId,
     driverFirstName: person.firstName,
     driverLastName: person.lastName,
+    driverPublicationName: person.publicationName,
     driverEmail: person.email,
     eventName: event.name,
     startsAt: event.startsAt,
@@ -77,6 +79,27 @@ const loadByToken = async (token: string) => {
   return row;
 };
 
+const findProtectedRecipient = async (db: any, email: string | null) => {
+  if (!email) return null;
+  const [matched] = await db.select({
+    firstName: person.firstName,
+    lastName: person.lastName,
+    publicationName: person.publicationName
+  }).from(person).where(and(sql`lower(${person.email}) = ${email.toLowerCase()}`, sql`${person.publicationName} is not null`)).limit(1);
+  return matched ?? null;
+};
+
+const projectInvitationRecipient = (row: { recipientName: string | null; recipientEmailNorm: string | null }, protectedRecipient: any) => {
+  if (!protectedRecipient) {
+    return { recipientName: row.recipientName, recipientEmail: row.recipientEmailNorm, identityProtected: false };
+  }
+  return {
+    recipientName: standardPersonIdentity(protectedRecipient).displayName,
+    recipientEmail: null,
+    identityProtected: true
+  };
+};
+
 export const createCodriverInvitation = async (input: z.infer<typeof createSchema>, actorUserId: string | null) => {
   const expiresAt = new Date(input.expiresAt);
   const validForMs = expiresAt.getTime() - Date.now();
@@ -107,8 +130,9 @@ export const createCodriverInvitation = async (input: z.infer<typeof createSchem
     });
     return row;
   });
+  const recipient = projectInvitationRecipient(created, await findProtectedRecipient(db, created.recipientEmailNorm));
   return {
-    invitation: { id: created.id, entryIds: created.entryIds, recipientName: created.recipientName, recipientEmail: created.recipientEmailNorm, expiresAt: created.expiresAt, status: 'active' },
+    invitation: { id: created.id, entryIds: created.entryIds, ...recipient, expiresAt: created.expiresAt, status: 'active' },
     url
   };
 };
@@ -118,11 +142,11 @@ export const listCodriverInvitations = async (sourceEntryId: string) => {
   const rows = await db.select().from(codriverInvitation)
     .where(sql`${codriverInvitation.sourceEntryId} = ${sourceEntryId}::uuid or ${sourceEntryId}::uuid = any(${codriverInvitation.entryIds})`)
     .orderBy(sql`${codriverInvitation.createdAt} desc`);
-  return rows.map((row) => ({
+  const protectedRecipients = await Promise.all(rows.map((row) => findProtectedRecipient(db, row.recipientEmailNorm)));
+  return rows.map((row, index) => ({
     id: row.id,
     entryIds: row.entryIds,
-    recipientName: row.recipientName,
-    recipientEmail: row.recipientEmailNorm,
+    ...projectInvitationRecipient(row, protectedRecipients[index]),
     expiresAt: row.expiresAt,
     consumedAt: row.consumedAt,
     createdAt: row.createdAt,
@@ -138,16 +162,36 @@ export const revokeCodriverInvitation = async (id: string, actorUserId: string |
     .where(and(eq(codriverInvitation.id, id), isNull(codriverInvitation.revokedAt), isNull(codriverInvitation.consumedAt), sql`${codriverInvitation.expiresAt} >= ${now}`))
     .returning();
   if (row) await writeAuditLog(db as never, { eventId: row.eventId, actorUserId, action: 'codriver_invitation_revoked', entityType: 'codriver_invitation', entityId: row.id, payload: {} });
-  return row ?? null;
+  if (!row) return null;
+  return {
+    id: row.id,
+    entryIds: row.entryIds,
+    ...projectInvitationRecipient(row, await findProtectedRecipient(db, row.recipientEmailNorm)),
+    expiresAt: row.expiresAt,
+    consumedAt: row.consumedAt,
+    revokedAt: row.revokedAt,
+    status: invitationState(row)
+  };
 };
 
 export const getPublicCodriverInvitation = async (token: string) => {
   const invitation = await loadByToken(token);
   const context = await loadEntryContext(invitation.entryIds);
+  const driverIdentity = standardPersonIdentity({
+    firstName: context.first.driverFirstName,
+    lastName: context.first.driverLastName,
+    publicationName: context.first.driverPublicationName
+  });
+  const recipient = projectInvitationRecipient(invitation, await findProtectedRecipient(await getDb(), invitation.recipientEmailNorm));
   return {
-    invitation: { recipientName: invitation.recipientName, recipientEmail: invitation.recipientEmailNorm, expiresAt: invitation.expiresAt },
+    invitation: { ...recipient, expiresAt: invitation.expiresAt },
     event: { name: context.first.eventName, startsAt: context.first.startsAt, endsAt: context.first.endsAt },
-    driver: { firstName: context.first.driverFirstName, lastName: context.first.driverLastName },
+    driver: {
+      displayName: driverIdentity.displayName,
+      identityProtected: driverIdentity.identityProtected,
+      firstName: driverIdentity.firstName,
+      lastName: driverIdentity.lastName
+    },
     entries: context.rows.map((row) => ({ id: row.entryId, className: row.className, startNumber: row.startNumber }))
   };
 };

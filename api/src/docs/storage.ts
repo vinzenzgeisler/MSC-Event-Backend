@@ -1,4 +1,4 @@
-import { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, DeleteObjectsCommand, S3Client, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const getDocumentsBucket = (): string => {
@@ -34,6 +34,38 @@ export const uploadFile = async (key: string, body: Buffer, contentType: string)
       ContentType: contentType
     })
   );
+};
+
+export const deleteDocumentObject = async (key: string) => {
+  const client = getS3Client();
+  await client.send(new DeleteObjectCommand({ Bucket: getDocumentsBucket(), Key: key }));
+};
+
+export const deleteLegacyStampCardObjects = async (eventId: string): Promise<number> => {
+  const client = getS3Client();
+  const bucket = getDocumentsBucket();
+  const prefix = `exports/${eventId}/stamp-cards/`;
+  const currentPrefix = `${prefix}v2/`;
+  let continuationToken: string | undefined;
+  let deleted = 0;
+  do {
+    const listed = await client.send(new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: prefix,
+      ContinuationToken: continuationToken
+    }));
+    const keys = (listed.Contents ?? [])
+      .flatMap((item) => item.Key && !item.Key.startsWith(currentPrefix) ? [item.Key] : []);
+    if (keys.length > 0) {
+      await client.send(new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true }
+      }));
+      deleted += keys.length;
+    }
+    continuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return deleted;
 };
 
 export const getPresignedDownloadUrl = async (key: string, expiresInSeconds = 300, downloadFileName?: string) => {

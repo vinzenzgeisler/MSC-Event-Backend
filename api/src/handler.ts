@@ -148,6 +148,7 @@ import {
   createMarshalPerson,
   createMarshalPrintPdf,
   createMarshalTraining,
+  deleteMarshalTrainingParticipant,
   deleteMarshalAreaAssignment,
   deleteMarshalPerson,
   getMarshalWorkspace,
@@ -1695,6 +1696,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
       return errorJson(500, 'Revoke charity co-driver failed');
+    }
+  }
+
+  if (method === 'DELETE' && marshalTrainingParticipantMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'marshals.write')) return errorJson(403, 'Forbidden');
+    try {
+      await deleteMarshalTrainingParticipant(marshalTrainingParticipantMatch[1], marshalTrainingParticipantMatch[2], auth.sub);
+      return json(200, { ok: true });
+    } catch {
+      return errorJson(500, 'Delete training participant failed');
     }
   }
 

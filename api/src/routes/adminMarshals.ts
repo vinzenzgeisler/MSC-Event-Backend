@@ -941,6 +941,17 @@ export const upsertMarshalTrainingParticipant = async (sessionId: string, person
   return row;
 };
 
+export const deleteMarshalTrainingParticipant = async (sessionId: string, personId: string, actorUserId: string | null) => {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const [deleted] = await tx.delete(marshalTrainingParticipant)
+      .where(and(eq(marshalTrainingParticipant.sessionId, sessionId), eq(marshalTrainingParticipant.personId, personId)))
+      .returning({ id: marshalTrainingParticipant.id });
+    if (deleted) await writeAuditLog(tx as never, { actorUserId, action: 'marshal_training_participant_deleted', entityType: 'marshal_training_participant', entityId: deleted.id });
+    return deleted ?? null;
+  });
+};
+
 export const previewMarshalImport = async (input: z.infer<typeof importInputSchema>) => {
   const { buffer, sha256 } = decodeWorkbook(input);
   const parsed = await parseWorkbook(buffer);

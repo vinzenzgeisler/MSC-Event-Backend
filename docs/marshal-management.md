@@ -27,6 +27,7 @@ Der im Frontend ausgewählte Plan (regulär oder Notbesetzung) bestimmt ausschli
 - `PUT /admin/marshals/config`
 - `POST /admin/marshals/trainings`
 - `PUT /admin/marshals/trainings/{sessionId}/participants/{personId}`
+- `DELETE /admin/marshals/trainings/{sessionId}/participants/{personId}`
 - `POST /admin/marshals/import/preview`
 - `POST /admin/marshals/import/commit`
 - `GET /admin/marshals/print`

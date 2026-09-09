@@ -332,6 +332,21 @@
         "tags": ["public"],
         "summary": "Store regular co-driver contact data and link all selected starts without accepting or signing the waiver",
         "parameters": [{ "name": "token", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["participant", "privacyAccepted"],
+                "properties": {
+                  "participant": { "$ref": "#/components/schemas/CodriverInvitationParticipantInput" },
+                  "privacyAccepted": { "type": "boolean", "const": true }
+                }
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "Co-driver assigned; waiverRequiredOnSite is true" }, "400": { "description": "Invalid participant data" }, "409": { "description": "Invitation no longer usable" } }
       }
     },
@@ -9488,6 +9503,26 @@
           "cylinders",
           "vehicleHistory"
         ]
+      },
+      "CodriverInvitationParticipantInput": {
+        "type": "object",
+        "properties": {
+          "locale": { "type": "string", "enum": ["de-DE", "en-GB", "cs-CZ", "pl-PL"], "default": "de-DE" },
+          "firstName": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "lastName": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "birthdate": { "type": "string", "format": "date" },
+          "country": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "street": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "zip": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9\\- ]{1,11}$" },
+          "city": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "email": { "type": "string", "format": "email", "maxLength": 320 },
+          "phone": { "type": "string" },
+          "guardianFullName": { "type": ["string", "null"], "maxLength": 160 },
+          "guardianEmail": { "type": ["string", "null"], "format": "email" },
+          "guardianPhone": { "type": ["string", "null"] },
+          "guardianRelationship": { "type": ["string", "null"], "maxLength": 80 }
+        },
+        "required": ["firstName", "lastName", "birthdate", "country", "street", "zip", "city", "email", "phone"]
       },
       "PublicCodriverInput": {
         "type": "object",

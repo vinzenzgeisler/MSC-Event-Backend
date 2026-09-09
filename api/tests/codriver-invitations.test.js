@@ -10,11 +10,27 @@ assert.throws(() => validateCreateCodriverInvitation({ entryIds: [entryId, entry
 
 const participant = {
   locale: 'de-DE', firstName: 'Eva', lastName: 'Beispiel', birthdate: '1990-02-03', country: 'DE',
-  street: 'Hauptstraße 1', zip: '12345', city: 'Beispielstadt', email: 'EVA@EXAMPLE.COM', phone: '+49 123 456789',
-  emergencyContactFirstName: 'Max', emergencyContactLastName: 'Beispiel', emergencyContactPhone: '+49 987 654321'
+  street: 'Hauptstraße 1', zip: '12345', city: 'Beispielstadt', email: 'EVA@EXAMPLE.COM', phone: '+49 123 456789'
 };
 const completed = validateCompleteCodriverInvitation({ participant, privacyAccepted: true });
 assert.equal(completed.participant.email, 'eva@example.com');
+assert.equal(completed.participant.phone, '49123456789');
+assert.equal('emergencyContactFirstName' in completed.participant, false);
 assert.equal(completed.privacyAccepted, true);
 assert.throws(() => validateCompleteCodriverInvitation({ participant, privacyAccepted: false }));
+
+const minorCompleted = validateCompleteCodriverInvitation({
+  participant: {
+    ...participant,
+    birthdate: '2012-02-03',
+    guardianFullName: 'Max Beispiel',
+    guardianEmail: 'MAX@EXAMPLE.COM',
+    guardianPhone: '+49 987 654321',
+    guardianRelationship: 'Vater'
+  },
+  privacyAccepted: true
+});
+assert.equal(minorCompleted.participant.guardianEmail, 'MAX@EXAMPLE.COM');
+assert.equal(minorCompleted.participant.guardianPhone, '49987654321');
+assert.equal(minorCompleted.participant.guardianRelationship, 'Vater');
 console.log('codriver-invitation contract tests passed');

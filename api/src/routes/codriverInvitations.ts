@@ -5,7 +5,6 @@ import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { standardPersonIdentity } from '../domain/personIdentity';
 import { codriverInvitation, consentEvidence, entry, event, eventClass, person } from '../db/schema';
-import { validateParticipantDraft, type ParticipantDraft } from './terminalWorkflows';
 import { CONSENT_VERSION, computeConsentTextHash } from './publicLegalTextsSource';
 
 const createSchema = z.object({
@@ -15,10 +14,32 @@ const createSchema = z.object({
   expiresAt: z.string().datetime()
 });
 
+const localeSchema = z.enum(['de-DE', 'en-GB', 'cs-CZ', 'pl-PL']);
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const phoneSchema = z.string().trim().transform((value) => value.replace(/\D+/g, '')).refine((value) => value.length >= 6 && value.length <= 15);
+const invitationParticipantSchema = z.object({
+  locale: localeSchema.default('de-DE'),
+  firstName: z.string().trim().min(1).max(100),
+  lastName: z.string().trim().min(1).max(100),
+  birthdate: isoDateSchema,
+  country: z.string().trim().min(1).max(100),
+  street: z.string().trim().min(1).max(160),
+  zip: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9\- ]{1,11}$/),
+  city: z.string().trim().min(1).max(120),
+  email: z.string().trim().email().transform((value) => value.toLowerCase()),
+  phone: phoneSchema,
+  guardianFullName: z.string().trim().max(160).nullable().optional(),
+  guardianEmail: z.string().trim().email().nullable().optional(),
+  guardianPhone: phoneSchema.nullable().optional(),
+  guardianRelationship: z.string().trim().max(80).nullable().optional()
+});
+
 const completeSchema = z.object({
-  participant: z.unknown(),
+  participant: invitationParticipantSchema,
   privacyAccepted: z.literal(true)
 });
+
+type InvitationParticipant = z.infer<typeof invitationParticipantSchema>;
 
 const hashToken = (token: string) => createHash('sha256').update(token, 'utf8').digest('hex');
 const invitationState = (row: { revokedAt: Date | null; consumedAt: Date | null; expiresAt: Date }) =>
@@ -196,7 +217,7 @@ export const getPublicCodriverInvitation = async (token: string) => {
   };
 };
 
-export const completePublicCodriverInvitation = async (token: string, participant: ParticipantDraft) => {
+export const completePublicCodriverInvitation = async (token: string, participant: InvitationParticipant) => {
   const invitation = await loadByToken(token);
   const context = await loadEntryContext(invitation.entryIds);
   if (invitation.recipientEmailNorm && invitation.recipientEmailNorm !== participant.email) throw new Error('CODRIVER_INVITATION_EMAIL_MISMATCH');
@@ -220,10 +241,6 @@ export const completePublicCodriverInvitation = async (token: string, participan
       zip: participant.zip,
       city: participant.city,
       phone: participant.phone,
-      emergencyContactFirstName: participant.emergencyContactFirstName,
-      emergencyContactLastName: participant.emergencyContactLastName,
-      emergencyContactPhone: participant.emergencyContactPhone,
-      motorsportHistory: participant.motorsportHistory ?? null,
       updatedAt: now
     };
     if (existingPerson) await tx.update(person).set(personValues).where(eq(person.id, participantId));
@@ -261,7 +278,4 @@ export const completePublicCodriverInvitation = async (token: string, participan
 };
 
 export const validateCreateCodriverInvitation = (payload: unknown) => createSchema.parse(payload);
-export const validateCompleteCodriverInvitation = (payload: unknown) => {
-  const parsed = completeSchema.parse(payload);
-  return { participant: validateParticipantDraft(parsed.participant), privacyAccepted: parsed.privacyAccepted };
-};
+export const validateCompleteCodriverInvitation = (payload: unknown) => completeSchema.parse(payload);

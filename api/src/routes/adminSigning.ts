@@ -1323,7 +1323,12 @@ export const queueWaiverSignedMail = async (
         },
         idempotencyKey
       })
-      .onConflictDoNothing({ target: emailOutbox.idempotencyKey })
+      // The production database still has the original partial unique index
+      // (WHERE idempotency_key IS NOT NULL). PostgreSQL cannot infer that index
+      // from ON CONFLICT (idempotency_key) without repeating its predicate.
+      // The key is NOT NULL nowadays, so an untargeted conflict handler keeps
+      // the intended idempotency semantics and works with both index shapes.
+      .onConflictDoNothing()
       .returning({ id: emailOutbox.id });
 
     const resolvedOutboxId = outboxRow?.id ?? (await tx

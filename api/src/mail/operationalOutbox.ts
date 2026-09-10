@@ -49,6 +49,9 @@ export const queueOperationalMails = async (
         maxAttempts: 5
       }))
     )
-    .onConflictDoNothing({ target: emailOutbox.idempotencyKey })
+    // Compatible with the historical partial idempotency index as well as a
+    // future non-partial unique index. A targeted ON CONFLICT would need to
+    // repeat the partial-index predicate and currently fails in production.
+    .onConflictDoNothing()
     .returning({ id: emailOutbox.id });
 };

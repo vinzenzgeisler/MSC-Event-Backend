@@ -57,8 +57,13 @@ const loadSnapshot = async (): Promise<Omit<Snapshot, 'apiUnavailable' | 's3Evid
             )))::int as signing_evidence_incomplete,
         (select count(*) from signing_session s
           where s.event_id in (select id from current_events)
-            and s.error_last like 'WAIVER_MAIL_QUEUE_FAILED:%'
-            and s.updated_at >= now() - interval '10 minutes')::int as signing_mail_queue_failed,
+            and s.status = 'completed'
+            and s.signed_at >= now() - interval '24 hours'
+            and not exists (
+              select 1 from email_outbox o
+              where o.template_id = 'waiver_signed'
+                and o.template_data->>'signingSessionId' = s.id::text
+            ))::int as signing_mail_queue_failed,
         (select count(*) from technical_inspection_decision d
           where d.event_id in (select id from current_events)
             and d.status in ('passed', 'failed')

@@ -14,7 +14,6 @@ import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as ses from 'aws-cdk-lib/aws-ses';
 import * as sns from 'aws-cdk-lib/aws-sns';
-import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
@@ -74,9 +73,6 @@ export class ApiStack extends Stack {
       topicName: `${props.config.prefix}-critical-alerts`,
       displayName: `${props.config.prefix} critical system alerts`
     });
-    props.config.orgaNotificationRecipients.forEach((recipient) => {
-      criticalAlertsTopic.addSubscription(new subscriptions.EmailSubscription(recipient));
-    });
     const sesFeedbackTopic = new sns.Topic(this, 'SesFeedbackTopic', {
       topicName: `${props.config.prefix}-ses-feedback`
     });
@@ -128,6 +124,42 @@ export class ApiStack extends Stack {
         }
       : {};
     const depsLockFilePath = path.join(__dirname, '../../../package-lock.json');
+
+    // CloudWatch's native SNS email is intentionally not sent straight to the
+    // organisers: its raw JSON payload is difficult to understand during an
+    // event. This independent formatter turns the same alarm into a concise,
+    // actionable German email and lets SNS retry delivery through a DLQ.
+    const criticalAlertEmailDeadLetterQueue = new sqs.Queue(this, 'CriticalAlertEmailDeadLetterQueue', {
+      queueName: `${props.config.prefix}-critical-alert-email-dlq`,
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(14)
+    });
+    const criticalAlertEmail = new NodejsFunction(this, 'CriticalAlertEmail', {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      entry: path.join(__dirname, '../../../api/src/jobs/criticalAlertEmail.ts'),
+      handler: 'handler',
+      functionName: `${props.config.prefix}-critical-alert-email`,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      depsLockFilePath,
+      environment: {
+        STAGE: props.config.stage,
+        SES_FROM_EMAIL: sesFromEmail,
+        ORGA_NOTIFICATION_RECIPIENTS: orgaNotificationRecipients
+      },
+      bundling: { target: 'node24', sourceMap: true, minify: false },
+      logRetention: logs.RetentionDays.THREE_MONTHS,
+      loggingFormat: lambda.LoggingFormat.JSON,
+      applicationLogLevelV2: lambda.ApplicationLogLevel.INFO,
+      systemLogLevelV2: lambda.SystemLogLevel.WARN
+    });
+    criticalAlertEmail.addEventSource(new lambdaEventSources.SnsEventSource(criticalAlertsTopic, {
+      deadLetterQueue: criticalAlertEmailDeadLetterQueue
+    }));
+    criticalAlertEmail.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ses:SendEmail'],
+      resources: ['*']
+    }));
 
     const apiHandler = new NodejsFunction(this, 'ApiHandler', {
       runtime: lambda.Runtime.NODEJS_24_X,
@@ -1698,7 +1730,7 @@ export class ApiStack extends Stack {
 
     new logs.QueryDefinition(this, 'OperationalErrorsQuery', {
       queryDefinitionName: `${props.config.prefix}/operational-errors`,
-      logGroups: [apiHandler.logGroup, emailWorker.logGroup, sesFeedbackWorker.logGroup, operationalMonitor.logGroup],
+      logGroups: [apiHandler.logGroup, emailWorker.logGroup, sesFeedbackWorker.logGroup, operationalMonitor.logGroup, criticalAlertEmail.logGroup],
       queryString: new logs.QueryString({
         fields: ['@timestamp', '@log', 'message.eventType', 'message.requestId', 'message.route', 'message.eventId', 'message.entryId', 'message.sessionId', 'message.status', 'message.errorCode'],
         filterStatements: ['level = "ERROR" or message.eventType like /failed|missing|unhandled|unavailable|stuck|delay/'],

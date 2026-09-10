@@ -59,10 +59,16 @@ export const logOperationalEvent = (
 };
 
 export const errorCodeOf = (error: unknown, fallback = 'UNKNOWN_ERROR'): string => {
-  if (!error || typeof error !== 'object') return fallback;
-  const candidate = error as { code?: unknown; name?: unknown; message?: unknown };
-  if (typeof candidate.code === 'string' && /^[A-Z0-9_.:-]{1,100}$/i.test(candidate.code)) return candidate.code;
-  if (typeof candidate.message === 'string' && /^[A-Z0-9_:-]{1,100}$/.test(candidate.message)) return candidate.message;
-  if (typeof candidate.name === 'string' && /^[A-Za-z0-9_.-]{1,100}$/.test(candidate.name)) return candidate.name;
+  const visited = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === 'object' && !visited.has(current)) {
+    visited.add(current);
+    const candidate = current as { code?: unknown; name?: unknown; message?: unknown; cause?: unknown };
+    if (typeof candidate.code === 'string' && /^[A-Z0-9_.:-]{1,100}$/i.test(candidate.code)) return candidate.code;
+    if (typeof candidate.message === 'string' && /^[A-Z0-9_:-]{1,100}$/.test(candidate.message)) return candidate.message;
+    current = candidate.cause;
+  }
+  const candidate = error as { name?: unknown } | null;
+  if (candidate && typeof candidate.name === 'string' && /^[A-Za-z0-9_.-]{1,100}$/.test(candidate.name)) return candidate.name;
   return fallback;
 };

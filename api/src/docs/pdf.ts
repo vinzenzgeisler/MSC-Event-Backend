@@ -218,7 +218,18 @@ type SignedWaiverEvidencePdfPayload = {
     signer?: { role: 'driver' | 'codriver'; firstName: string; lastName: string; birthdate: string | null; label: string };
     isMinor: boolean;
     requiresMedicalCertificate: boolean;
-    contract: { locale: string; version: string; textHash: string; title: string; fullText: string };
+    contract: {
+      locale: string;
+      version: string;
+      textHash: string;
+      title: string;
+      fullText: string;
+      authoritativeLocale?: string;
+      authoritativeTitle?: string;
+      authoritativeFullText?: string;
+      authoritativeTextHash?: string;
+      translation?: { locale: string; title: string; fullText: string; textHash: string; binding: false } | null;
+    };
     entries: Array<{
       className: string;
       orgaCode: string | null;
@@ -227,7 +238,7 @@ type SignedWaiverEvidencePdfPayload = {
       vehicles: Array<{ role: 'primary' | 'backup'; make: string; model: string; year: number | null; startNumber: string | null; ownerName: string | null }>;
     }>;
   };
-  signer: { type: 'driver' | 'codriver' | 'guardian'; guardianName: string | null; guardianRelationship: string | null };
+  signer: { type: 'driver' | 'codriver' | 'guardian'; guardianName: string | null; guardianEmail?: string | null; guardianRelationship: string | null; representationMode?: 'sole' | null };
   precheckTimestamps: {
     identityCheckedAt?: string | null;
     signerPresentAt?: string | null;
@@ -240,6 +251,7 @@ type SignedWaiverEvidencePdfPayload = {
   waiverAcceptedAt: string;
   signedAt: string;
   signatureDataUrl: string;
+  fonts?: { regular?: Buffer | null; bold?: Buffer | null };
 };
 
 const dataUrlToBuffer = (dataUrl: string): Buffer | null => {
@@ -263,6 +275,11 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
+    const regularFont = payload.fonts?.regular ? 'WaiverRegular' : 'Helvetica';
+    const boldFont = payload.fonts?.bold ? 'WaiverBold' : 'Helvetica-Bold';
+    if (payload.fonts?.regular) doc.registerFont(regularFont, payload.fonts.regular);
+    if (payload.fonts?.bold) doc.registerFont(boldFont, payload.fonts.bold);
+
     // ── design constants ──────────────────────────────────────────────────
     const LEFT = doc.page.margins.left;
     const W = doc.page.width - doc.page.margins.left - doc.page.margins.right;
@@ -285,7 +302,7 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
 
     const sectionHeader = (title: string) => {
       doc.y += 4;
-      doc.font('Helvetica-Bold').fontSize(7.8).fillColor(BLUE)
+      doc.font(boldFont).fontSize(7.8).fillColor(BLUE)
         .text(title.toUpperCase(), LEFT, doc.y, { width: W, characterSpacing: 0.7 });
       const lineY = doc.y + 1;
       doc.save().lineWidth(1).strokeColor(YELLOW)
@@ -295,10 +312,10 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
 
     const kv = (label: string, value: string) => {
       const startY = doc.y;
-      doc.font('Helvetica-Bold').fontSize(8.3).fillColor(LABEL)
+      doc.font(boldFont).fontSize(8.3).fillColor(LABEL)
         .text(label, LEFT, startY, { width: LW });
       const afterLabel = doc.y;
-      doc.font('Helvetica').fontSize(8.8).fillColor(BODY)
+      doc.font(regularFont).fontSize(8.8).fillColor(BODY)
         .text(value || '—', LEFT + LW, startY, { width: W - LW, lineGap: 0.5 });
       doc.y = Math.max(doc.y, afterLabel) + 2;
     };
@@ -307,13 +324,13 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
       const mark = ts ? '✓' : (required ? '—' : 'n/a');
       const markColor = ts ? '#16A34A' : (required ? '#DC2626' : DIM);
       const startY = doc.y;
-      doc.font('Helvetica').fontSize(8.5).fillColor(LABEL)
+      doc.font(regularFont).fontSize(8.5).fillColor(LABEL)
         .text(label, LEFT + 8, startY, { width: LW - 8 });
       const afterText = doc.y;
-      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(markColor)
+      doc.font(boldFont).fontSize(8.5).fillColor(markColor)
         .text(mark, LEFT + LW, startY, { width: 16 });
       if (ts) {
-        doc.font('Helvetica').fontSize(7.8).fillColor(DIM)
+        doc.font(regularFont).fontSize(7.8).fillColor(DIM)
           .text(ts, LEFT + LW + 20, startY, { width: W - LW - 20, lineGap: 0.3 });
       }
       doc.y = Math.max(doc.y, afterText) + 2;
@@ -327,9 +344,9 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     doc.y = TOP;
 
     // title bar
-    doc.font('Helvetica-Bold').fontSize(13).fillColor(BLUE)
+    doc.font(boldFont).fontSize(13).fillColor(BLUE)
       .text('Persönliche Haftverzichtserklärung', LEFT, doc.y, { width: W });
-    doc.font('Helvetica').fontSize(8.5).fillColor(DIM)
+    doc.font(regularFont).fontSize(8.5).fillColor(DIM)
       .text('Vor-Ort-Unterzeichnung · MSC Oberlausitzer Dreiländereck e.V.', LEFT, doc.y, { width: W });
     doc.y += 4;
     doc.save().lineWidth(1.5).strokeColor(BLUE)
@@ -353,6 +370,8 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     }
     if (payload.signer.type === 'guardian' && payload.signer.guardianName) {
       kv('Unterzeichner (erziehungsberechtigt)', `${payload.signer.guardianName} (${payload.signer.guardianRelationship ?? '—'})`);
+      kv('E-Mail der Vertretung', payload.signer.guardianEmail ?? '—');
+      kv('Vertretungsberechtigung', payload.signer.representationMode === 'sole' ? 'Alleinvertretungsberechtigung bestätigt' : '—');
     }
     const flags: string[] = [];
     if (payload.payload.isMinor) flags.push('Minderjährig');
@@ -400,14 +419,14 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     // Signature image
     rule();
     doc.y += 5;
-    doc.font('Helvetica-Bold').fontSize(8.5).fillColor(LABEL)
+    doc.font(boldFont).fontSize(8.5).fillColor(LABEL)
       .text('Unterschrift:', LEFT, doc.y);
     doc.y += 4;
     if (signature) {
       doc.image(signature, LEFT, doc.y, { fit: [260, 72], align: 'left' });
       doc.y += 80;
     } else {
-      doc.font('Helvetica').fontSize(8).fillColor('#DC2626')
+      doc.font(regularFont).fontSize(8).fillColor('#DC2626')
         .text('Unterschriftsbild konnte nicht eingebettet werden.', LEFT, doc.y, { width: W });
       doc.y += 14;
     }
@@ -415,7 +434,7 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     doc.y += 4;
 
     // footer page 1
-    doc.font('Helvetica').fontSize(6.5).fillColor(DIM)
+    doc.font(regularFont).fontSize(6.5).fillColor(DIM)
       .text(
         `Text-Hash: ${payload.payload.contract.textHash}  ·  Session: ${payload.sessionId}`,
         LEFT, doc.y, { width: W }
@@ -427,15 +446,18 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     doc.addPage();
     doc.y = TOP;
 
-    doc.font('Helvetica-Bold').fontSize(11).fillColor(BLUE)
-      .text(payload.payload.contract.title, LEFT, doc.y, { width: W });
+    const authoritativeTitle = payload.payload.contract.authoritativeTitle ?? payload.payload.contract.title;
+    const authoritativeFullText = payload.payload.contract.authoritativeFullText ?? payload.payload.contract.fullText;
+    const authoritativeTextHash = payload.payload.contract.authoritativeTextHash ?? payload.payload.contract.textHash;
+    doc.font(boldFont).fontSize(11).fillColor(BLUE)
+      .text(authoritativeTitle, LEFT, doc.y, { width: W });
     doc.y += 2;
     doc.save().lineWidth(1).strokeColor(YELLOW)
       .moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
     doc.y += 10;
 
-    doc.font('Helvetica').fontSize(9.4).fillColor(BODY)
-      .text(payload.payload.contract.fullText, LEFT, doc.y, { width: W, lineGap: 1.5 });
+    doc.font(regularFont).fontSize(9.4).fillColor(BODY)
+      .text(authoritativeFullText, LEFT, doc.y, { width: W, lineGap: 1.5 });
     doc.y += 14;
 
     rule(RULE);
@@ -445,12 +467,28 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
       : signer
         ? `${signer.firstName} ${signer.lastName}`
         : `${driver.firstName} ${driver.lastName}`;
-    doc.font('Helvetica').fontSize(7).fillColor(DIM)
+    doc.font(regularFont).fontSize(7).fillColor(DIM)
       .text(
         `Diese Erklärung wurde am ${payload.signedAt} durch ${signerDisplay} digital unterzeichnet.  ` +
-        `Text-Hash: ${payload.payload.contract.textHash}  ·  Version: ${payload.payload.contract.version}  ·  Audit-JSON: privat in S3 gespeichert.`,
+        `Text-Hash: ${authoritativeTextHash}  ·  Version: ${payload.payload.contract.version}  ·  Audit-JSON: privat in S3 gespeichert.`,
         LEFT, doc.y, { width: W, lineGap: 0.5 }
       );
+
+    if (payload.payload.contract.translation) {
+      doc.addPage();
+      doc.y = TOP;
+      doc.font(boldFont).fontSize(11).fillColor(BLUE)
+        .text(payload.payload.contract.translation.title, LEFT, doc.y, { width: W });
+      doc.y += 5;
+      doc.font(boldFont).fontSize(8.5).fillColor('#9A3412')
+        .text('Unverbindliche Übersetzung als Verständnishilfe. Rechtsverbindlich ist ausschließlich die deutsche Fassung.', LEFT, doc.y, { width: W });
+      doc.y += 10;
+      doc.font(regularFont).fontSize(9.4).fillColor(BODY)
+        .text(payload.payload.contract.translation.fullText, LEFT, doc.y, { width: W, lineGap: 1.5 });
+      doc.y += 10;
+      doc.font(regularFont).fontSize(7).fillColor(DIM)
+        .text(`Übersetzung: ${payload.payload.contract.translation.locale} · Text-Hash: ${payload.payload.contract.translation.textHash}`, LEFT, doc.y, { width: W });
+    }
 
     doc.end();
   });

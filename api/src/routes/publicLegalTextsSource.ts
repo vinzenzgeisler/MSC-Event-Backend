@@ -1,8 +1,10 @@
+import { getWaiverDocument, WAIVER_VERSION, type WaiverLocale } from '../legal/waiverContract';
+
 export type LegalUiLocale = "de" | "en" | "cz" | "pl";
 export type ConsentLocale = "de-DE" | "en-GB" | "cs-CZ" | "pl-PL";
 export type LegalDocId = "impressum" | "datenschutz" | "teilnahmebedingungen" | "haftverzicht";
 
-export const CONSENT_VERSION = "privacy-v2.1+terms-v2.0+waiver-v3.0+media-v2.0+club-info-v1.0";
+export const CONSENT_VERSION = `privacy-v2.1+terms-v2.0+waiver-${WAIVER_VERSION}+media-v2.0+club-info-v1.0`;
 
 export type LegalDocSection = {
   title: string;
@@ -890,10 +892,16 @@ const LEGAL_TEXTS: Record<LegalUiLocale, LegalTexts> = {
 };
 
 export function getLegalTexts(locale: string): LegalTexts {
-  if (locale === "en" || locale === "cz" || locale === "pl") {
-    return LEGAL_TEXTS[locale];
-  }
-  return LEGAL_TEXTS.de;
+  const selectedLocale: LegalUiLocale = locale === "en" || locale === "cz" || locale === "pl" ? locale : "de";
+  const consentLocale: WaiverLocale = selectedLocale === 'en' ? 'en-GB' : selectedLocale === 'cz' ? 'cs-CZ' : selectedLocale === 'pl' ? 'pl-PL' : 'de-DE';
+  const texts = LEGAL_TEXTS[selectedLocale];
+  return {
+    ...texts,
+    docs: {
+      ...texts.docs,
+      haftverzicht: getWaiverDocument(consentLocale)
+    }
+  };
 }
 
 export function getLegalDoc(locale: string, docId: string): LegalDoc {

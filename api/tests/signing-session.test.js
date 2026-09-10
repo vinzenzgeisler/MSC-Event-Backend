@@ -8,12 +8,14 @@ const {
   extractSigningDeviceToken,
   normalizeWaiverMailRecipient,
   formatWaiverMailEventDates,
-  formatWaiverMailSignedAt
+  formatWaiverMailSignedAt,
+  signatureDataUrlToBuffer
 } = require('../dist/routes/adminSigning');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const uuid = () => '550e8400-e29b-41d4-a716-446655440000';
 const pngDataUrl = () => `data:image/png;base64,${'A'.repeat(100)}`;
+const validPngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 const throws = (fn, msgPattern) => {
   assert.throws(fn, (err) => {
@@ -23,6 +25,13 @@ const throws = (fn, msgPattern) => {
     return true;
   });
 };
+
+// ── raw signature evidence validation ────────────────────────────────────────
+{
+  assert.equal(signatureDataUrlToBuffer(validPngDataUrl).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  throws(() => signatureDataUrlToBuffer(pngDataUrl()), 'SIGNATURE_INVALID');
+  throws(() => signatureDataUrlToBuffer('data:image/jpeg;base64,AAAA'), 'SIGNATURE_INVALID');
+}
 
 // ── signed-waiver recipient hardening ────────────────────────────────────────
 {
@@ -120,6 +129,8 @@ const throws = (fn, msgPattern) => {
   };
 
   assert.doesNotThrow(() => validateCompleteSigningSessionInput(valid));
+  assert.equal(validateCompleteSigningSessionInput({ ...valid, guardianEmail: 'GUARDIAN@EXAMPLE.ORG' }).guardianEmail, 'guardian@example.org');
+  throws(() => validateCompleteSigningSessionInput({ ...valid, guardianEmail: 'ungueltig' }));
 
   // missing fields
   throws(() => validateCompleteSigningSessionInput({ ...valid, displayedAt: undefined }));

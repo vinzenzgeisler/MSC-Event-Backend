@@ -570,7 +570,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'SIGNING_DEVICE_UNAUTHORIZED') {
         return errorJson(401, 'Terminal device unauthorized', undefined, error.message);
       }
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_'))) {
+      if (error instanceof Error && (error.message === 'SIGNING_TIMESTAMPS_INVALID' || error.message === 'SIGNATURE_INVALID' || error.message === 'SIGNING_GUARDIAN_EMAIL_REQUIRED')) {
+        return errorJson(400, error.message, undefined, error.message);
+      }
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('WAIVER_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
@@ -608,8 +611,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'SIGNING_SESSION_EXPIRED') {
         return errorJson(409, 'Signing session expired', undefined, 'SIGNING_SESSION_EXPIRED');
       }
-      if (error instanceof Error && (error.message === 'SIGNING_PRECHECK_INCOMPLETE' || error.message === 'SIGNING_GUARDIAN_REQUIRED')) {
+      if (error instanceof Error && (error.message === 'SIGNING_PRECHECK_INCOMPLETE' || error.message === 'SIGNING_GUARDIAN_REQUIRED' || error.message === 'SIGNING_GUARDIAN_EMAIL_REQUIRED')) {
         return errorJson(400, error.message, undefined, error.message);
+      }
+      if (error instanceof Error && error.message === 'SIGNING_TIMESTAMPS_INVALID') {
+        return errorJson(400, error.message, undefined, error.message);
+      }
+      if (error instanceof Error && error.message === 'SIGNATURE_INVALID') {
+        return errorJson(400, error.message, undefined, error.message);
+      }
+      if (error instanceof Error && error.message === 'WAIVER_ALREADY_SIGNED') {
+        return errorJson(409, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
       return errorJson(500, 'Complete signing session failed', details);
@@ -1614,7 +1626,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     } catch (error) {
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_'))) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('WAIVER_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
@@ -1792,6 +1804,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && (error.message === 'SIGNING_PRECHECK_INCOMPLETE' || error.message === 'SIGNING_GUARDIAN_REQUIRED')) {
         return errorJson(400, error.message, undefined, error.message);
+      }
+      if (error instanceof Error && error.message === 'WAIVER_ALREADY_SIGNED') {
+        return errorJson(409, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
       return errorJson(500, 'Create signing session failed', details);

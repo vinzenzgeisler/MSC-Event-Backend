@@ -914,6 +914,12 @@ export const signingSession = pgTable(
     deviceStatusIndex: index('signing_session_device_status_idx').on(table.deviceSessionId, table.status, table.createdAt),
     driverIndex: index('signing_session_driver_idx').on(table.eventId, table.driverPersonId, table.createdAt),
     statusExpiresIndex: index('signing_session_status_expires_idx').on(table.status, table.expiresAt),
+    activeDriverUnique: uniqueIndex('signing_session_event_driver_active_unique')
+      .on(table.eventId, table.driverPersonId)
+      .where(sql`${table.status} in ('pending', 'displayed')`),
+    activeDeviceUnique: uniqueIndex('signing_session_device_active_unique')
+      .on(table.deviceSessionId)
+      .where(sql`${table.status} in ('pending', 'displayed')`),
     statusCheck: check('signing_session_status_check', sql`${table.status} in ('pending', 'displayed', 'completed', 'cancelled', 'failed')`),
     workflowTypeCheck: check(
       'signing_session_workflow_type_check',

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { standardPersonIdentity } from '../domain/personIdentity';
+import { buildWaiverContract, WAIVER_VERSION } from '../legal/waiverContract';
 import {
   consentEvidence,
   document,
@@ -14,15 +15,15 @@ import {
   entry,
   event,
   eventClass,
+  invoice,
   person,
   signingDeviceSession,
   signingSession,
   vehicle
 } from '../db/schema';
 import { renderSignedWaiverEvidencePdf } from '../docs/pdf';
-import { deleteDocumentObject, getDocumentObjectBuffer, uploadFile, uploadPdf } from '../docs/storage';
+import { deleteDocumentObject, getAssetObjectBuffer, getDocumentObjectBuffer, uploadFile, uploadPdf } from '../docs/storage';
 import { errorCodeOf, logOperationalEvent } from '../observability/logger';
-import { computeConsentTextHash, getLegalTexts, type LegalUiLocale } from './publicLegalTextsSource';
 
 const pairingClaimSchema = z.object({
   pairingCode: z.string().trim().regex(/^[0-9]{6}$/),
@@ -57,6 +58,11 @@ const createSigningSessionSchema = z.object({
       guardianName: z.string().trim().max(160).nullable().optional(),
       guardianRelationship: z.string().trim().max(80).nullable().optional()
     })
+    .superRefine((value, context) => {
+      if (value.type !== 'guardian') return;
+      if (!value.guardianName?.trim()) context.addIssue({ code: z.ZodIssueCode.custom, path: ['guardianName'], message: 'guardianName is required' });
+      if (!value.guardianRelationship?.trim()) context.addIssue({ code: z.ZodIssueCode.custom, path: ['guardianRelationship'], message: 'guardianRelationship is required' });
+    })
     .optional()
 });
 
@@ -64,7 +70,8 @@ const completeSigningSessionSchema = z.object({
   displayedAt: z.string().datetime(),
   waiverAcceptedAt: z.string().datetime(),
   signedAt: z.string().datetime(),
-  signatureDataUrl: z.string().startsWith('data:image/png;base64,').max(2_000_000)
+  signatureDataUrl: z.string().startsWith('data:image/png;base64,').max(2_000_000),
+  guardianEmail: z.string().trim().email().transform((value) => value.toLowerCase()).optional()
 });
 
 const waiverMailRecipientSchema = z.string().trim().email().transform((value) => value.toLowerCase());
@@ -118,7 +125,9 @@ type PrecheckTimestamps = NonNullable<CreateSigningSessionInput['precheckTimesta
 type SignerInput = {
   type: 'driver' | 'codriver' | 'guardian';
   guardianName: string | null;
+  guardianEmail: string | null;
   guardianRelationship: string | null;
+  representationMode: 'sole' | null;
 };
 
 const SIGNING_SESSION_TTL_MS = 5 * 60 * 1000;
@@ -158,15 +167,7 @@ type SigningCasePayload = {
   };
   isMinor: boolean;
   requiresMedicalCertificate: boolean;
-  contract: {
-    documentId: 'haftverzicht';
-    locale: 'de-DE' | 'en-GB' | 'cs-CZ' | 'pl-PL';
-    version: string;
-    textHash: string;
-    title: string;
-    fullText: string;
-    source: 'backend_contract_context';
-  };
+  contract: ReturnType<typeof buildWaiverContract>;
   entries: Array<{
     id: string;
     className: string;
@@ -196,6 +197,39 @@ type SigningCasePayload = {
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 const hashText = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+let waiverPdfFontsPromise: Promise<{ regular: Buffer; bold: Buffer }> | null = null;
+export const loadWaiverPdfFonts = () => {
+  if (!waiverPdfFontsPromise) {
+    const pending = Promise.all([
+      getAssetObjectBuffer('public/mail/fonts/arial.ttf'),
+      getAssetObjectBuffer('public/mail/fonts/arialbd.ttf')
+    ]).then(([regular, bold]) => {
+      if (!regular || !bold) throw new Error('WAIVER_PDF_FONT_UNAVAILABLE');
+      return { regular, bold };
+    });
+    waiverPdfFontsPromise = pending.catch((error) => {
+      waiverPdfFontsPromise = null;
+      throw error;
+    });
+  }
+  return waiverPdfFontsPromise;
+};
+export const signatureDataUrlToBuffer = (value: string): Buffer => {
+  const match = value.match(/^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/);
+  if (!match) throw new Error('SIGNATURE_INVALID');
+  const buffer = Buffer.from(match[1], 'base64');
+  if (buffer.length < 60 || buffer.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('SIGNATURE_INVALID');
+  return buffer;
+};
+
+const assertSigningChronology = (displayedAt: string, acceptedAt: string, signedAt: string, now = new Date()) => {
+  const displayed = new Date(displayedAt).getTime();
+  const accepted = new Date(acceptedAt).getTime();
+  const signed = new Date(signedAt).getTime();
+  if (![displayed, accepted, signed].every(Number.isFinite) || displayed > accepted || accepted > signed || signed > now.getTime() + 60_000) {
+    throw new Error('SIGNING_TIMESTAMPS_INVALID');
+  }
+};
 
 const normalizeConsentLocale = (value: string | null | undefined): SigningCasePayload['contract']['locale'] => {
   if (value === 'en-GB' || value === 'en' || value === 'en-US') {
@@ -208,26 +242,6 @@ const normalizeConsentLocale = (value: string | null | undefined): SigningCasePa
     return 'pl-PL';
   }
   return 'de-DE';
-};
-
-const toUiLocale = (locale: SigningCasePayload['contract']['locale']): LegalUiLocale => {
-  if (locale === 'en-GB') return 'en';
-  if (locale === 'cs-CZ') return 'cz';
-  if (locale === 'pl-PL') return 'pl';
-  return 'de';
-};
-
-const flattenWaiver = (uiLocale: LegalUiLocale): { title: string; fullText: string } => {
-  const waiver = getLegalTexts(uiLocale).docs.haftverzicht;
-  const parts = [
-    waiver.title,
-    ...(waiver.intro ?? []),
-    ...waiver.sections.flatMap((section) => [section.title, ...(section.paragraphs ?? []), ...(section.bullets ?? [])])
-  ];
-  return {
-    title: waiver.title,
-    fullText: parts.join('\n\n')
-  };
 };
 
 const ageAt = (birthdate: string | null, date: Date): number | null => {
@@ -265,7 +279,7 @@ const assertPrecheckComplete = (input: {
     if (!input.precheckTimestamps.guardianPresentAt || !input.precheckTimestamps.guardianAuthorityCheckedAt) {
       throw new Error('SIGNING_PRECHECK_INCOMPLETE');
     }
-    if (!input.signer.guardianName?.trim() || !input.signer.guardianRelationship?.trim()) {
+    if (!input.signer.guardianName?.trim() || !input.signer.guardianRelationship?.trim() || input.signer.representationMode !== 'sole') {
       throw new Error('SIGNING_GUARDIAN_REQUIRED');
     }
   }
@@ -287,13 +301,17 @@ const signerFromInput = (input: CreateSigningSessionInput, payload: SigningCaseP
     return {
       type: 'guardian',
       guardianName: input.signer?.guardianName?.trim() || null,
-      guardianRelationship: input.signer?.guardianRelationship?.trim() || null
+      guardianEmail: null,
+      guardianRelationship: input.signer?.guardianRelationship?.trim() || null,
+      representationMode: 'sole'
     };
   }
   return {
     type: payload.signer.role,
     guardianName: null,
-    guardianRelationship: null
+    guardianEmail: null,
+    guardianRelationship: null,
+    representationMode: null
   };
 };
 
@@ -326,7 +344,7 @@ export const resolveDeviceByToken = async (deviceToken: string) => {
   return device;
 };
 
-const expireOpenSigningSessions = async (db: Awaited<ReturnType<typeof getDb>>, now = new Date()) => {
+export const expireOpenSigningSessions = async (db: Awaited<ReturnType<typeof getDb>>, now = new Date()) => {
   await db
     .update(signingSession)
     .set({
@@ -473,9 +491,6 @@ const buildSigningCasePayload = async (sourceEntryId: string, signerPersonId?: s
     .limit(1);
   const consent = consentRows[0] ?? null;
   const locale = normalizeConsentLocale(consent?.locale);
-  const uiLocale = toUiLocale(locale);
-  const waiver = flattenWaiver(uiLocale);
-  const textHash = consent?.consentTextHash ?? (await computeConsentTextHash(uiLocale));
   const eventStart = new Date(`${source.eventStartsAt}T12:00:00.000Z`);
   const signerAge = ageAt(signer.birthdate, eventStart);
 
@@ -494,15 +509,7 @@ const buildSigningCasePayload = async (sourceEntryId: string, signerPersonId?: s
     signer,
     isMinor: signerAge !== null && signerAge < 18,
     requiresMedicalCertificate: signerAge !== null && signerAge >= 70,
-    contract: {
-      documentId: 'haftverzicht',
-      locale,
-      version: consent?.consentVersion ?? 'current-backend-legal-text',
-      textHash,
-      title: waiver.title,
-      fullText: waiver.fullText,
-      source: 'backend_contract_context'
-    },
+    contract: buildWaiverContract(locale),
     entries: signerEntryRows.map((row) => {
       const codriver = row.codriverPersonId ? codriverById.get(row.codriverPersonId) ?? null : null;
       const vehicles: SigningCasePayload['entries'][number]['vehicles'] = [
@@ -774,8 +781,36 @@ export const getSigningRequirements = async (entryId: string) => {
       .map((item) => ({ ...item, role: 'codriver' as const, label: 'Beifahrer' }))
   ].filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index);
   const db = await getDb();
+  const now = new Date();
+  await expireOpenSigningSessions(db, now);
   const entryIds = payload.entries.map((item) => item.id);
   const signerIds = signerCandidates.map((item) => item.id);
+  const [payment] = await db
+    .select({
+      status: invoice.paymentStatus,
+      totalCents: invoice.totalCents,
+      paidAmountCents: invoice.paidAmountCents
+    })
+    .from(invoice)
+    .where(and(eq(invoice.eventId, payload.event.id), eq(invoice.driverPersonId, payload.driver.id)))
+    .limit(1);
+  const [activeSession] = await db
+    .select({
+      id: signingSession.id,
+      operatorDisplay: signingSession.operatorDisplay,
+      deviceName: signingDeviceSession.deviceName,
+      createdAt: signingSession.createdAt,
+      expiresAt: signingSession.expiresAt
+    })
+    .from(signingSession)
+    .leftJoin(signingDeviceSession, eq(signingDeviceSession.id, signingSession.deviceSessionId))
+    .where(and(
+      eq(signingSession.eventId, payload.event.id),
+      eq(signingSession.driverPersonId, payload.driver.id),
+      inArray(signingSession.status, ['pending', 'displayed']),
+      sql`${signingSession.expiresAt} > ${now}`
+    ))
+    .limit(1);
   const signedRows =
     entryIds.length > 0 && signerIds.length > 0
       ? await db
@@ -786,7 +821,13 @@ export const getSigningRequirements = async (entryId: string) => {
             createdAt: document.createdAt
           })
           .from(document)
-          .where(and(eq(document.type, 'waiver_signed'), inArray(document.entryId, entryIds), inArray(document.driverPersonId, signerIds)))
+          .where(and(
+            eq(document.type, 'waiver_signed'),
+            eq(document.templateVersion, WAIVER_VERSION),
+            eq(document.status, 'generated'),
+            inArray(document.entryId, entryIds),
+            inArray(document.driverPersonId, signerIds)
+          ))
           .orderBy(desc(document.createdAt))
       : [];
   const signedByPersonId = new Map<string, { documentId: string; signedAt: string }>();
@@ -808,6 +849,23 @@ export const getSigningRequirements = async (entryId: string) => {
     signerType: payload.isMinor ? 'guardian' : 'driver',
     entryCount: payload.entries.length,
     vehicleCount: payload.entries.reduce((count, item) => count + item.vehicles.length, 0),
+    payment: payment
+      ? {
+          status: payment.status,
+          totalCents: payment.totalCents,
+          paidAmountCents: payment.paidAmountCents ?? 0,
+          amountOpenCents: Math.max(0, payment.totalCents - (payment.paidAmountCents ?? 0))
+        }
+      : { status: 'unknown', totalCents: null, paidAmountCents: null, amountOpenCents: null },
+    activeSession: activeSession
+      ? {
+          id: activeSession.id,
+          operatorDisplay: activeSession.operatorDisplay,
+          deviceName: activeSession.deviceName,
+          createdAt: activeSession.createdAt.toISOString(),
+          expiresAt: activeSession.expiresAt.toISOString()
+        }
+      : null,
     contract: {
       locale: payload.contract.locale,
       version: payload.contract.version,
@@ -893,37 +951,78 @@ export const createSigningSession = async (input: CreateSigningSessionInput, act
   const now = new Date();
   await expireOpenSigningSessions(db, now);
   const expiresAt = new Date(now.getTime() + SIGNING_SESSION_TTL_MS);
-  const [created] = await db
-    .insert(signingSession)
-    .values({
-      deviceSessionId: input.deviceSessionId,
-      eventId: payload.event.id,
-      driverPersonId: payload.driver.id,
-      sourceEntryId: input.entryId,
-      status: 'pending',
-      sessionPayload: payload,
-      precheckPayload: precheckTimestamps,
-      signerPayload: signer,
-      operatorUserId: actorUserId,
-      operatorDisplay: actorDisplay,
-      expiresAt,
-      createdAt: now,
-      updatedAt: now
-    })
-    .returning();
+  const created = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`signing-active:${payload.event.id}:${payload.driver.id}`}, 0))`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`signing-device:${input.deviceSessionId}`}, 0))`);
+    const [activeForDriver] = await tx
+      .select({ id: signingSession.id })
+      .from(signingSession)
+      .where(and(
+        eq(signingSession.eventId, payload.event.id),
+        eq(signingSession.driverPersonId, payload.driver.id),
+        inArray(signingSession.status, ['pending', 'displayed']),
+        sql`${signingSession.expiresAt} > ${now}`
+      ))
+      .limit(1);
+    if (activeForDriver) throw new Error('SIGNING_SESSION_ALREADY_ACTIVE');
 
-  await writeAuditLog(db as never, {
-    eventId: payload.event.id,
-    actorUserId,
-    action: 'signing_session_started',
-    entityType: 'signing_session',
-    entityId: created.id,
-    payload: {
-      entryIds: payload.entries.map((entryItem) => entryItem.id),
-      signerPersonId: payload.signer.id,
-      signerRole: payload.signer.role,
-      deviceSessionId: input.deviceSessionId
-    }
+    const [activeForDevice] = await tx
+      .select({ id: signingSession.id })
+      .from(signingSession)
+      .where(and(
+        eq(signingSession.deviceSessionId, input.deviceSessionId),
+        inArray(signingSession.status, ['pending', 'displayed']),
+        sql`${signingSession.expiresAt} > ${now}`
+      ))
+      .limit(1);
+    if (activeForDevice) throw new Error('SIGNING_DEVICE_BUSY');
+
+    const [existingSignedDocument] = await tx
+      .select({ id: document.id })
+      .from(document)
+      .where(and(
+        eq(document.eventId, payload.event.id),
+        eq(document.driverPersonId, payload.signer.id),
+        eq(document.type, 'waiver_signed'),
+        eq(document.templateVersion, WAIVER_VERSION),
+        eq(document.status, 'generated')
+      ))
+      .limit(1);
+    if (existingSignedDocument) throw new Error('WAIVER_ALREADY_SIGNED');
+
+    const [inserted] = await tx
+      .insert(signingSession)
+      .values({
+        deviceSessionId: input.deviceSessionId,
+        eventId: payload.event.id,
+        driverPersonId: payload.driver.id,
+        sourceEntryId: input.entryId,
+        status: 'pending',
+        sessionPayload: payload,
+        precheckPayload: precheckTimestamps,
+        signerPayload: signer,
+        operatorUserId: actorUserId,
+        operatorDisplay: actorDisplay,
+        expiresAt,
+        createdAt: now,
+        updatedAt: now
+      })
+      .returning();
+
+    await writeAuditLog(tx as never, {
+      eventId: payload.event.id,
+      actorUserId,
+      action: 'signing_session_started',
+      entityType: 'signing_session',
+      entityId: inserted.id,
+      payload: {
+        entryIds: payload.entries.map((entryItem) => entryItem.id),
+        signerPersonId: payload.signer.id,
+        signerRole: payload.signer.role,
+        deviceSessionId: input.deviceSessionId
+      }
+    });
+    return inserted;
   });
 
   return { session: projectSigningSession(created), signingCase: projectSigningCasePayload(payload) };
@@ -974,12 +1073,17 @@ export const getCurrentDeviceSigningSession = async (deviceToken: string) => {
     .orderBy(desc(signingSession.createdAt))
     .limit(1);
   const current = rows[0] ?? null;
-  if (current && current.status === 'pending') {
-    await db
+  const shouldRecordContractDisplay = current && (
+    (current.workflowType === 'waiver_signature' && current.status === 'pending')
+    || (current.workflowStage === 'ready_to_sign' && !current.displayedAt)
+  );
+  if (shouldRecordContractDisplay) {
+    const [displayed] = await db
       .update(signingSession)
       .set({ status: 'displayed', displayedAt: now, updatedAt: now })
-      .where(eq(signingSession.id, current.id));
-    return projectSigningSessionWithLiveIdentity(db, { ...current, status: 'displayed' });
+      .where(eq(signingSession.id, current.id))
+      .returning();
+    return projectSigningSessionWithLiveIdentity(db, displayed ?? current);
   }
   return projectSigningSessionWithLiveIdentity(db, current);
 };
@@ -1017,18 +1121,28 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
 
   const payload = current.sessionPayload as SigningCasePayload;
   const precheckTimestamps = current.precheckPayload as PrecheckTimestamps;
-  const signer = current.signerPayload as SignerInput;
+  const storedSigner = current.signerPayload as SignerInput;
+  const signer: SignerInput = payload.isMinor
+    ? { ...storedSigner, guardianEmail: input.guardianEmail?.trim().toLowerCase() ?? null }
+    : storedSigner;
+  if (payload.isMinor && !signer.guardianEmail) {
+    throw new Error('SIGNING_GUARDIAN_EMAIL_REQUIRED');
+  }
   assertPrecheckComplete({
     isMinor: payload.isMinor,
     requiresMedicalCertificate: payload.requiresMedicalCertificate,
     precheckTimestamps,
     signer
   });
-  const signatureSha256 = hashText(input.signatureDataUrl);
+  const effectiveDisplayedAt = current.displayedAt?.toISOString() ?? input.displayedAt;
+  assertSigningChronology(effectiveDisplayedAt, input.waiverAcceptedAt, input.signedAt, now);
+  const signatureBuffer = signatureDataUrlToBuffer(input.signatureDataUrl);
+  const signatureSha256 = hashText(signatureBuffer);
   const evidenceId = `${current.id}-${randomUUID()}`;
   const baseKey = `signing/${payload.event.id}/${payload.signer.id}/${evidenceId}`;
   const documentS3Key = `${baseKey}/waiver.pdf`;
   const auditS3Key = `${baseKey}/audit.json`;
+  const signatureS3Key = `${baseKey}/signature.png`;
   const auditPayload = {
     auditSchemaVersion: 'signing-terminal-v1',
     evidenceId,
@@ -1043,8 +1157,11 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     waiver: {
       locale: payload.contract.locale,
       version: payload.contract.version,
-      textHash: payload.contract.textHash,
-      displayedAt: input.displayedAt,
+      authoritativeLocale: payload.contract.authoritativeLocale,
+      authoritativeText: payload.contract.authoritativeFullText,
+      authoritativeTextHash: payload.contract.authoritativeTextHash,
+      translation: payload.contract.translation,
+      displayedAt: effectiveDisplayedAt,
       acceptedAt: input.waiverAcceptedAt
     },
     precheckTimestamps,
@@ -1054,7 +1171,8 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     },
     signature: {
       capturedAt: input.signedAt,
-      imageSha256: signatureSha256
+      imageSha256: signatureSha256,
+      s3Key: signatureS3Key
     },
     document: {
       sha256: '',
@@ -1067,10 +1185,11 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     signer,
     precheckTimestamps,
     operatorDisplay: current.operatorDisplay,
-    displayedAt: input.displayedAt,
+    displayedAt: effectiveDisplayedAt,
     waiverAcceptedAt: input.waiverAcceptedAt,
     signedAt: input.signedAt,
-    signatureDataUrl: input.signatureDataUrl
+    signatureDataUrl: input.signatureDataUrl,
+    fonts: await loadWaiverPdfFonts()
   });
   const documentSha256 = hashText(pdfBuffer);
   auditPayload.document.sha256 = documentSha256;
@@ -1078,9 +1197,10 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
 
   try {
     await uploadPdf(documentS3Key, pdfBuffer);
+    await uploadFile(signatureS3Key, signatureBuffer, 'image/png');
     await uploadFile(auditS3Key, Buffer.from(auditJson, 'utf8'), 'application/json; charset=utf-8');
   } catch (error) {
-    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(signatureS3Key), deleteDocumentObject(auditS3Key)]);
     logOperationalEvent('error', 'signing.evidence_upload_failed', {
       eventId: payload.event.id,
       sessionId: current.id,
@@ -1093,13 +1213,28 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
   let completion: { updated: typeof current; docRow: { id: string } | null } | null = null;
   try {
     completion = await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${payload.event.id}:${payload.signer.id}`}, 0))`);
+      const [alreadySigned] = await tx
+        .select({ id: document.id })
+        .from(document)
+        .where(and(
+          eq(document.eventId, payload.event.id),
+          eq(document.driverPersonId, payload.signer.id),
+          eq(document.type, 'waiver_signed'),
+          eq(document.templateVersion, payload.contract.version),
+          eq(document.status, 'generated')
+        ))
+        .limit(1);
+      if (alreadySigned) throw new Error('WAIVER_ALREADY_SIGNED');
+
       const [claimed] = await tx
         .update(signingSession)
         .set({
           status: 'completed',
           workflowStage: 'completed',
-          displayedAt: new Date(input.displayedAt),
+          displayedAt: new Date(effectiveDisplayedAt),
           signedAt,
+          signerPayload: signer,
           evidenceAuditS3Key: auditS3Key,
           updatedAt: new Date()
         })
@@ -1144,7 +1279,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
             mediaAccepted: false,
             clubInfoAccepted: false,
             guardianFullName: signer.type === 'guardian' ? signer.guardianName ?? null : null,
-            guardianEmail: null,
+            guardianEmail: signer.type === 'guardian' ? signer.guardianEmail ?? null : null,
             guardianPhone: null,
             guardianConsentAccepted: signer.type === 'guardian',
             capturedAt: signedAt,
@@ -1176,7 +1311,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
       return { updated, docRow: docRow ? { id: docRow.id } : null };
     });
   } catch (error) {
-    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(signatureS3Key), deleteDocumentObject(auditS3Key)]);
     logOperationalEvent('error', 'signing.completion_transaction_failed', {
       eventId: payload.event.id,
       sessionId: current.id,
@@ -1185,7 +1320,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
     throw error;
   }
   if (!completion) {
-    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(signatureS3Key), deleteDocumentObject(auditS3Key)]);
     const completed = await getSigningSession(current.id);
     if (completed?.status === 'completed') return completed;
     throw new Error('SIGNING_SESSION_NOT_ACTIVE');
@@ -1201,7 +1336,7 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
   // Queue the signed document for the person whose waiver was captured.
   // Delivery remains best-effort and must never roll back valid evidence.
   try {
-    const recipientEmail = payload.signer.email?.trim();
+    const recipientEmail = signer.type === 'guardian' ? signer.guardianEmail?.trim() : payload.signer.email?.trim();
     const signerName = signer.type === 'guardian' && signer.guardianName?.trim()
       ? signer.guardianName.trim()
       : standardPersonIdentity(payload.signer).displayName;
@@ -1410,8 +1545,8 @@ export const resendSignedWaiverMail = async (documentId: string, actorUserId: st
   if (!recipient) {
     throw new Error('WAIVER_MAIL_RECIPIENT_MISSING');
   }
-  const recipientEmail = signerInput.type === 'guardian' && payload.participant?.guardianEmail?.trim()
-    ? payload.participant.guardianEmail.trim().toLowerCase()
+  const recipientEmail = signerInput.type === 'guardian'
+    ? signerInput.guardianEmail?.trim().toLowerCase()
     : recipient?.email?.trim();
   if (!recipientEmail) {
     throw new Error('WAIVER_MAIL_RECIPIENT_MISSING');

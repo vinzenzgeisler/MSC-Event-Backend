@@ -256,6 +256,7 @@ export const handler = async () => {
      using "document", "event"
      where "document_generation_job"."document_id" = "document"."id"
        and "document"."event_id" = "event"."id"
+       and "document"."type" <> 'waiver_signed'
        and "event"."ends_at" < current_date - ($1 * interval '1 day')`,
     [settings.documentDays]
   );
@@ -265,6 +266,7 @@ export const handler = async () => {
     `delete from "document"
      using "event"
      where "document"."event_id" = "event"."id"
+       and "document"."type" <> 'waiver_signed'
        and "event"."ends_at" < current_date - ($1 * interval '1 day')`,
     [settings.documentDays]
   );

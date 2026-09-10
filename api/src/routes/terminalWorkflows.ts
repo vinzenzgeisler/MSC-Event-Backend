@@ -17,14 +17,17 @@ import {
 } from '../db/schema';
 import { renderSignedWaiverEvidencePdf } from '../docs/pdf';
 import { standardPersonIdentity } from '../domain/personIdentity';
+import { buildWaiverContract } from '../legal/waiverContract';
 import { deleteDocumentObject, uploadFile, uploadPdf } from '../docs/storage';
 import { errorCodeOf, logOperationalEvent } from '../observability/logger';
-import { computeConsentTextHash, getLegalTexts, type LegalUiLocale } from './publicLegalTextsSource';
 import {
   formatWaiverMailEventDates,
   formatWaiverMailSignedAt,
+  expireOpenSigningSessions,
+  loadWaiverPdfFonts,
   queueWaiverSignedMail,
-  resolveDeviceByToken
+  resolveDeviceByToken,
+  signatureDataUrlToBuffer
 } from './adminSigning';
 
 const workflowTypeSchema = z.enum(['regular_codriver_registration', 'charity_codriver_registration']);
@@ -173,21 +176,17 @@ const ageAt = (birthdate: string, startsAt: string) => {
   return age;
 };
 
-const toUiLocale = (locale: ParticipantDraft['locale']): LegalUiLocale =>
-  locale === 'en-GB' ? 'en' : locale === 'cs-CZ' ? 'cz' : locale === 'pl-PL' ? 'pl' : 'de';
+const assertSigningChronology = (displayedAt: string, acceptedAt: string, signedAt: string, now = new Date()) => {
+  const displayed = new Date(displayedAt).getTime();
+  const accepted = new Date(acceptedAt).getTime();
+  const signed = new Date(signedAt).getTime();
+  if (![displayed, accepted, signed].every(Number.isFinite) || displayed > accepted || accepted > signed || signed > now.getTime() + 60_000) {
+    throw new Error('SIGNING_TIMESTAMPS_INVALID');
+  }
+};
 
 export const buildParticipantWaiverContract = async (locale: ParticipantDraft['locale']) => {
-  const uiLocale = toUiLocale(locale);
-  const waiver = getLegalTexts(uiLocale).docs.haftverzicht;
-  return {
-    documentId: 'haftverzicht' as const,
-    locale,
-    version: 'current-backend-legal-text',
-    textHash: await computeConsentTextHash(uiLocale),
-    title: waiver.title,
-    fullText: [waiver.title, ...(waiver.intro ?? []), ...waiver.sections.flatMap((section) => [section.title, ...(section.paragraphs ?? []), ...(section.bullets ?? [])])].join('\n\n'),
-    source: 'backend_contract_context' as const
-  };
+  return buildWaiverContract(locale);
 };
 
 const loadWorkflowContext = async (entryIds: string[]) => {
@@ -259,45 +258,63 @@ export const createParticipantTerminalSession = async (
     assertRegularCodriverOperation(context.rows, input.operation, input.participantPersonId);
   }
   const now = new Date();
+  await expireOpenSigningSessions(db, now);
   const driverIdentity = standardPersonIdentity({
     firstName: context.first.driverFirstName,
     lastName: context.first.driverLastName,
     publicationName: context.first.driverPublicationName
   });
-  await db.update(signingSession).set({ status: 'cancelled', workflowStage: 'cancelled', draftPayload: null, updatedAt: now })
-    .where(and(eq(signingSession.deviceSessionId, input.deviceSessionId), sql`${signingSession.status} in ('pending', 'displayed')`));
-  const [created] = await db.insert(signingSession).values({
-    deviceSessionId: input.deviceSessionId,
-    eventId: context.first.eventId,
-    driverPersonId: context.first.driverPersonId,
-    sourceEntryId: context.first.entryId,
-    workflowType: input.workflowType,
-    workflowStage: 'collecting_data',
-    status: 'pending',
-    sessionPayload: {
+  const created = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`signing-active:${context.first.eventId}:${context.first.driverPersonId}`}, 0))`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`signing-device:${input.deviceSessionId}`}, 0))`);
+    const [activeForDriver] = await tx.select({ id: signingSession.id }).from(signingSession).where(and(
+      eq(signingSession.eventId, context.first.eventId),
+      eq(signingSession.driverPersonId, context.first.driverPersonId),
+      inArray(signingSession.status, ['pending', 'displayed']),
+      sql`${signingSession.expiresAt} > ${now}`
+    )).limit(1);
+    if (activeForDriver) throw new Error('SIGNING_SESSION_ALREADY_ACTIVE');
+    const [activeForDevice] = await tx.select({ id: signingSession.id }).from(signingSession).where(and(
+      eq(signingSession.deviceSessionId, input.deviceSessionId),
+      inArray(signingSession.status, ['pending', 'displayed']),
+      sql`${signingSession.expiresAt} > ${now}`
+    )).limit(1);
+    if (activeForDevice) throw new Error('SIGNING_DEVICE_BUSY');
+
+    const [inserted] = await tx.insert(signingSession).values({
+      deviceSessionId: input.deviceSessionId,
+      eventId: context.first.eventId,
+      driverPersonId: context.first.driverPersonId,
+      sourceEntryId: context.first.entryId,
       workflowType: input.workflowType,
-      operation: input.operation,
-      participantPersonId: input.participantPersonId ?? null,
-      event: { id: context.first.eventId, name: context.first.eventName, startsAt: String(context.first.eventStartsAt), endsAt: String(context.first.eventEndsAt) },
-      driver: {
-        id: context.first.driverPersonId,
-        displayName: driverIdentity.displayName,
-        identityProtected: driverIdentity.identityProtected,
-        firstName: driverIdentity.firstName,
-        lastName: driverIdentity.lastName,
-        email: driverIdentity.identityProtected ? null : context.first.driverEmail
+      workflowStage: 'collecting_data',
+      status: 'pending',
+      sessionPayload: {
+        workflowType: input.workflowType,
+        operation: input.operation,
+        participantPersonId: input.participantPersonId ?? null,
+        event: { id: context.first.eventId, name: context.first.eventName, startsAt: String(context.first.eventStartsAt), endsAt: String(context.first.eventEndsAt) },
+        driver: {
+          id: context.first.driverPersonId,
+          displayName: driverIdentity.displayName,
+          identityProtected: driverIdentity.identityProtected,
+          firstName: driverIdentity.firstName,
+          lastName: driverIdentity.lastName,
+          email: driverIdentity.identityProtected ? null : context.first.driverEmail
+        },
+        entries: context.rows.map((row) => ({ id: row.entryId, className: row.className, startNumber: row.startNumber }))
       },
-      entries: context.rows.map((row) => ({ id: row.entryId, className: row.className, startNumber: row.startNumber }))
-    },
-    precheckPayload: {},
-    signerPayload: {},
-    operatorUserId: actorUserId,
-    operatorDisplay: actorDisplay,
-    expiresAt: new Date(now.getTime() + 20 * 60 * 1000),
-    createdAt: now,
-    updatedAt: now
-  }).returning();
-  await writeAuditLog(db as never, { eventId: context.first.eventId, actorUserId, action: 'terminal_participant_session_started', entityType: 'signing_session', entityId: created.id, payload: { workflowType: input.workflowType, operation: input.operation, participantPersonId: input.participantPersonId, entryIds: input.entryIds, deviceSessionId: input.deviceSessionId } });
+      precheckPayload: {},
+      signerPayload: {},
+      operatorUserId: actorUserId,
+      operatorDisplay: actorDisplay,
+      expiresAt: new Date(now.getTime() + 20 * 60 * 1000),
+      createdAt: now,
+      updatedAt: now
+    }).returning();
+    await writeAuditLog(tx as never, { eventId: context.first.eventId, actorUserId, action: 'terminal_participant_session_started', entityType: 'signing_session', entityId: inserted.id, payload: { workflowType: input.workflowType, operation: input.operation, participantPersonId: input.participantPersonId, entryIds: input.entryIds, deviceSessionId: input.deviceSessionId } });
+    return inserted;
+  });
   return projectParticipantSessionWithLiveIdentity(db, created);
 };
 
@@ -326,7 +343,14 @@ export const submitParticipantDraft = async (sessionId: string, draft: Participa
   const [editedPerson] = context.operation === 'edit'
     ? await db.select({ publicationName: person.publicationName }).from(person).where(eq(person.id, context.participantPersonId)).limit(1)
     : [null];
-  const storedDraft = { ...draft, publicationName: editedPerson?.publicationName ?? knownPerson?.publicationName ?? null };
+  const storedDraft = {
+    ...draft,
+    guardianFullName: age < 18 ? draft.guardianFullName ?? null : null,
+    guardianEmail: age < 18 ? draft.guardianEmail?.trim().toLowerCase() ?? null : null,
+    guardianPhone: age < 18 ? draft.guardianPhone ?? null : null,
+    guardianRelationship: age < 18 ? draft.guardianRelationship ?? null : null,
+    publicationName: editedPerson?.publicationName ?? knownPerson?.publicationName ?? null
+  };
   const [updated] = await db.update(signingSession).set({
     draftPayload: storedDraft,
     sessionPayload: {
@@ -359,10 +383,12 @@ export const approveParticipantTerminalSession = async (sessionId: string, prech
   if (age < 18 && (!prechecks.guardianPresentAt || !prechecks.guardianAuthorityCheckedAt)) throw new Error('SIGNING_PRECHECK_INCOMPLETE');
   const contract = await buildParticipantWaiverContract(draft.locale);
   const signer = age < 18
-    ? { type: 'guardian', guardianName: draft.guardianFullName, guardianRelationship: draft.guardianRelationship }
-    : { type: 'codriver', guardianName: null, guardianRelationship: null };
+    ? { type: 'guardian', guardianName: draft.guardianFullName, guardianEmail: draft.guardianEmail, guardianRelationship: draft.guardianRelationship, representationMode: 'sole' }
+    : { type: 'codriver', guardianName: null, guardianEmail: null, guardianRelationship: null, representationMode: null };
   const [updated] = await db.update(signingSession).set({
+    status: 'pending',
     workflowStage: 'ready_to_sign',
+    displayedAt: null,
     precheckPayload: prechecks,
     signerPayload: signer,
     sessionPayload: { ...context, participant: draft, isMinor: age < 18, requiresMedicalCertificate: session.workflowType === 'regular_codriver_registration' && age >= 70, contract },
@@ -375,7 +401,7 @@ export const approveParticipantTerminalSession = async (sessionId: string, prech
 
 export const returnParticipantSessionToForm = async (sessionId: string, actorUserId: string | null) => {
   const db = await getDb();
-  const [updated] = await db.update(signingSession).set({ workflowStage: 'collecting_data', approvedAt: null, precheckPayload: {}, updatedAt: new Date() })
+  const [updated] = await db.update(signingSession).set({ status: 'pending', workflowStage: 'collecting_data', displayedAt: null, approvedAt: null, precheckPayload: {}, updatedAt: new Date() })
     .where(and(eq(signingSession.id, sessionId), sql`${signingSession.status} in ('pending', 'displayed')`)).returning();
   if (updated) await writeAuditLog(db as never, { eventId: updated.eventId, actorUserId, action: 'terminal_participant_session_returned', entityType: 'signing_session', entityId: sessionId, payload: {} });
   return projectParticipantSessionWithLiveIdentity(db, updated ?? null);
@@ -407,6 +433,16 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   const existingPerson = editedPerson ?? emailPerson;
   if (!editedPerson && existingPerson && (`${existingPerson.firstName} ${existingPerson.lastName}`.trim().toLowerCase() !== `${draft.firstName} ${draft.lastName}`.trim().toLowerCase())) throw new Error('EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
   const participantId = editedPerson?.id ?? emailPerson?.id ?? randomUUID();
+  if (existingPerson) {
+    const [existingSignedDocument] = await db.select({ id: document.id }).from(document).where(and(
+      eq(document.eventId, session.eventId),
+      eq(document.driverPersonId, participantId),
+      eq(document.type, 'waiver_signed'),
+      eq(document.templateVersion, context.contract.version),
+      eq(document.status, 'generated')
+    )).limit(1);
+    if (existingSignedDocument) throw new Error('WAIVER_ALREADY_SIGNED');
+  }
   if (session.workflowType === 'charity_codriver_registration' && existingPerson) {
     const [activeRegistration] = await db
       .select({ id: entryCharityCodriver.id })
@@ -437,27 +473,56 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
     status: 'open',
     signedAt: null
   };
+  const effectiveDisplayedAt = session.displayedAt?.toISOString() ?? input.displayedAt;
+  assertSigningChronology(effectiveDisplayedAt, input.waiverAcceptedAt, input.signedAt);
+  const signatureBuffer = signatureDataUrlToBuffer(input.signatureDataUrl);
+  const signatureSha256 = createHash('sha256').update(signatureBuffer).digest('hex');
   const pdf = await renderSignedWaiverEvidencePdf({
     sessionId,
     payload,
     signer: session.signerPayload,
     precheckTimestamps: session.precheckPayload,
     operatorDisplay: session.operatorDisplay,
-    displayedAt: input.displayedAt,
+    displayedAt: effectiveDisplayedAt,
     waiverAcceptedAt: input.waiverAcceptedAt,
     signedAt: input.signedAt,
-    signatureDataUrl: input.signatureDataUrl
+    signatureDataUrl: input.signatureDataUrl,
+    fonts: await loadWaiverPdfFonts()
   } as any);
   const documentSha256 = createHash('sha256').update(pdf).digest('hex');
   const evidenceId = `${session.id}-${randomUUID()}`;
   const baseKey = `signing/${session.eventId}/${participantId}/${evidenceId}`;
   const documentS3Key = `${baseKey}/waiver.pdf`;
   const auditS3Key = `${baseKey}/audit.json`;
+  const signatureS3Key = `${baseKey}/signature.png`;
   try {
     await uploadPdf(documentS3Key, pdf);
-    await uploadFile(auditS3Key, Buffer.from(JSON.stringify({ auditSchemaVersion: 'terminal-participant-v1', sessionId, workflowType: session.workflowType, eventId: session.eventId, entryIds, participantId, signedAt: input.signedAt, privacyAcceptedAt: input.privacyAcceptedAt, waiverAcceptedAt: input.waiverAcceptedAt, documentSha256 }, null, 2)), 'application/json; charset=utf-8');
+    await uploadFile(signatureS3Key, signatureBuffer, 'image/png');
+    await uploadFile(auditS3Key, Buffer.from(JSON.stringify({
+      auditSchemaVersion: 'terminal-participant-v2',
+      sessionId,
+      workflowType: session.workflowType,
+      eventId: session.eventId,
+      entryIds,
+      participantId,
+      signer: session.signerPayload,
+      waiver: {
+        version: context.contract.version,
+        locale: context.contract.locale,
+        authoritativeLocale: context.contract.authoritativeLocale,
+        authoritativeText: context.contract.authoritativeFullText,
+        authoritativeTextHash: context.contract.authoritativeTextHash,
+        translation: context.contract.translation,
+        displayedAt: effectiveDisplayedAt,
+        acceptedAt: input.waiverAcceptedAt
+      },
+      signedAt: input.signedAt,
+      privacyAcceptedAt: input.privacyAcceptedAt,
+      signature: { s3Key: signatureS3Key, imageSha256: signatureSha256 },
+      document: { s3Key: documentS3Key, sha256: documentSha256 }
+    }, null, 2)), 'application/json; charset=utf-8');
   } catch (error) {
-    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(signatureS3Key), deleteDocumentObject(auditS3Key)]);
     logOperationalEvent('error', 'signing.evidence_upload_failed', {
       eventId: session.eventId,
       sessionId,
@@ -470,6 +535,16 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   let updatedSession: typeof session | null = null;
   try {
     updatedSession = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${session.eventId}:${participantId}`}, 0))`);
+    const [alreadySigned] = await tx.select({ id: document.id }).from(document).where(and(
+      eq(document.eventId, session.eventId),
+      eq(document.driverPersonId, participantId),
+      eq(document.type, 'waiver_signed'),
+      eq(document.templateVersion, context.contract.version),
+      eq(document.status, 'generated')
+    )).limit(1);
+    if (alreadySigned) throw new Error('WAIVER_ALREADY_SIGNED');
+
     const now = new Date();
     const [claimed] = await tx.update(signingSession).set({
       status: 'completed',
@@ -508,7 +583,7 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
     return updated;
     });
   } catch (error) {
-    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(signatureS3Key), deleteDocumentObject(auditS3Key)]);
     logOperationalEvent('error', 'terminal.completion_transaction_failed', {
       eventId: session.eventId,
       sessionId,
@@ -518,7 +593,7 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
     throw error;
   }
   if (!updatedSession) {
-    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(signatureS3Key), deleteDocumentObject(auditS3Key)]);
     const [completed] = await db.select().from(signingSession).where(and(
       eq(signingSession.id, sessionId),
       eq(signingSession.deviceSessionId, device.id),

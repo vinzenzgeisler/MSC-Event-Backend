@@ -29,25 +29,42 @@ export const queueOperationalMails = async (
   return db
     .insert(emailOutbox)
     .values(
-      input.mails.map((mail) => ({
-        eventId: input.eventId,
-        batchId,
-        toEmail: mail.toEmail.trim().toLowerCase(),
-        subject: mail.subject,
-        templateId: input.templateId,
-        templateVersion: 1,
-        templateData: {
+      input.mails.map((mail) => {
+        const mergedTemplateData = {
           ...(input.commonTemplateData ?? {}),
-          ...(mail.templateData ?? {}),
-          audience: mail.audience,
-          bodyTextOverride: mail.bodyText,
-          ...(mail.bodyHtml ? { bodyHtmlOverride: mail.bodyHtml } : {})
-        },
-        status: 'queued',
-        sendAfter: new Date(),
-        idempotencyKey: `${input.idempotencyPrefix}:${mail.audience}:${recipientFingerprint(mail.toEmail)}`,
-        maxAttempts: 5
-      }))
+          ...(mail.templateData ?? {})
+        };
+        const mailRenderOptions = mergedTemplateData.renderOptions && typeof mergedTemplateData.renderOptions === 'object'
+          ? mergedTemplateData.renderOptions as Record<string, unknown>
+          : {};
+        return {
+          eventId: input.eventId,
+          batchId,
+          toEmail: mail.toEmail.trim().toLowerCase(),
+          subject: mail.subject,
+          templateId: input.templateId,
+          templateVersion: 1,
+          templateData: {
+            ...mergedTemplateData,
+            audience: mail.audience,
+            ...(mail.audience === 'orga' ? {
+              headerTitle: mergedTemplateData.headerTitle ?? 'INTERNE PROZESSMELDUNG',
+              renderOptions: {
+                showBadge: true,
+                mailLabel: 'Interne Prozessmeldung',
+                includeEntryContext: false,
+                ...mailRenderOptions
+              }
+            } : {}),
+            bodyTextOverride: mail.bodyText,
+            ...(mail.bodyHtml ? { bodyHtmlOverride: mail.bodyHtml } : {})
+          },
+          status: 'queued',
+          sendAfter: new Date(),
+          idempotencyKey: `${input.idempotencyPrefix}:${mail.audience}:${recipientFingerprint(mail.toEmail)}`,
+          maxAttempts: 5
+        };
+      })
     )
     // Compatible with the historical partial idempotency index as well as a
     // future non-partial unique index. A targeted ON CONFLICT would need to

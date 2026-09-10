@@ -355,6 +355,16 @@ const CONTRACTS: Record<string, TemplateContract> = {
     includeEntryContextDefault: false,
     showBadgeDefault: false,
     defaultMailLabel: null
+  }),
+  technical_inspection_decision: makeProcessContract({
+    includeEntryContextDefault: false,
+    showBadgeDefault: true,
+    defaultMailLabel: 'Technische Abnahme'
+  }),
+  orga_registration_received: makeProcessContract({
+    includeEntryContextDefault: false,
+    showBadgeDefault: true,
+    defaultMailLabel: 'Nennungseingang'
   })
 };
 

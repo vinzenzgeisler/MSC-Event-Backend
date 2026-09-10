@@ -31,6 +31,7 @@ import { getPublicLegalCurrent, resolvePublicLegalLocale } from './publicLegal';
 import { DuplicateRequestError, queueLifecycleMail, queueMail } from './adminMail';
 import { recalculateInvoices } from './adminFinance';
 import { queueOperationalMails } from '../mail/operationalOutbox';
+import { buildOperationalNoticeHtml, operationalPresentationData } from '../mail/operationalPresentation';
 import { getOrgaNotificationRecipients } from '../observability/recipients';
 import { errorCodeOf, logOperationalEvent } from '../observability/logger';
 
@@ -1415,6 +1416,7 @@ const queueRegistrationAlertMails = async (input: {
     : ['Keine Startdetails gefunden.'];
 
   const subject = `[Nennungstool] Neue Nennung eingegangen (${input.eventName})`;
+  const notificationTimestamp = new Date().toISOString();
   const body = [
     'Es ist eine neue Nennung im Nennungstool eingegangen.',
     '',
@@ -1422,11 +1424,31 @@ const queueRegistrationAlertMails = async (input: {
     `Fahrer: ${input.driverName}`,
     `E-Mail: ${input.driverEmail}`,
     `Group-ID: ${input.groupId}`,
-    `Zeitpunkt: ${new Date().toISOString()}`,
+    `Zeitpunkt: ${notificationTimestamp}`,
     '',
     'Startdetails:',
     ...entryLines
   ].join('\n');
+  const bodyHtml = buildOperationalNoticeHtml({
+    intro: 'Eine neue Nennung wurde vollständig im Nennungstool gespeichert.',
+    statusLabel: 'NEUE NENNUNG',
+    tone: 'info',
+    fields: [
+      { label: 'Veranstaltung', value: input.eventName },
+      { label: 'Fahrer', value: input.driverName },
+      { label: 'E-Mail', value: input.driverEmail },
+      { label: 'Vorgang', value: input.groupId },
+      { label: 'Zeitpunkt', value: notificationTimestamp }
+    ],
+    noteTitle: 'Startdetails',
+    note: entryLines.join('\n'),
+    footer: 'Interne Prozessmeldung – keine Teilnehmerkommunikation.'
+  });
+  const templateData = operationalPresentationData({
+    headerTitle: 'INTERNE NENNUNGSMELDUNG · NEU',
+    preheader: `Neue Nennung für ${input.eventName}`,
+    mailLabel: 'Nennungseingang'
+  });
 
   const queued = await queueOperationalMails(db, {
     eventId: input.eventId,
@@ -1437,7 +1459,9 @@ const queueRegistrationAlertMails = async (input: {
       audience: 'orga' as const,
       toEmail,
       subject,
-      bodyText: body
+      bodyText: body,
+      bodyHtml,
+      templateData
     }))
   });
   logOperationalEvent('info', 'registration.orga_notification_queued', {

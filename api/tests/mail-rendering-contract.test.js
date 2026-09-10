@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { renderMailContract } = require('../dist/mail/rendering.js');
+const { buildOperationalNoticeHtml, operationalPresentationData } = require('../dist/mail/operationalPresentation.js');
 const { getAcceptedOpenPaymentHeaderTitle, resolveMailLocale } = require('../dist/mail/i18n.js');
 const { buildAcceptedPaymentInstructionText } = require('../dist/routes/adminMail.js');
 
@@ -242,6 +243,62 @@ const buildBasePayload = () => ({
   assert.equal(rendered.subjectRendered, 'Klassenwechsel bestätigt - 12. Oberlausitzer Dreieck');
   assert.match(rendered.bodyTextRendered, /Klasse 6 wurde durch Klasse 5 ersetzt/);
   assert.equal(rendered.bodyTextRendered.includes('Zahlung ist eingegangen'), false);
+}
+
+// Technical inspection mails are visually identified as technical process messages.
+{
+  const rendered = renderMailContract({
+    templateKey: 'technical_inspection_decision',
+    subjectTemplate: 'Technische Abnahme bestätigt – {{eventName}}',
+    bodyTextTemplate: 'Prüfergebnis: BESTANDEN',
+    bodyHtmlTemplate: '<div data-test="inspection-result">BESTANDEN · Fahrzeug geprüft</div>',
+    hasContentOverride: true,
+    data: {
+      eventName: 'Dreiecksrennen 2026',
+      headerTitle: 'INTERNE TECHNISCHE MELDUNG · BESTANDEN',
+      renderOptions: {
+        showBadge: true,
+        mailLabel: 'Technische Abnahme',
+        includeEntryContext: false
+      }
+    }
+  });
+  assert.match(rendered.htmlDocument, /Technische Abnahme/);
+  assert.match(rendered.htmlDocument, /INTERNE TECHNISCHE MELDUNG · BESTANDEN/);
+  assert.match(rendered.htmlDocument, /data-test="inspection-result"/);
+  assert.doesNotMatch(rendered.htmlDocument, /Information vom Veranstalter/);
+}
+
+// Other internal process notifications use the same technical notification language.
+{
+  const bodyHtml = buildOperationalNoticeHtml({
+    intro: 'Eine neue Nennung wurde gespeichert.',
+    statusLabel: 'NEUE NENNUNG',
+    tone: 'info',
+    fields: [
+      { label: 'Fahrer', value: 'Erika <Beispiel>' },
+      { label: 'Vorgang', value: 'group-123' }
+    ],
+    footer: 'Interne Prozessmeldung – keine Teilnehmerkommunikation.'
+  });
+  const data = operationalPresentationData({
+    headerTitle: 'INTERNE NENNUNGSMELDUNG · NEU',
+    preheader: 'Neue Nennung eingegangen',
+    mailLabel: 'Nennungseingang'
+  });
+  const rendered = renderMailContract({
+    templateKey: 'orga_registration_received',
+    subjectTemplate: '[Nennungstool] Neue Nennung',
+    bodyTextTemplate: 'Neue Nennung: Erika Beispiel',
+    bodyHtmlTemplate: bodyHtml,
+    hasContentOverride: true,
+    data: { eventName: 'Dreiecksrennen 2026', ...data }
+  });
+  assert.match(rendered.htmlDocument, /Nennungseingang/);
+  assert.match(rendered.htmlDocument, /INTERNE NENNUNGSMELDUNG · NEU/);
+  assert.match(rendered.htmlDocument, /NEUE NENNUNG/);
+  assert.match(rendered.htmlDocument, /Erika &lt;Beispiel&gt;/);
+  assert.match(rendered.htmlDocument, /keine Teilnehmerkommunikation/);
 }
 
 // Stored campaign copy owns its signoff; section headings get clear spacing and separators.

@@ -442,6 +442,18 @@ const TEMPLATE_VISUALS: Record<string, TemplateVisualConfig> = {
     entryBackground: '#ECFDF5',
     entryBorder: '#BBF7D0',
     entryLabelColor: '#15803D'
+  },
+  technical_inspection_decision: {
+    accentLine: '#FACC15',
+    entryBackground: '#FFFBEB',
+    entryBorder: '#FDE68A',
+    entryLabelColor: '#A16207'
+  },
+  orga_registration_received: {
+    accentLine: '#38BDF8',
+    entryBackground: '#F0F9FF',
+    entryBorder: '#BAE6FD',
+    entryLabelColor: '#0369A1'
   }
 };
 
@@ -651,6 +663,14 @@ const TEMPLATE_PRESENTATION: Record<string, { mailLabel: string; heroSubtitle: s
   waiver_signed: {
     mailLabel: '',
     heroSubtitle: 'Deine unterschriebene Haftverzichtserklärung liegt als PDF bei.'
+  },
+  technical_inspection_decision: {
+    mailLabel: 'Technische Abnahme',
+    heroSubtitle: 'Prüfergebnis der technischen Abnahme.'
+  },
+  orga_registration_received: {
+    mailLabel: 'Nennungseingang',
+    heroSubtitle: 'Interne Statusmeldung zu einer neuen Nennung.'
   }
 };
 

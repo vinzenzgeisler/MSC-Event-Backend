@@ -16,6 +16,7 @@ import {
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import type { AuthContext } from '../http/auth';
 import { queueOperationalMails } from '../mail/operationalOutbox';
+import { buildOperationalNoticeHtml, operationalPresentationData } from '../mail/operationalPresentation';
 import { getOrgaNotificationRecipients } from '../observability/recipients';
 import { logOperationalEvent } from '../observability/logger';
 import { resolveIamUserDisplayNames } from './adminIam';
@@ -98,6 +99,48 @@ type InspectionDecisionEmailInput = {
   eventName: string | null;
 };
 
+const buildInspectionResultHtml = (input: InspectionDecisionEmailInput, audience: 'driver' | 'orga', inspector?: string | null): string => {
+  const passed = input.techStatus === 'passed';
+  const statusLabel = passed ? 'BESTANDEN' : 'NICHT BESTANDEN';
+  const vehicleName = [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || 'Unbekanntes Fahrzeug';
+  const targetLabel = input.target === 'backup' ? 'Ersatzfahrzeug' : 'Hauptfahrzeug';
+  const footer = audience === 'driver'
+    ? passed
+      ? 'Das Fahrzeug ist für die Veranstaltung technisch zugelassen.'
+      : 'Bitte klären Sie die genannten Punkte mit der technischen Abnahme.'
+    : 'Interne Prozessmeldung – keine Teilnehmerkommunikation.';
+
+  return buildOperationalNoticeHtml({
+    intro: audience === 'orga'
+      ? 'Interne Statusmeldung aus der technischen Abnahme.'
+      : `Hallo ${input.driverDisplayName}, die technische Prüfung Ihres Fahrzeugs wurde abgeschlossen.`,
+    statusLabel,
+    tone: passed ? 'success' : 'danger',
+    fields: [
+      { label: 'Veranstaltung', value: input.eventName ?? 'Unbekannte Veranstaltung' },
+      { label: 'Fahrer', value: input.driverDisplayName },
+      { label: 'Startnummer', value: input.startNumber ? `#${input.startNumber}` : '-' },
+      { label: 'Fahrzeug', value: vehicleName },
+      { label: 'Prüfobjekt', value: targetLabel },
+      ...(audience === 'orga' ? [{ label: 'Prüfer', value: inspector ?? '-' }] : [])
+    ],
+    noteTitle: passed ? 'Hinweis des Prüfers' : 'Ablehnungsgrund',
+    note: input.note,
+    footer
+  });
+};
+
+const inspectionPresentationData = (status: 'passed' | 'failed', audience: 'driver' | 'orga') => {
+  const statusLabel = status === 'passed' ? 'BESTANDEN' : 'NICHT BESTANDEN';
+  return operationalPresentationData({
+    headerTitle: audience === 'orga'
+      ? `INTERNE TECHNISCHE MELDUNG · ${statusLabel}`
+      : `TECHNISCHE ABNAHME · ${statusLabel}`,
+    preheader: `Prüfergebnis technische Abnahme: ${statusLabel}`,
+    mailLabel: 'Technische Abnahme'
+  });
+};
+
 function buildInspectionDecisionMail(input: InspectionDecisionEmailInput) {
   if (input.techStatus === 'pending') return null;
   const vehicleName =
@@ -122,7 +165,12 @@ function buildInspectionDecisionMail(input: InspectionDecisionEmailInput) {
       'Ihr Organisationsteam',
       'MSC Oberlausitzer Dreiländereck e.V.'
     ].join('\n');
-    return { subject, bodyText };
+    return {
+      subject,
+      bodyText,
+      bodyHtml: buildInspectionResultHtml(input, 'driver'),
+      templateData: inspectionPresentationData(input.techStatus, 'driver')
+    };
   } else {
     const subject = `Technische Abnahme: Fahrzeug nicht zugelassen – ${eventInfo}`;
     const bodyText = [
@@ -137,11 +185,17 @@ function buildInspectionDecisionMail(input: InspectionDecisionEmailInput) {
       'Ihr Organisationsteam',
       'MSC Oberlausitzer Dreiländereck e.V.'
     ].join('\n');
-    return { subject, bodyText };
+    return {
+      subject,
+      bodyText,
+      bodyHtml: buildInspectionResultHtml(input, 'driver'),
+      templateData: inspectionPresentationData(input.techStatus, 'driver')
+    };
   }
 }
 
 const buildInspectionOrgaMail = (input: InspectionDecisionEmailInput & { inspector: string | null }) => {
+  const completedStatus: 'passed' | 'failed' = input.techStatus === 'passed' ? 'passed' : 'failed';
   const statusLabel = input.techStatus === 'passed' ? 'BESTANDEN' : 'ABGELEHNT';
   const vehicleName = [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || 'Unbekanntes Fahrzeug';
   const bodyText = [
@@ -158,7 +212,9 @@ const buildInspectionOrgaMail = (input: InspectionDecisionEmailInput & { inspect
   ].join('\n');
   return {
     subject: `[Technische Abnahme][${statusLabel}] #${input.startNumber ?? '-'} – ${input.driverDisplayName}`,
-    bodyText
+    bodyText,
+    bodyHtml: buildInspectionResultHtml(input, 'orga', input.inspector),
+    templateData: inspectionPresentationData(completedStatus, 'orga')
   };
 };
 

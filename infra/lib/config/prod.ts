@@ -31,7 +31,13 @@ export const resolveProdConfig = (): StageConfig => {
     sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
     orgaNotificationRecipients,
     publicVerifyBaseUrl: `${prodPublicBaseUrl}/anmeldung/verify`,
-    assetsCorsAllowedOrigins: [prodPublicBaseUrl, 'https://signing.event.msc-oberlausitz.de', 'https://sim.event.msc-oberlausitz.de'],
+    assetsCorsAllowedOrigins: [
+      prodPublicBaseUrl,
+      'https://signing.event.msc-oberlausitz.de',
+      'https://sim.event.msc-oberlausitz.de',
+      'https://www.msc-oberlausitz.de',
+      'https://msc-oberlausitz.de'
+    ],
     devCleanupEnabled: false,
     env: {
       account: process.env.CDK_DEFAULT_ACCOUNT,

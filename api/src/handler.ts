@@ -101,6 +101,28 @@ import {
   validatePublicationNamePatchInput
 } from './routes/adminPersonIdentity';
 import {
+  buildDeviceRateLimitKey,
+  createVoteChallenge,
+  getDeviceVoteStatus,
+  getPublicEventHub,
+  submitVote,
+  validateChallengeInput,
+  validateDeviceStatusInput,
+  validateVoteInput,
+  VoteError
+} from './routes/eventHub';
+import {
+  eventExists,
+  getAdminCandidates,
+  getEventHubConfig,
+  getVotingResults,
+  patchEventHubConfig,
+  putCandidateOverride,
+  validateCandidateOverrideInput,
+  validatePatchEventHubConfigInput,
+  votingResultsToCsv
+} from './routes/adminEventHub';
+import {
   getPricingRules,
   listInvoicePayments,
   listInvoices,
@@ -353,7 +375,9 @@ const publicRateLimitedScopes = {
   uploadInit: { scope: 'public_registration_upload_init', limit: 20, windowSeconds: 600 },
   uploadFinalize: { scope: 'public_registration_upload_finalize', limit: 30, windowSeconds: 600 },
   verifyEmail: { scope: 'public_registration_verify_email', limit: 30, windowSeconds: 600 },
-  resendVerification: { scope: 'public_registration_resend_verification', limit: 6, windowSeconds: 3600 }
+  resendVerification: { scope: 'public_registration_resend_verification', limit: 6, windowSeconds: 3600 },
+  eventHubVoteByDevice: { scope: 'event_hub_vote_by_device', limit: 30, windowSeconds: 900 },
+  eventHubVoteByIp: { scope: 'event_hub_vote_by_ip', limit: 1000, windowSeconds: 600 }
 } as const;
 
 const VEHICLE_IMAGE_MAX_FILE_SIZE_MB = 15;
@@ -880,6 +904,100 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const invitationError = invitationErrorJson(error);
       if (invitationError) return invitationError;
       return errorJson(500, 'Get current public event failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/public/events/current/event-hub') {
+    try {
+      const current = await getPublicCurrentEventWithClasses();
+      if (!current) {
+        return errorJson(404, 'Current event not found');
+      }
+      const hub = await getPublicEventHub(current.event.id);
+      if (!hub) {
+        return errorJson(404, 'Current event not found');
+      }
+      return json(200, { ok: true, ...hub });
+    } catch (error) {
+      return errorJson(500, 'Get event hub failed');
+    }
+  }
+
+  const eventHubChallengeMatch = path.match(/^\/public\/events\/([^/]+)\/voting\/challenge$/);
+  if (method === 'POST' && eventHubChallengeMatch) {
+    try {
+      const eventId = eventHubChallengeMatch[1];
+      const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.eventHubVoteByIp);
+      if (rateLimited) return rateLimited;
+      const payload = parseJsonBody(event);
+      const input = validateChallengeInput(payload);
+      const challenge = await createVoteChallenge(eventId, input);
+      return json(200, { ok: true, ...challenge });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Create voting challenge failed');
+    }
+  }
+
+  const eventHubVoteMatch = path.match(/^\/public\/events\/([^/]+)\/votes$/);
+  if (method === 'POST' && eventHubVoteMatch) {
+    try {
+      const eventId = eventHubVoteMatch[1];
+      const payload = parseJsonBody(event);
+      const input = validateVoteInput(payload);
+      const deviceRateLimited = await enforcePublicRequestRateLimit(
+        event,
+        publicRateLimitedScopes.eventHubVoteByDevice,
+        [buildDeviceRateLimitKey(input)]
+      );
+      if (deviceRateLimited) return deviceRateLimited;
+      const ipRateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.eventHubVoteByIp);
+      if (ipRateLimited) return ipRateLimited;
+      const result = await submitVote(eventId, input);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof VoteError) {
+        if (error.code === 'ALREADY_VOTED') {
+          return errorJson(409, 'Already voted for this class', undefined, 'ALREADY_VOTED');
+        }
+        if (error.code === 'VOTING_CLOSED') {
+          return errorJson(409, 'Voting is not open', undefined, 'VOTING_CLOSED');
+        }
+        return errorJson(400, error.code, undefined, error.code);
+      }
+      return errorJson(500, 'Submit vote failed');
+    }
+  }
+
+  const eventHubDeviceStatusMatch = path.match(/^\/public\/events\/([^/]+)\/voting\/device-status$/);
+  if (method === 'POST' && eventHubDeviceStatusMatch) {
+    try {
+      const eventId = eventHubDeviceStatusMatch[1];
+      const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.eventHubVoteByIp);
+      if (rateLimited) return rateLimited;
+      const payload = parseJsonBody(event);
+      const input = validateDeviceStatusInput(payload);
+      const status = await getDeviceVoteStatus(eventId, input);
+      return json(200, { ok: true, ...status });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Get device vote status failed');
     }
   }
 
@@ -3897,6 +4015,106 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return errorJson(400, 'Invalid JSON body');
       }
       return errorJson(500, 'Create export failed');
+    }
+  }
+
+  const eventHubConfigMatch = path.match(/^\/admin\/events\/([^/]+)\/event-hub$/);
+  if (method === 'GET' && eventHubConfigMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermissionOrAutomation(auth, 'event_hub.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const config = await getEventHubConfig(eventHubConfigMatch[1]);
+      return json(200, { ok: true, config });
+    } catch (error) {
+      return errorJson(500, 'Get event hub config failed');
+    }
+  }
+  if (method === 'PATCH' && eventHubConfigMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'event_hub.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const eventId = eventHubConfigMatch[1];
+      if (!(await eventExists(eventId))) {
+        return errorJson(404, 'Event not found');
+      }
+      const payload = parseJsonBody(event);
+      const input = validatePatchEventHubConfigInput(payload);
+      const config = await patchEventHubConfig(eventId, input, auth.sub);
+      return json(200, { ok: true, config });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Update event hub config failed');
+    }
+  }
+
+  const eventHubCandidatesListMatch = path.match(/^\/admin\/events\/([^/]+)\/event-hub\/candidates$/);
+  if (method === 'GET' && eventHubCandidatesListMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermissionOrAutomation(auth, 'event_hub.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const candidates = await getAdminCandidates(eventHubCandidatesListMatch[1]);
+      return json(200, { ok: true, candidates });
+    } catch (error) {
+      return errorJson(500, 'Get event hub candidates failed');
+    }
+  }
+
+  const eventHubCandidateMatch = path.match(/^\/admin\/events\/([^/]+)\/event-hub\/candidates\/([^/]+)$/);
+  if (method === 'PUT' && eventHubCandidateMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'event_hub.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const payload = parseJsonBody(event);
+      const input = validateCandidateOverrideInput(payload);
+      const override = await putCandidateOverride(eventHubCandidateMatch[1], eventHubCandidateMatch[2], input, auth.sub);
+      return json(200, { ok: true, override });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return errorJson(400, 'Validation failed', { issues: error.issues });
+      }
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      return errorJson(500, 'Update candidate override failed');
+    }
+  }
+
+  const eventHubResultsMatch = path.match(/^\/admin\/events\/([^/]+)\/voting\/results$/);
+  if (method === 'GET' && eventHubResultsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermissionOrAutomation(auth, 'event_hub.read')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const results = await getVotingResults(eventHubResultsMatch[1]);
+      if (event.queryStringParameters?.format === 'csv') {
+        return {
+          statusCode: 200,
+          headers: {
+            'content-type': 'text/csv; charset=utf-8',
+            'content-disposition': 'attachment; filename="voting-results.csv"',
+            'access-control-allow-origin': process.env.CORS_ALLOW_ORIGIN ?? process.env.WEB_APP_ORIGIN ?? '*',
+            vary: 'Origin'
+          },
+          body: votingResultsToCsv(results)
+        };
+      }
+      return json(200, { ok: true, ...results });
+    } catch (error) {
+      return errorJson(500, 'Get voting results failed');
     }
   }
 

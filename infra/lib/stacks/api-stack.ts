@@ -302,6 +302,40 @@ export class ApiStack extends Stack {
       ...lambdaVpcConfig
     });
 
+    const eventHubMaintenanceWorker = new NodejsFunction(this, 'EventHubMaintenanceWorker', {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      entry: path.join(__dirname, '../../../api/src/jobs/eventHubMaintenanceWorker.ts'),
+      handler: 'handler',
+      functionName: `${props.config.prefix}-event-hub-maintenance-worker`,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(60),
+      depsLockFilePath,
+      environment: {
+        STAGE: props.config.stage,
+        DB_SECRET_ARN: dbSecretArn,
+        DB_HOST: dbHost,
+        DB_PORT: dbPort,
+        DB_NAME: props.config.dbName,
+        DB_USER: dbUser,
+        DB_REGION: dbRegion,
+        DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+        DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+        DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+        DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+        RETENTION_EVENT_HUB_RESULT_DAYS: '90'
+      },
+      bundling: {
+        target: 'node24',
+        sourceMap: true,
+        minify: false
+      },
+      logRetention: logs.RetentionDays.THREE_MONTHS,
+      loggingFormat: lambda.LoggingFormat.JSON,
+      applicationLogLevelV2: lambda.ApplicationLogLevel.INFO,
+      systemLogLevelV2: lambda.SystemLogLevel.WARN,
+      ...lambdaVpcConfig
+    });
+
     const sesFeedbackWorker = new NodejsFunction(this, 'SesFeedbackWorker', {
       runtime: lambda.Runtime.NODEJS_24_X,
       entry: path.join(__dirname, '../../../api/src/jobs/sesFeedbackWorker.ts'),
@@ -372,7 +406,7 @@ export class ApiStack extends Stack {
       })
     );
 
-    [apiHandler, emailWorker, privacyRetentionWorker, sesFeedbackWorker, operationalMonitor].forEach((fn) => {
+    [apiHandler, emailWorker, privacyRetentionWorker, eventHubMaintenanceWorker, sesFeedbackWorker, operationalMonitor].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['rds-db:connect'],
@@ -461,7 +495,7 @@ export class ApiStack extends Stack {
       })
     );
 
-    [emailWorker, privacyRetentionWorker, sesFeedbackWorker, operationalMonitor].forEach((fn) => {
+    [emailWorker, privacyRetentionWorker, eventHubMaintenanceWorker, sesFeedbackWorker, operationalMonitor].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['secretsmanager:GetSecretValue'],
@@ -478,6 +512,11 @@ export class ApiStack extends Stack {
     new events.Rule(this, 'PrivacyRetentionSchedule', {
       schedule: events.Schedule.rate(cdk.Duration.hours(24)),
       targets: [new targets.LambdaFunction(privacyRetentionWorker)]
+    });
+
+    new events.Rule(this, 'EventHubMaintenanceSchedule', {
+      schedule: events.Schedule.rate(cdk.Duration.hours(1)),
+      targets: [new targets.LambdaFunction(eventHubMaintenanceWorker)]
     });
 
     const integration = new SharedPermissionHttpLambdaIntegration('ApiIntegration', apiHandler);

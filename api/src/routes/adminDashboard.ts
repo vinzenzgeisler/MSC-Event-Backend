@@ -432,7 +432,7 @@ const normalizeLocationKeyPart = (value: string | null | undefined): string => {
   return normalizeLocationPart(value).toLowerCase();
 };
 
-const buildLocationKey = (input: { country?: string | null; zip?: string | null; city?: string | null }): string => {
+export const buildLocationKey = (input: { country?: string | null; zip?: string | null; city?: string | null }): string => {
   return [input.country, input.zip, input.city].map(normalizeLocationKeyPart).join('|');
 };
 
@@ -440,7 +440,7 @@ const hasUsableLocation = (input: { country?: string | null; zip?: string | null
   return Boolean(normalizeLocationPart(input.country) || normalizeLocationPart(input.zip) || normalizeLocationPart(input.city));
 };
 
-const toFiniteNumber = (value: unknown): number | null => {
+export const toFiniteNumber = (value: unknown): number | null => {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
   }

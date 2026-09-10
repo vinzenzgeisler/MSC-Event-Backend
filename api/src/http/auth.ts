@@ -33,7 +33,9 @@ export const adminPermissions = [
   'marshals.write',
   'marshals.export',
   'sim.read',
-  'sim.write'
+  'sim.write',
+  'event_hub.read',
+  'event_hub.write'
 ] as const;
 export type AdminPermission = (typeof adminPermissions)[number];
 export type AdminReadPermission = Extract<AdminPermission, `${string}.read`>;
@@ -66,7 +68,9 @@ const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
     'marshals.write',
     'marshals.export',
     'sim.read',
-    'sim.write'
+    'sim.write',
+    'event_hub.read',
+    'event_hub.write'
   ],
   editor: [
     'dashboard.read',

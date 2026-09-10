@@ -308,6 +308,93 @@ export const entry = pgTable(
   })
 );
 
+export const eventHubConfig = pgTable(
+  'event_hub_config',
+  {
+    eventId: uuid('event_id').primaryKey().references(() => event.id, { onDelete: 'cascade' }),
+    votingOpensAt: timestamp('voting_opens_at', { withTimezone: true }),
+    votingClosesAt: timestamp('voting_closes_at', { withTimezone: true }),
+    votingMode: text('voting_mode').notNull().default('auto'),
+    venueLat: text('venue_lat'),
+    venueLng: text('venue_lng'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: text('updated_by')
+  },
+  (table) => ({
+    votingModeCheck: check(
+      'event_hub_config_voting_mode_check',
+      sql`${table.votingMode} in ('auto', 'forced_open', 'forced_closed')`
+    )
+  })
+);
+
+export const eventHubCandidateOverride = pgTable(
+  'event_hub_candidate_override',
+  {
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    entryId: uuid('entry_id').notNull().references(() => entry.id, { onDelete: 'cascade' }),
+    state: text('state').notNull().default('auto'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: text('updated_by')
+  },
+  (table) => ({
+    primary: uniqueIndex('event_hub_candidate_override_unique').on(table.eventId, table.entryId),
+    stateCheck: check(
+      'event_hub_candidate_override_state_check',
+      sql`${table.state} in ('auto', 'pinned', 'hidden')`
+    )
+  })
+);
+
+export const eventVoteChallenge = pgTable(
+  'event_vote_challenge',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    nonceHash: text('nonce_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({ expiryIndex: index('event_vote_challenge_expiry_idx').on(table.expiresAt) })
+);
+
+export const eventVote = pgTable(
+  'event_vote',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    classId: uuid('class_id').notNull().references(() => eventClass.id, { onDelete: 'cascade' }),
+    entryId: uuid('entry_id').notNull().references(() => entry.id, { onDelete: 'cascade' }),
+    voterKeyHash: text('voter_key_hash').notNull(),
+    clientSubmissionKey: uuid('client_submission_key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    voterClassUnique: uniqueIndex('event_vote_event_class_voter_unique').on(
+      table.eventId,
+      table.classId,
+      table.voterKeyHash
+    ),
+    submissionUnique: uniqueIndex('event_vote_submission_unique').on(table.clientSubmissionKey),
+    eventClassIndex: index('event_vote_event_class_idx').on(table.eventId, table.classId, table.createdAt)
+  })
+);
+
+export const eventVoteResultSnapshot = pgTable(
+  'event_vote_result_snapshot',
+  {
+    eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+    classId: uuid('class_id').notNull().references(() => eventClass.id, { onDelete: 'cascade' }),
+    entryId: uuid('entry_id').notNull().references(() => entry.id, { onDelete: 'cascade' }),
+    voteCount: integer('vote_count').notNull(),
+    capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    primary: uniqueIndex('event_vote_result_snapshot_unique').on(table.eventId, table.classId, table.entryId)
+  })
+);
+
 export const entryStartNumberReservation = pgTable(
   'entry_start_number_reservation',
   {

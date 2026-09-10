@@ -58,7 +58,10 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   registration_invitation_created: ['recipientBound', 'allowedClassIds', 'expiresAt'],
   registration_invitation_revoked: [],
   registration_invitation_consumed: ['registrationGroupId'],
-  privacy_retention_run: ['windowStart', 'windowEnd', 'dryRun', 'deletedRows', 'errors']
+  privacy_retention_run: ['windowStart', 'windowEnd', 'dryRun', 'deletedRows', 'errors'],
+  event_hub_config_updated: ['fieldMask'],
+  event_hub_candidate_override_updated: ['entryId', 'state'],
+  event_hub_maintenance_run: ['windowStart', 'windowEnd', 'expiredChallengesDeleted', 'eventsSnapshotted']
   ,
   signing_session_started: ['entryIds', 'deviceSessionId', 'workflowType', 'operation', 'participantPersonId'],
   signing_session_completed: ['documentId', 'documentSha256', 'auditS3Key', 'entryIds', 'workflowType', 'operation', 'participantId', 'charityRegistrationId', 'documentIds'],

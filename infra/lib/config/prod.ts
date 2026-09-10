@@ -1,4 +1,5 @@
 import { StageConfig } from './types';
+import { parseNotificationRecipients } from './notification-recipients';
 
 const requireEnv = (name: string): string => {
   const value = (process.env[name] ?? '').trim();
@@ -15,6 +16,10 @@ export const resolveProdConfig = (): StageConfig => {
   const prodCognitoDomainPrefix =
     (process.env.PROD_COGNITO_DOMAIN_PREFIX ?? '').trim().toLowerCase() ||
     `dreiecksrennen-prod-auth${accountSuffix ? `-${accountSuffix}` : ''}`;
+  const orgaNotificationRecipients = parseNotificationRecipients(requireEnv('ORGA_NOTIFICATION_RECIPIENTS'));
+  if (orgaNotificationRecipients.length === 0) {
+    throw new Error('ORGA_NOTIFICATION_RECIPIENTS must contain at least one email address.');
+  }
 
   return {
     stage: 'prod',
@@ -24,6 +29,7 @@ export const resolveProdConfig = (): StageConfig => {
     cognitoDomainPrefix: prodCognitoDomainPrefix,
     cognitoRefreshTokenDays: 90,
     sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
+    orgaNotificationRecipients,
     publicVerifyBaseUrl: `${prodPublicBaseUrl}/anmeldung/verify`,
     assetsCorsAllowedOrigins: [prodPublicBaseUrl, 'https://signing.event.msc-oberlausitz.de', 'https://sim.event.msc-oberlausitz.de'],
     devCleanupEnabled: false,

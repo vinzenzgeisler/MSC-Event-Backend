@@ -5,7 +5,7 @@ Dieses Dokument erfasst alle im Backend persistent gespeicherten Datenfelder (Po
 Stand: 2026-02-26.
 
 ## ANNAHMEN
-- ANNAHME: API Gateway Access Logs sind nicht explizit konfiguriert; es werden primar Lambda-Logs in CloudWatch genutzt.
+- API-Gateway-Access-Logs sind explizit aktiviert und enthalten nur technische Request-/Laufzeitfelder, keine Request-Bodies und keine Quell-IP.
 - ANNAHME: Es gibt aktuell keine separate Consent-Tabelle; Consent wird auf `entry` gespeichert.
 - ANNAHME: Frontend ist noch getrennt; clientseitige Tracking-Cookies sind standardmaessig deaktiviert.
 - ANNAHME: Kein Mandantenmodell mit separater Organisationstabelle; Trennung erfolgt auf Event-Ebene.
@@ -39,12 +39,12 @@ Stand: 2026-02-26.
 | S3-Objekte (`assets` Bucket) | Objektinhalt (Fahrzeugbilder), Objekt-Key (aus DB referenziert), Objekt-Metadaten (S3-intern) | Medieninhalte | Nein |
 | S3-Objekte (`documents` Bucket) | PDF-Dokumentinhalt, Objekt-Key (aus DB referenziert), Objekt-Metadaten (S3-intern) | Vertrags-/Pruefdokumente | Nein |
 | CloudWatch Logs (Lambda) | Zeitstempel, Log-Level/Text, Request-/Fehlerkontext (anwendungsabhaengig), AWS Request ID | Betriebs-/Sicherheitslogs | Nein |
+| CloudWatch Logs (API Gateway) | Zeitstempel, Request-ID, Route, HTTP-Methode, Status, Integrations-/Antwortlatenz, technische Integrationsfehlermeldung | Betriebs-/Sicherheitslogs | Nein |
 | JWT Claims im Request (nicht DB-persistent) | `sub`, `email`, `cognito:groups`, MFA-Info (`amr`) werden zur Laufzeit verarbeitet; Teile davon (z. B. `actorUserId`) in `audit_log` persistiert | Authentisierung/Autorisierung | Nein |
 
 ## IP-Adresse und User-Agent
 - In der aktuellen Backend-Persistenz gibt es keine dedizierten Felder fuer IP-Adresse oder User-Agent.
-- Wenn Infrastruktur-Access-Logs aktiviert werden, koennen IP/User-Agent dort auftauchen.  
-  ANNAHME: Das ist derzeit nicht explizit aktiviert und daher kein geplanter Primarspeicher.
+- Die konfigurierten API-Gateway-Access-Logs schreiben weder IP-Adresse noch User-Agent.
 
 ## Besondere Kategorien nach Art. 9 DSGVO
 - Kein Feld ist zwingend als besondere Kategorie (Art. 9 DSGVO) modelliert.

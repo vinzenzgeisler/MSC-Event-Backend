@@ -29,6 +29,9 @@ const getSender = (): string => {
   return `${encodeDisplayName(senderName)} <${senderEmail}>`;
 };
 
+const getConfigurationSetName = (): string | undefined =>
+  process.env.SES_CONFIGURATION_SET?.trim() || undefined;
+
 export type EmailAttachment = {
   fileName: string;
   contentType: string;
@@ -113,6 +116,7 @@ export const sendEmail = async (
     const raw = buildRawMessage(to, subject, bodyText, bodyHtml, attachments);
     const command = new SendRawEmailCommand({
       Destinations: [to, ...bccEmails],
+      ConfigurationSetName: getConfigurationSetName(),
       RawMessage: {
         Data: raw
       }
@@ -121,6 +125,7 @@ export const sendEmail = async (
   }
   const command = new SendEmailCommand({
     Source: getSender(),
+    ConfigurationSetName: getConfigurationSetName(),
     Destination: {
       ToAddresses: [to],
       ...(bccEmails.length > 0 ? { BccAddresses: bccEmails } : {})

@@ -84,7 +84,7 @@ assert.match(migrationSource, /when 2026 then '#153A81'/i);
 assert.match(migrationSource, /upper\("stamp_card_accent_color"\) = '#0F6B65'/i);
 assert.match(stampCardHandlerBlock, /downloadUrl: download\.downloadUrl/);
 assert.doesNotMatch(stampCardHandlerBlock, /dataBase64: download\.data\.toString\('base64'\)/);
-assert.match(stampCardHandlerBlock, /console\.error\('stamp_card_export_failed'/);
+assert.match(stampCardHandlerBlock, /logOperationalEvent\('error', 'export\.stamp_card_failed'/);
 assert.match(apiStackSource, /memorySize: 1024/);
 assert.match(apiStackSource, /timeout: cdk\.Duration\.seconds\(29\)/);
 

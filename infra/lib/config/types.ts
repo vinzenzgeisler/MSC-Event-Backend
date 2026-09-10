@@ -6,6 +6,7 @@ export interface StageConfig {
   cognitoDomainPrefix: string;
   cognitoRefreshTokenDays?: number;
   sesFromEmail: string;
+  orgaNotificationRecipients: string[];
   publicVerifyBaseUrl: string;
   assetsCorsAllowedOrigins: string[];
   devCleanupEnabled: boolean;

@@ -4,6 +4,7 @@ import { getTemplateVersion } from '../mail/templateStore';
 import { renderMailContract } from '../mail/rendering';
 import { getAssetObjectBuffer, getDocumentObjectBuffer } from '../docs/storage';
 import { DuplicateRequestError, queueLifecycleMail, queuePaymentReminders } from '../routes/adminMail';
+import { errorCodeOf, logOperationalEvent } from '../observability/logger';
 
 type OutboxRow = {
   id: string;
@@ -53,6 +54,18 @@ const claimOutbox = async (batchSize: number): Promise<OutboxRow[]> => {
 
   try {
     await client.query('BEGIN');
+    await client.query(`
+      update email_outbox
+      set status = case when attempt_count < max_attempts then 'queued' else 'failed' end,
+          send_after = case when attempt_count < max_attempts then now() else send_after end,
+          error_last = case
+            when attempt_count < max_attempts then 'STALE_SENDING_REQUEUED'
+            else 'STALE_SENDING_MAX_ATTEMPTS'
+          end,
+          updated_at = now()
+      where status = 'sending'
+        and updated_at <= now() - interval '5 minutes'
+    `);
     const result = await client.query(
       `
       update email_outbox
@@ -109,21 +122,41 @@ const listOutboxAttachments = async (outboxIds: string[]): Promise<Map<string, O
 
 const markSent = async (id: string, messageId: string | null, providerResponse: unknown) => {
   const pool = await getPool();
-  await pool.query(
-    `
-    update email_outbox
-    set status = 'sent', updated_at = now(), error_last = null
-    where id = $1
-  `,
-    [id]
-  );
-  await pool.query(
-    `
-    insert into email_delivery (id, outbox_id, ses_message_id, status, sent_at, provider_response)
-    values (gen_random_uuid(), $1, $2, 'sent', now(), $3)
-  `,
-    [id, messageId, providerResponse ? JSON.stringify(providerResponse) : null]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `
+      update email_outbox
+      set status = 'sent', updated_at = now(), error_last = null
+      where id = $1
+    `,
+      [id]
+    );
+    await client.query(
+      `
+      insert into email_delivery (id, outbox_id, ses_message_id, status, sent_at, provider_response)
+      values (gen_random_uuid(), $1, $2, 'sent', now(), $3)
+    `,
+      [
+        id,
+        messageId,
+        JSON.stringify({
+          messageId,
+          requestId: typeof providerResponse === 'object' && providerResponse && '$metadata' in providerResponse
+            ? (providerResponse as { $metadata?: { requestId?: string } }).$metadata?.requestId ?? null
+            : null
+        })
+      ]
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  logOperationalEvent('info', 'mail.outbox_sent', { outboxId: id });
 };
 
 const retryDelayMinutes = (attemptCount: number): number => {
@@ -136,7 +169,7 @@ const retryDelayMinutes = (attemptCount: number): number => {
 
 const markFailed = async (id: string, attemptCount: number, maxAttempts: number, error: unknown) => {
   const pool = await getPool();
-  const message = error instanceof Error ? error.message : 'Unknown error';
+  const message = errorCodeOf(error);
   const shouldRetry = attemptCount < maxAttempts;
   const delayMinutes = retryDelayMinutes(attemptCount);
 
@@ -158,6 +191,12 @@ const markFailed = async (id: string, attemptCount: number, maxAttempts: number,
   `,
     [id, JSON.stringify({ error: message, retried: shouldRetry })]
   );
+  logOperationalEvent(shouldRetry ? 'warn' : 'error', shouldRetry ? 'mail.outbox_retry_scheduled' : 'mail.outbox_permanently_failed', {
+    outboxId: id,
+    attemptCount,
+    maxAttempts,
+    errorCode: message
+  });
 };
 
 const markSuppressed = async (id: string, reason: string) => {
@@ -179,6 +218,7 @@ const markSuppressed = async (id: string, reason: string) => {
   `,
     [id, JSON.stringify({ error: reason, suppressed: true })]
   );
+  logOperationalEvent('warn', 'mail.outbox_suppressed', { outboxId: id, errorCode: reason });
 };
 
 const getStringValue = (data: Record<string, unknown> | null, key: string): string | null => {
@@ -293,7 +333,11 @@ const queueEmailConfirmationReminders = async (limit: number, reminderDelayDays:
       if (error instanceof DuplicateRequestError) {
         continue;
       }
-      console.error(`queueEmailConfirmationReminders failed for entry ${row.entry_id}:`, error);
+      logOperationalEvent('error', 'mail.confirmation_reminder_queue_failed', {
+        eventId: row.event_id,
+        entryId: row.entry_id,
+        errorCode: errorCodeOf(error)
+      });
     }
   }
   return queued;
@@ -344,7 +388,11 @@ const queueAcceptedPaidCompletedMails = async (limit: number): Promise<number> =
       if (error instanceof DuplicateRequestError) {
         continue;
       }
-      console.error(`queueAcceptedPaidCompletedMails failed for entry ${row.entry_id}:`, error);
+      logOperationalEvent('error', 'mail.accepted_paid_queue_failed', {
+        eventId: row.event_id,
+        entryId: row.entry_id,
+        errorCode: errorCodeOf(error)
+      });
     }
   }
   return queued;
@@ -569,6 +617,11 @@ export const handler = async () => {
       await markFailed(row.id, row.attempt_count, row.max_attempts, error);
     }
   }
+
+  logOperationalEvent('info', 'mail.worker_completed', {
+    processed: rows.length,
+    queued: reminderQueued + paymentReminderQueued + acceptedPaidQueued
+  });
 
   return {
     processed: rows.length,

@@ -1,4 +1,5 @@
 import { StageConfig } from './types';
+import { parseNotificationRecipients } from './notification-recipients';
 
 export type DevProfile = 'idle' | 'test';
 
@@ -9,6 +10,7 @@ const devCognitoDomainPrefix =
 const devPublicBaseUrl = (process.env.DEV_PUBLIC_BASE_URL ?? '').trim().replace(/\/$/, '');
 const devAdminLoginUrl = devPublicBaseUrl ? `${devPublicBaseUrl}/admin/login` : null;
 const devVerifyUrl = devPublicBaseUrl ? `${devPublicBaseUrl}/anmeldung/verify` : 'http://localhost:5173/anmeldung/verify';
+const orgaNotificationRecipients = parseNotificationRecipients(process.env.ORGA_NOTIFICATION_RECIPIENTS);
 
 const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrationRunner' | 'apiInVpc' | 'dbConnectivityMode' | 'dbUseIamAuth' | 'dbPublicAccess'> = {
   stage: 'dev',
@@ -17,6 +19,7 @@ const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrat
   cognitoLogoutUrls: ['http://localhost:5173/admin/login', ...(devAdminLoginUrl ? [devAdminLoginUrl] : [])],
   cognitoDomainPrefix: devCognitoDomainPrefix,
   sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
+  orgaNotificationRecipients,
   publicVerifyBaseUrl: devVerifyUrl,
   assetsCorsAllowedOrigins: [...(devPublicBaseUrl ? [devPublicBaseUrl] : []), 'http://localhost:5173', 'http://localhost:4173'],
   devCleanupEnabled: false,

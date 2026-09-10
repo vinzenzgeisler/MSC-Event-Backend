@@ -1075,7 +1075,7 @@ export const getDashboardDriverLocations = async (query: DriverLocationQuery) =>
   const db = await getDb();
   const { eventId } = query;
   const explicitRefresh = Boolean(query.refresh);
-  const shouldRefresh = true;
+  const shouldRefresh = explicitRefresh;
   const refreshLimit = query.refreshLimit ?? (explicitRefresh ? DRIVER_LOCATION_GEOCODE_DEFAULT_LIMIT : DRIVER_LOCATION_AUTO_GEOCODE_DEFAULT_LIMIT);
   let geocodeAttemptedTotal = 0;
   let geocodeResolvedTotal = 0;
@@ -1326,8 +1326,11 @@ const geocodeLocation = async (location: { country: string; zip: string; city: s
   url.searchParams.set('q', query);
 
   let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
   try {
     response = await fetch(url, {
+      signal: controller.signal,
       headers: {
         Accept: 'application/json',
         'User-Agent': 'msc-event-dashboard/1.0 (event.msc-oberlausitz.de)'
@@ -1335,6 +1338,8 @@ const geocodeLocation = async (location: { country: string; zip: string; city: s
     });
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
   if (!response.ok) {
     return null;

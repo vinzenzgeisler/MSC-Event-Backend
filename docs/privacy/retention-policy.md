@@ -30,7 +30,7 @@ Stand: 2026-02-26
 | Exporte (`export_job` + exportierte CSV in S3) | 90 Tage | Operative Auswertung, geringe Dauer notwendig | Hard delete Objekt + Jobdaten |
 | Audit-Log (`audit_log`) | 24 Monate | Accountability, Missbrauchsaufklaerung | Hard delete oder irreversible Pseudonymisierung von Payload |
 | CloudWatch Application Logs | 30 Tage (Standard), 90 Tage Security-relevant | Betriebsfaehigkeit/Sicherheitsanalyse | Automatische Log-Retention |
-| API Access Logs (falls aktiviert) | 14-30 Tage | Netz-/Security-Analyse | Automatische Log-Retention, IP minimiert |
+| API Access Logs | 30 Tage | Betriebs-/Security-Analyse | Automatische Log-Retention; ohne IP und Request-Body |
 | DB Backups (RDS) | Prod Ziel: 30 Tage; Dev: 1 Tag | Wiederherstellung / BCM | Automatischer Ablauf durch Backup-Retention |
 
 ## Soft Delete vs. Hard Delete
@@ -51,9 +51,9 @@ Stand: 2026-02-26
 - Audit-`payload`: nur Whitelist-Felder, keine Volltexte mit PII.
 
 ## Log-Retention (konkret in Tagen)
-- CloudWatch App-Logs: 30 Tage.
+- CloudWatch App-/Worker-Logs: 90 Tage.
 - Security-relevante Logs (Auth-/Admin-Fehler, Incident-Faelle): 90 Tage.
-- API Access Logs (falls aktiviert): 14 bis 30 Tage.
+- API Access Logs: 30 Tage.
 - Audit-Log (DB): 730 Tage (24 Monate).
 
 ## Backup-Retention

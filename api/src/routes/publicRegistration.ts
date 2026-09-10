@@ -30,7 +30,9 @@ import { isPgUniqueViolation } from '../http/dbErrors';
 import { getPublicLegalCurrent, resolvePublicLegalLocale } from './publicLegal';
 import { DuplicateRequestError, queueLifecycleMail, queueMail } from './adminMail';
 import { recalculateInvoices } from './adminFinance';
-import { sendEmail } from '../mail/ses';
+import { queueOperationalMails } from '../mail/operationalOutbox';
+import { getOrgaNotificationRecipients } from '../observability/recipients';
+import { errorCodeOf, logOperationalEvent } from '../observability/logger';
 
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const nonEmptySchema = z.string().trim().min(1);
@@ -39,25 +41,11 @@ const zipSchema = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9\- ]{1,11}$/);
 const normalizePhone = (value: string): string => value.replace(/\D+/g, '');
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
 const normalizeNameForComparison = (value: string | null | undefined): string => value?.trim().replace(/\s+/g, ' ').toLowerCase() ?? '';
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
-const DEFAULT_REGISTRATION_ALERT_RECIPIENT = 'geisler10@gmx.net';
 const phoneSchema = z
   .string()
   .trim()
   .transform(normalizePhone)
   .refine((value) => value.length >= 6 && value.length <= 15, 'Phone must have 6 to 15 digits');
-
-const getRegistrationAlertRecipients = (): string[] => {
-  const raw = (process.env.REGISTRATION_ALERT_RECIPIENTS ?? DEFAULT_REGISTRATION_ALERT_RECIPIENT).trim();
-  if (!raw) {
-    return [];
-  }
-  const values = raw
-    .split(',')
-    .map((item) => item.trim().toLowerCase())
-    .filter((item) => item.length > 0 && EMAIL_PATTERN.test(item));
-  return Array.from(new Set(values));
-};
 
 const parseNumericDigits = (value: unknown): number | undefined => {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -1224,15 +1212,19 @@ const createPublicEntriesBatchInternal = async (input: CreateBatchInternalInput)
     }
 
     try {
-      await sendRegistrationAlertMails({
+      await queueRegistrationAlertMails({
         eventId: input.eventId,
         groupId: created.response.groupId,
         eventName: created.eventName ?? 'Unbekannte Veranstaltung',
         driverName,
         driverEmail: driverIdentity.identityProtected ? 'geschützt' : input.driver.email
       });
-    } catch {
+    } catch (error) {
       // Admin alert is informational only and must not block registration completion.
+      logOperationalEvent('error', 'registration.orga_notification_queue_failed', {
+        eventId: input.eventId,
+        errorCode: errorCodeOf(error)
+      });
     }
 
     return {
@@ -1385,14 +1377,14 @@ const queueCodriverInfoMails = async (
   }
 };
 
-const sendRegistrationAlertMails = async (input: {
+const queueRegistrationAlertMails = async (input: {
   eventId: string;
   groupId: string;
   eventName: string;
   driverName: string;
   driverEmail: string;
 }) => {
-  const recipients = getRegistrationAlertRecipients();
+  const recipients = getOrgaNotificationRecipients();
   if (recipients.length === 0) {
     return;
   }
@@ -1436,13 +1428,23 @@ const sendRegistrationAlertMails = async (input: {
     ...entryLines
   ].join('\n');
 
-  for (const recipient of recipients) {
-    try {
-      await sendEmail(recipient, subject, body);
-    } catch {
-      // Informational alert must not block public registration.
-    }
-  }
+  const queued = await queueOperationalMails(db, {
+    eventId: input.eventId,
+    templateId: 'orga_registration_received',
+    idempotencyPrefix: `registration:${input.groupId}`,
+    commonTemplateData: { groupId: input.groupId },
+    mails: recipients.map((toEmail) => ({
+      audience: 'orga' as const,
+      toEmail,
+      subject,
+      bodyText: body
+    }))
+  });
+  logOperationalEvent('info', 'registration.orga_notification_queued', {
+    eventId: input.eventId,
+    queued: queued.length,
+    recipientCount: recipients.length
+  });
 };
 
 export const createPublicEntry = async (input: CreateEntryInput) => {

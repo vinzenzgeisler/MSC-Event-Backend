@@ -20,7 +20,8 @@ import {
   vehicle
 } from '../db/schema';
 import { renderSignedWaiverEvidencePdf } from '../docs/pdf';
-import { getDocumentObjectBuffer, uploadFile, uploadPdf } from '../docs/storage';
+import { deleteDocumentObject, getDocumentObjectBuffer, uploadFile, uploadPdf } from '../docs/storage';
+import { errorCodeOf, logOperationalEvent } from '../observability/logger';
 import { computeConsentTextHash, getLegalTexts, type LegalUiLocale } from './publicLegalTextsSource';
 
 const pairingClaimSchema = z.object({
@@ -1075,83 +1076,126 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
   auditPayload.document.sha256 = documentSha256;
   const auditJson = JSON.stringify(auditPayload, null, 2);
 
-  await uploadPdf(documentS3Key, pdfBuffer);
-  await uploadFile(auditS3Key, Buffer.from(auditJson, 'utf8'), 'application/json; charset=utf-8');
-
-  const signedAt = new Date(input.signedAt);
-  const documentRows = await db
-    .insert(document)
-    .values(
-      payload.entries.map((entryItem) => ({
+  try {
+    await uploadPdf(documentS3Key, pdfBuffer);
+    await uploadFile(auditS3Key, Buffer.from(auditJson, 'utf8'), 'application/json; charset=utf-8');
+  } catch (error) {
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    logOperationalEvent('error', 'signing.evidence_upload_failed', {
       eventId: payload.event.id,
-      entryId: entryItem.id,
-      driverPersonId: payload.signer.id,
-      signingSessionId: current.id,
-      type: 'waiver_signed',
-      templateVariant: payload.contract.locale,
-      templateVersion: payload.contract.version,
-      sha256: documentSha256,
-      s3Key: documentS3Key,
-      status: 'generated',
-      createdBy: current.operatorUserId
-      }))
-    )
-    .returning();
-  const docRow = documentRows.find((row) => row.entryId === current.sourceEntryId) ?? documentRows[0] ?? null;
-
-  if (payload.signer.role === 'driver') {
-    await db
-      .insert(consentEvidence)
-      .values(
-        payload.entries.map((entryItem) => ({
-          entryId: entryItem.id,
-          consentVersion: payload.contract.version,
-          consentTextHash: payload.contract.textHash,
-          locale: payload.contract.locale,
-          consentSource: 'admin_ui',
-          termsAccepted: true,
-          privacyAccepted: true,
-          waiverAccepted: true,
-          mediaAccepted: false,
-          clubInfoAccepted: false,
-          guardianFullName: signer.type === 'guardian' ? signer.guardianName ?? null : null,
-          guardianEmail: null,
-          guardianPhone: null,
-          guardianConsentAccepted: signer.type === 'guardian',
-          capturedAt: signedAt,
-          createdAt: new Date()
-        }))
-      );
+      sessionId: current.id,
+      errorCode: errorCodeOf(error)
+    });
+    throw error;
   }
 
-  const [updated] = await db
-    .update(signingSession)
-    .set({
-      status: 'completed',
-      workflowStage: 'completed',
-      displayedAt: new Date(input.displayedAt),
-      signedAt,
-      documentId: docRow?.id ?? null,
-      evidenceAuditS3Key: auditS3Key,
-      updatedAt: new Date()
-    })
-    .where(eq(signingSession.id, current.id))
-    .returning();
+  const signedAt = new Date(input.signedAt);
+  let completion: { updated: typeof current; docRow: { id: string } | null } | null = null;
+  try {
+    completion = await db.transaction(async (tx) => {
+      const [claimed] = await tx
+        .update(signingSession)
+        .set({
+          status: 'completed',
+          workflowStage: 'completed',
+          displayedAt: new Date(input.displayedAt),
+          signedAt,
+          evidenceAuditS3Key: auditS3Key,
+          updatedAt: new Date()
+        })
+        .where(and(eq(signingSession.id, current.id), inArray(signingSession.status, ['pending', 'displayed'])))
+        .returning();
+      if (!claimed) return null;
 
-  await writeAuditLog(db as never, {
+      const documentRows = await tx
+        .insert(document)
+        .values(
+          payload.entries.map((entryItem) => ({
+            eventId: payload.event.id,
+            entryId: entryItem.id,
+            driverPersonId: payload.signer.id,
+            signingSessionId: current.id,
+            type: 'waiver_signed',
+            templateVariant: payload.contract.locale,
+            templateVersion: payload.contract.version,
+            sha256: documentSha256,
+            s3Key: documentS3Key,
+            status: 'generated',
+            createdBy: current.operatorUserId
+          }))
+        )
+        .returning();
+      const docRow = documentRows.find((row) => row.entryId === current.sourceEntryId) ?? documentRows[0] ?? null;
+
+      if (payload.signer.role === 'driver') {
+        await tx.insert(consentEvidence).values(
+          payload.entries.map((entryItem) => ({
+            entryId: entryItem.id,
+            personId: payload.signer.id,
+            participantRole: 'driver',
+            terminalSessionId: current.id,
+            consentVersion: payload.contract.version,
+            consentTextHash: payload.contract.textHash,
+            locale: payload.contract.locale,
+            consentSource: 'admin_ui',
+            termsAccepted: true,
+            privacyAccepted: true,
+            waiverAccepted: true,
+            mediaAccepted: false,
+            clubInfoAccepted: false,
+            guardianFullName: signer.type === 'guardian' ? signer.guardianName ?? null : null,
+            guardianEmail: null,
+            guardianPhone: null,
+            guardianConsentAccepted: signer.type === 'guardian',
+            capturedAt: signedAt,
+            createdAt: new Date()
+          }))
+        );
+      }
+
+      const [updated] = await tx
+        .update(signingSession)
+        .set({ documentId: docRow?.id ?? null, updatedAt: new Date() })
+        .where(eq(signingSession.id, current.id))
+        .returning();
+      await writeAuditLog(tx as never, {
+        eventId: payload.event.id,
+        actorUserId: current.operatorUserId,
+        action: 'signing_session_completed',
+        entityType: 'signing_session',
+        entityId: current.id,
+        payload: {
+          documentId: docRow?.id ?? null,
+          documentSha256,
+          auditS3Key,
+          signerPersonId: payload.signer.id,
+          signerRole: payload.signer.role,
+          entryIds: payload.entries.map((entryItem) => entryItem.id)
+        }
+      });
+      return { updated, docRow: docRow ? { id: docRow.id } : null };
+    });
+  } catch (error) {
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    logOperationalEvent('error', 'signing.completion_transaction_failed', {
+      eventId: payload.event.id,
+      sessionId: current.id,
+      errorCode: errorCodeOf(error)
+    });
+    throw error;
+  }
+  if (!completion) {
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    const completed = await getSigningSession(current.id);
+    if (completed?.status === 'completed') return completed;
+    throw new Error('SIGNING_SESSION_NOT_ACTIVE');
+  }
+  const { updated, docRow } = completion;
+  logOperationalEvent('info', 'signing.session_completed', {
     eventId: payload.event.id,
-    actorUserId: current.operatorUserId,
-    action: 'signing_session_completed',
-    entityType: 'signing_session',
-    entityId: current.id,
-    payload: {
-      documentId: docRow?.id ?? null,
-      documentSha256,
-      auditS3Key,
-      signerPersonId: payload.signer.id,
-      signerRole: payload.signer.role,
-      entryIds: payload.entries.map((entryItem) => entryItem.id)
-    }
+    sessionId: current.id,
+    documentId: docRow?.id ?? undefined,
+    workflowType: current.workflowType
   });
 
   // Queue the signed document for the person whose waiver was captured.
@@ -1193,6 +1237,12 @@ export const completeDeviceSigningSession = async (sessionId: string, input: Com
         updatedAt: new Date()
       })
       .where(eq(signingSession.id, current.id));
+    logOperationalEvent('error', 'signing.waiver_mail_queue_failed', {
+      eventId: payload.event.id,
+      sessionId: current.id,
+      workflowType: current.workflowType,
+      errorCode: errorCodeOf(error)
+    });
   }
 
   return projectSigningSessionWithLiveIdentity(db, updated);

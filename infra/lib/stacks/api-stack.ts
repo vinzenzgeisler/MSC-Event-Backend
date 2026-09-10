@@ -2,12 +2,20 @@ import * as cdk from 'aws-cdk-lib';
 import { CfnOutput, Stack, StackProps } from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
+import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as ses from 'aws-cdk-lib/aws-ses';
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
 import * as path from 'path';
@@ -61,6 +69,37 @@ export class ApiStack extends Stack {
     const dbResourceId = props.dataStack.dbInstance.instanceResourceId;
     const dbConnectArn = `arn:aws:rds-db:${dbRegion}:${Stack.of(this).account}:dbuser:${dbResourceId}/${dbUser}`;
     const sesFromEmail = props.config.sesFromEmail;
+    const orgaNotificationRecipients = props.config.orgaNotificationRecipients.join(',');
+    const criticalAlertsTopic = new sns.Topic(this, 'CriticalAlertsTopic', {
+      topicName: `${props.config.prefix}-critical-alerts`,
+      displayName: `${props.config.prefix} critical system alerts`
+    });
+    props.config.orgaNotificationRecipients.forEach((recipient) => {
+      criticalAlertsTopic.addSubscription(new subscriptions.EmailSubscription(recipient));
+    });
+    const sesFeedbackTopic = new sns.Topic(this, 'SesFeedbackTopic', {
+      topicName: `${props.config.prefix}-ses-feedback`
+    });
+    const sesFeedbackDeadLetterQueue = new sqs.Queue(this, 'SesFeedbackDeadLetterQueue', {
+      queueName: `${props.config.prefix}-ses-feedback-dlq`,
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(14)
+    });
+    const sesConfigurationSet = new ses.ConfigurationSet(this, 'SesConfigurationSet', {
+      configurationSetName: `${props.config.prefix}-mail-events`,
+      reputationMetrics: true
+    });
+    sesConfigurationSet.addEventDestination('SesFeedbackDestination', {
+      destination: ses.EventDestination.snsTopic(sesFeedbackTopic),
+      events: [
+        ses.EmailSendingEvent.DELIVERY,
+        ses.EmailSendingEvent.BOUNCE,
+        ses.EmailSendingEvent.COMPLAINT,
+        ses.EmailSendingEvent.REJECT,
+        ses.EmailSendingEvent.RENDERING_FAILURE,
+        ses.EmailSendingEvent.DELIVERY_DELAY
+      ]
+    });
     const publicVerifyBaseUrl = props.config.publicVerifyBaseUrl;
     if (!publicVerifyBaseUrl && props.config.stage === 'prod') {
       throw new Error('Missing publicVerifyBaseUrl in infra/lib/config/prod.ts.');
@@ -91,7 +130,7 @@ export class ApiStack extends Stack {
     const depsLockFilePath = path.join(__dirname, '../../../package-lock.json');
 
     const apiHandler = new NodejsFunction(this, 'ApiHandler', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       entry: path.join(__dirname, '../../../api/src/handler.ts'),
       handler: 'handler',
       functionName: `${props.config.prefix}-api-handler`,
@@ -120,6 +159,8 @@ export class ApiStack extends Stack {
         COGNITO_ISSUER: props.authStack.userPoolIssuerUrl,
         COGNITO_USER_POOL_ID: props.authStack.userPool.userPoolId,
         SES_FROM_EMAIL: sesFromEmail,
+        SES_CONFIGURATION_SET: sesConfigurationSet.configurationSetName,
+        ORGA_NOTIFICATION_RECIPIENTS: orgaNotificationRecipients,
         PUBLIC_VERIFY_BASE_URL: publicVerifyBaseUrl,
         MAIL_PUBLIC_BASE_URL: mailPublicBaseUrl,
         NENNUNGSTOOL_URL: mailPublicBaseUrl,
@@ -127,17 +168,20 @@ export class ApiStack extends Stack {
         REQUIRE_ADMIN_MFA: 'false'
       },
       bundling: {
-        target: 'node20',
+        target: 'node24',
         sourceMap: true,
         minify: false,
         nodeModules: ['pdfkit', 'exceljs']
       },
-      logRetention: logs.RetentionDays.ONE_MONTH,
+      logRetention: logs.RetentionDays.THREE_MONTHS,
+      loggingFormat: lambda.LoggingFormat.JSON,
+      applicationLogLevelV2: lambda.ApplicationLogLevel.INFO,
+      systemLogLevelV2: lambda.SystemLogLevel.WARN,
       ...lambdaVpcConfig
     });
 
     const emailWorker = new NodejsFunction(this, 'EmailWorker', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       entry: path.join(__dirname, '../../../api/src/jobs/emailWorker.ts'),
       handler: 'handler',
       functionName: `${props.config.prefix}-email-worker`,
@@ -159,6 +203,8 @@ export class ApiStack extends Stack {
         ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
         DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
         SES_FROM_EMAIL: sesFromEmail,
+        SES_CONFIGURATION_SET: sesConfigurationSet.configurationSetName,
+        ORGA_NOTIFICATION_RECIPIENTS: orgaNotificationRecipients,
         PUBLIC_VERIFY_BASE_URL: publicVerifyBaseUrl,
         MAIL_PUBLIC_BASE_URL: mailPublicBaseUrl,
         NENNUNGSTOOL_URL: mailPublicBaseUrl,
@@ -169,16 +215,19 @@ export class ApiStack extends Stack {
         PAYMENT_REMINDER_REPEAT_DAYS: '5'
       },
       bundling: {
-        target: 'node20',
+        target: 'node24',
         sourceMap: true,
         minify: false
       },
-      logRetention: logs.RetentionDays.ONE_MONTH,
+      logRetention: logs.RetentionDays.THREE_MONTHS,
+      loggingFormat: lambda.LoggingFormat.JSON,
+      applicationLogLevelV2: lambda.ApplicationLogLevel.INFO,
+      systemLogLevelV2: lambda.SystemLogLevel.WARN,
       ...lambdaVpcConfig
     });
 
     const privacyRetentionWorker = new NodejsFunction(this, 'PrivacyRetentionWorker', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       entry: path.join(__dirname, '../../../api/src/jobs/privacyRetentionWorker.ts'),
       handler: 'handler',
       functionName: `${props.config.prefix}-privacy-retention-worker`,
@@ -210,11 +259,77 @@ export class ApiStack extends Stack {
         RETENTION_INVOICE_DAYS: '3650'
       },
       bundling: {
-        target: 'node20',
+        target: 'node24',
         sourceMap: true,
         minify: false
       },
       logRetention: logs.RetentionDays.THREE_MONTHS,
+      loggingFormat: lambda.LoggingFormat.JSON,
+      applicationLogLevelV2: lambda.ApplicationLogLevel.INFO,
+      systemLogLevelV2: lambda.SystemLogLevel.WARN,
+      ...lambdaVpcConfig
+    });
+
+    const sesFeedbackWorker = new NodejsFunction(this, 'SesFeedbackWorker', {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      entry: path.join(__dirname, '../../../api/src/jobs/sesFeedbackWorker.ts'),
+      handler: 'handler',
+      functionName: `${props.config.prefix}-ses-feedback-worker`,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      depsLockFilePath,
+      environment: {
+        STAGE: props.config.stage,
+        DB_SECRET_ARN: dbSecretArn,
+        DB_HOST: dbHost,
+        DB_PORT: dbPort,
+        DB_NAME: props.config.dbName,
+        DB_USER: dbUser,
+        DB_REGION: dbRegion,
+        DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+        DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+        DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+        DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem'
+      },
+      bundling: { target: 'node24', sourceMap: true, minify: false },
+      logRetention: logs.RetentionDays.THREE_MONTHS,
+      loggingFormat: lambda.LoggingFormat.JSON,
+      applicationLogLevelV2: lambda.ApplicationLogLevel.INFO,
+      systemLogLevelV2: lambda.SystemLogLevel.WARN,
+      ...lambdaVpcConfig
+    });
+    sesFeedbackWorker.addEventSource(new lambdaEventSources.SnsEventSource(sesFeedbackTopic, {
+      deadLetterQueue: sesFeedbackDeadLetterQueue
+    }));
+
+    const operationalMonitor = new NodejsFunction(this, 'OperationalMonitor', {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      entry: path.join(__dirname, '../../../api/src/jobs/operationalMonitor.ts'),
+      handler: 'handler',
+      functionName: `${props.config.prefix}-operational-monitor`,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(45),
+      depsLockFilePath,
+      environment: {
+        STAGE: props.config.stage,
+        DB_SECRET_ARN: dbSecretArn,
+        DB_HOST: dbHost,
+        DB_PORT: dbPort,
+        DB_NAME: props.config.dbName,
+        DB_USER: dbUser,
+        DB_REGION: dbRegion,
+        DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+        DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+        DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+        DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+        DOCUMENTS_BUCKET: props.storageStack.documentsBucket.bucketName,
+        ORGA_NOTIFICATION_RECIPIENTS: orgaNotificationRecipients
+      },
+      bundling: { target: 'node24', sourceMap: true, minify: false },
+      logRetention: logs.RetentionDays.THREE_MONTHS,
+      loggingFormat: lambda.LoggingFormat.JSON,
+      applicationLogLevelV2: lambda.ApplicationLogLevel.INFO,
+      systemLogLevelV2: lambda.SystemLogLevel.WARN,
       ...lambdaVpcConfig
     });
 
@@ -225,7 +340,7 @@ export class ApiStack extends Stack {
       })
     );
 
-    [apiHandler, emailWorker, privacyRetentionWorker].forEach((fn) => {
+    [apiHandler, emailWorker, privacyRetentionWorker, sesFeedbackWorker, operationalMonitor].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['rds-db:connect'],
@@ -255,6 +370,21 @@ export class ApiStack extends Stack {
         resources: [props.storageStack.assetsBucket.bucketArn]
       })
     );
+
+    operationalMonitor.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:GetObject'],
+        resources: [`${props.storageStack.documentsBucket.bucketArn}/*`]
+      })
+    );
+
+    [sesFeedbackWorker, operationalMonitor].forEach((fn) => {
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+        conditions: { StringEquals: { 'cloudwatch:namespace': `MSCEvent/${props.config.stage}` } }
+      }));
+    });
     emailWorker.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['s3:GetObject'],
@@ -299,7 +429,7 @@ export class ApiStack extends Stack {
       })
     );
 
-    [emailWorker, privacyRetentionWorker].forEach((fn) => {
+    [emailWorker, privacyRetentionWorker, sesFeedbackWorker, operationalMonitor].forEach((fn) => {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['secretsmanager:GetSecretValue'],
@@ -319,6 +449,12 @@ export class ApiStack extends Stack {
     });
 
     const integration = new SharedPermissionHttpLambdaIntegration('ApiIntegration', apiHandler);
+
+    const apiAccessLogGroup = new logs.LogGroup(this, 'ApiAccessLogs', {
+      logGroupName: `/aws/apigateway/${props.config.prefix}-http-api`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: props.config.stage === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+    });
 
     this.api = new apigwv2.HttpApi(this, 'HttpApi', {
       apiName: `${props.config.prefix}-http-api`,
@@ -351,9 +487,31 @@ export class ApiStack extends Stack {
         : {})
     });
 
+    const defaultStage = this.api.defaultStage;
+    if (!defaultStage) {
+      throw new Error('HTTP API default stage is missing.');
+    }
+    const defaultCfnStage = defaultStage.node.defaultChild as apigwv2.CfnStage;
+    defaultCfnStage.accessLogSettings = {
+      destinationArn: apiAccessLogGroup.logGroupArn,
+      format: apigateway.AccessLogFormat.custom(JSON.stringify({
+          requestId: '$context.requestId',
+          requestTime: '$context.requestTime',
+          routeKey: '$context.routeKey',
+          method: '$context.httpMethod',
+          path: '$context.path',
+          status: '$context.status',
+          responseLatencyMs: '$context.responseLatency',
+          integrationLatencyMs: '$context.integrationLatency',
+          integrationError: '$context.integrationErrorMessage'
+      })).toString()
+    };
+    defaultCfnStage.defaultRouteSettings = { detailedMetricsEnabled: true };
+
     const mailLogoUrl = `${this.api.apiEndpoint}/public/mail/logo`;
     apiHandler.addEnvironment('MAIL_LOGO_URL', mailLogoUrl);
     emailWorker.addEnvironment('MAIL_LOGO_URL', mailLogoUrl);
+    operationalMonitor.addEnvironment('API_HEALTH_URL', `${this.api.apiEndpoint}/health`);
 
     apiHandler.addPermission('HttpApiInvokePermission', {
       principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
@@ -902,6 +1060,11 @@ export class ApiStack extends Stack {
       authorizer: jwtAuthorizer
     });
 
+    new events.Rule(this, 'OperationalMonitorSchedule', {
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      targets: [new targets.LambdaFunction(operationalMonitor, { retryAttempts: 2 })]
+    });
+
     this.api.addRoutes({
       path: '/admin/entries/{id}/codriver',
       methods: [apigwv2.HttpMethod.DELETE],
@@ -1390,6 +1553,210 @@ export class ApiStack extends Stack {
       integration,
       authorizer: jwtAuthorizer
     });
+
+    const fiveMinutes = cdk.Duration.minutes(5);
+    const customMetric = (metricName: string) => new cloudwatch.Metric({
+      namespace: `MSCEvent/${props.config.stage}`,
+      metricName,
+      statistic: 'Maximum',
+      period: fiveMinutes
+    });
+    const positiveAlarm = (id: string, metric: cloudwatch.IMetric, description: string) =>
+      new cloudwatch.Alarm(this, id, {
+        alarmName: `${props.config.prefix}-${id}`,
+        alarmDescription: description,
+        metric,
+        threshold: 1,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING
+      });
+
+    const apiLambdaErrors = positiveAlarm(
+      'api-lambda-errors',
+      apiHandler.metricErrors({ period: fiveMinutes, statistic: 'Sum' }),
+      'API Lambda produced at least one error in five minutes.'
+    );
+    const apiGateway5xx = new cloudwatch.Alarm(this, 'ApiGateway5xxAlarm', {
+      alarmName: `${props.config.prefix}-api-gateway-5xx`,
+      alarmDescription: 'HTTP API returned three or more 5xx responses in five minutes.',
+      metric: this.api.metricServerError({ period: fiveMinutes, statistic: 'Sum' }),
+      threshold: 3,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING
+    });
+    const apiUnavailable = positiveAlarm('api-health-unavailable', customMetric('apiUnavailable'), 'The external API health probe failed.');
+    const apiThrottles = positiveAlarm('api-lambda-throttles', apiHandler.metricThrottles({ period: fiveMinutes, statistic: 'Sum' }), 'API Lambda was throttled.');
+
+    const workflowAlarms = [
+      positiveAlarm('signing-evidence-incomplete', customMetric('signingEvidenceIncomplete'), 'A completed signing session has incomplete evidence.'),
+      positiveAlarm('signing-mail-queue-failed', customMetric('signingMailQueueFailed'), 'A waiver confirmation could not be queued.'),
+      positiveAlarm('inspection-notification-missing', customMetric('inspectionNotificationMissing'), 'An inspection decision has no complete Orga notification set.'),
+      positiveAlarm('registration-notification-missing', customMetric('registrationNotificationMissing'), 'A registration has no complete Orga notification set.'),
+      positiveAlarm('s3-evidence-missing', customMetric('s3EvidenceMissing'), 'Recent signing evidence referenced in the database is absent in S3.')
+    ];
+    const mailAlarms = [
+      positiveAlarm('email-worker-errors', emailWorker.metricErrors({ period: fiveMinutes, statistic: 'Sum' }), 'Email worker invocation failed.'),
+      positiveAlarm('ses-feedback-worker-errors', sesFeedbackWorker.metricErrors({ period: fiveMinutes, statistic: 'Sum' }), 'SES feedback worker invocation failed.'),
+      positiveAlarm('ses-feedback-dead-letter', sesFeedbackDeadLetterQueue.metricApproximateNumberOfMessagesVisible({ period: fiveMinutes, statistic: 'Maximum' }), 'SES feedback could not be processed after all retries.'),
+      positiveAlarm('outbox-failed', customMetric('outboxFailed'), 'Mail outbox contains a newly failed delivery.'),
+      positiveAlarm('outbox-overdue', customMetric('outboxOverdue'), 'Queued mail is more than five minutes overdue.'),
+      positiveAlarm('outbox-stuck-sending', customMetric('outboxStuckSending'), 'Mail remained in sending state for more than five minutes.'),
+      positiveAlarm('mail-feedback-critical', customMetric('MailFeedbackCritical'), 'SES reported a bounce, complaint, reject, or rendering failure.')
+    ];
+    const heartbeatAlarm = new cloudwatch.Alarm(this, 'OperationalMonitorHeartbeatAlarm', {
+      alarmName: `${props.config.prefix}-operational-monitor-heartbeat`,
+      alarmDescription: 'The operational monitor has not published a heartbeat for three minutes.',
+      metric: new cloudwatch.Metric({
+        namespace: `MSCEvent/${props.config.stage}`,
+        metricName: 'MonitorHeartbeat',
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(1)
+      }),
+      threshold: 1,
+      evaluationPeriods: 3,
+      datapointsToAlarm: 3,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.BREACHING
+    });
+
+    const dbInstance = props.dataStack.dbInstance;
+    const databaseAlarms = [
+      new cloudwatch.Alarm(this, 'DatabaseCpuAlarm', {
+        alarmName: `${props.config.prefix}-database-cpu`,
+        metric: dbInstance.metricCPUUtilization({ period: fiveMinutes }),
+        threshold: 85,
+        evaluationPeriods: 3,
+        treatMissingData: cloudwatch.TreatMissingData.BREACHING
+      }),
+      new cloudwatch.Alarm(this, 'DatabaseConnectionsAlarm', {
+        alarmName: `${props.config.prefix}-database-connections`,
+        metric: dbInstance.metricDatabaseConnections({ period: fiveMinutes }),
+        threshold: 70,
+        evaluationPeriods: 2,
+        treatMissingData: cloudwatch.TreatMissingData.BREACHING
+      }),
+      new cloudwatch.Alarm(this, 'DatabaseFreeStorageAlarm', {
+        alarmName: `${props.config.prefix}-database-free-storage`,
+        metric: dbInstance.metricFreeStorageSpace({ period: fiveMinutes }),
+        threshold: 2 * 1024 * 1024 * 1024,
+        evaluationPeriods: 2,
+        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.BREACHING
+      }),
+      new cloudwatch.Alarm(this, 'DatabaseFreeMemoryAlarm', {
+        alarmName: `${props.config.prefix}-database-free-memory`,
+        metric: dbInstance.metricFreeableMemory({ period: fiveMinutes }),
+        threshold: 128 * 1024 * 1024,
+        evaluationPeriods: 3,
+        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.BREACHING
+      }),
+      new cloudwatch.Alarm(this, 'DatabaseCpuCreditAlarm', {
+        alarmName: `${props.config.prefix}-database-cpu-credit`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/RDS',
+          metricName: 'CPUCreditBalance',
+          dimensionsMap: { DBInstanceIdentifier: dbInstance.instanceIdentifier },
+          statistic: 'Minimum',
+          period: fiveMinutes
+        }),
+        threshold: 5,
+        evaluationPeriods: 3,
+        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING
+      })
+    ];
+
+    const alertAction = new cloudwatchActions.SnsAction(criticalAlertsTopic);
+    const compositeAlarms = [
+      new cloudwatch.CompositeAlarm(this, 'AvailabilityCompositeAlarm', {
+        compositeAlarmName: `${props.config.prefix}-critical-availability`,
+        alarmDescription: 'API availability or monitor heartbeat is degraded.',
+        alarmRule: cloudwatch.AlarmRule.anyOf(apiLambdaErrors, apiGateway5xx, apiUnavailable, apiThrottles, heartbeatAlarm)
+      }),
+      new cloudwatch.CompositeAlarm(this, 'WorkflowCompositeAlarm', {
+        compositeAlarmName: `${props.config.prefix}-critical-workflows`,
+        alarmDescription: 'Signing, registration, or inspection workflow integrity is degraded.',
+        alarmRule: cloudwatch.AlarmRule.anyOf(...workflowAlarms)
+      }),
+      new cloudwatch.CompositeAlarm(this, 'MailCompositeAlarm', {
+        compositeAlarmName: `${props.config.prefix}-critical-mail`,
+        alarmDescription: 'Mail queuing, dispatch, or provider feedback is degraded.',
+        alarmRule: cloudwatch.AlarmRule.anyOf(...mailAlarms)
+      }),
+      new cloudwatch.CompositeAlarm(this, 'DatabaseCompositeAlarm', {
+        compositeAlarmName: `${props.config.prefix}-critical-database`,
+        alarmDescription: 'Database capacity is degraded.',
+        alarmRule: cloudwatch.AlarmRule.anyOf(...databaseAlarms)
+      })
+    ];
+    compositeAlarms.forEach((alarm) => {
+      alarm.addAlarmAction(alertAction);
+      alarm.addOkAction(alertAction);
+    });
+
+    new logs.QueryDefinition(this, 'OperationalErrorsQuery', {
+      queryDefinitionName: `${props.config.prefix}/operational-errors`,
+      logGroups: [apiHandler.logGroup, emailWorker.logGroup, sesFeedbackWorker.logGroup, operationalMonitor.logGroup],
+      queryString: new logs.QueryString({
+        fields: ['@timestamp', '@log', 'message.eventType', 'message.requestId', 'message.route', 'message.eventId', 'message.entryId', 'message.sessionId', 'message.status', 'message.errorCode'],
+        filterStatements: ['level = "ERROR" or message.eventType like /failed|missing|unhandled|unavailable|stuck|delay/'],
+        sort: '@timestamp desc',
+        limit: 500
+      })
+    });
+    new logs.QueryDefinition(this, 'ApiRequestsQuery', {
+      queryDefinitionName: `${props.config.prefix}/api-requests`,
+      logGroups: [apiAccessLogGroup],
+      queryString: new logs.QueryString({
+        fields: ['@timestamp', 'requestId', 'method', 'path', 'status', 'responseLatencyMs', 'integrationLatencyMs', 'integrationError'],
+        sort: '@timestamp desc',
+        limit: 500
+      })
+    });
+
+    const dashboard = new cloudwatch.Dashboard(this, 'OperationsDashboard', {
+      dashboardName: `${props.config.prefix}-operations`,
+      periodOverride: cloudwatch.PeriodOverride.AUTO
+    });
+    dashboard.addWidgets(
+      new cloudwatch.TextWidget({
+        width: 24,
+        height: 2,
+        markdown: `# ${props.config.prefix} Operations\nLive-Zustand von API, Haftverzicht, technischer Abnahme, Mail und Datenbank.`
+      }),
+      new cloudwatch.AlarmStatusWidget({ title: 'Kritische Bereiche', alarms: compositeAlarms, width: 24, height: 6 }),
+      new cloudwatch.GraphWidget({
+        title: 'API Traffic, Fehler und Laufzeit',
+        left: [this.api.metricCount({ period: fiveMinutes }), this.api.metricServerError({ period: fiveMinutes })],
+        right: [this.api.metricLatency({ period: fiveMinutes, statistic: 'p95' })],
+        width: 12
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Mail-Outbox und Zustellfeedback',
+        left: ['outboxFailed', 'outboxOverdue', 'outboxStuckSending', 'MailFeedbackCritical'].map(customMetric),
+        width: 12
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Geschäftskritische Workflows',
+        left: ['signingEvidenceIncomplete', 'signingMailQueueFailed', 'inspectionNotificationMissing', 'registrationNotificationMissing', 's3EvidenceMissing'].map(customMetric),
+        width: 12
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Datenbank',
+        left: [dbInstance.metricCPUUtilization({ period: fiveMinutes }), dbInstance.metricDatabaseConnections({ period: fiveMinutes })],
+        right: [dbInstance.metricFreeableMemory({ period: fiveMinutes }), dbInstance.metricFreeStorageSpace({ period: fiveMinutes })],
+        width: 12
+      }),
+      new cloudwatch.LogQueryWidget({
+        title: 'Letzte API-Fehler',
+        logGroupNames: [apiAccessLogGroup.logGroupName],
+        queryString: 'fields @timestamp, requestId, method, path, status, responseLatencyMs, integrationError | filter status >= 500 | sort @timestamp desc | limit 50',
+        width: 24,
+        height: 6
+      })
+    );
 
     new CfnOutput(this, 'ApiUrl', {
       value: this.api.url ?? 'n/a',

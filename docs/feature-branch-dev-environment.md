@@ -33,6 +33,7 @@ Backend `dev`:
 - `AWS_ACCOUNT_ID`
 - `AWS_REGION`
 - `DEV_PUBLIC_BASE_URL`
+- `ORGA_NOTIFICATION_RECIPIENTS`
 - Secret `AWS_DEPLOY_ROLE_ARN_DEV`
 
 Frontend `dev`:

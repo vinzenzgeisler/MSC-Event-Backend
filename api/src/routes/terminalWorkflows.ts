@@ -17,7 +17,8 @@ import {
 } from '../db/schema';
 import { renderSignedWaiverEvidencePdf } from '../docs/pdf';
 import { standardPersonIdentity } from '../domain/personIdentity';
-import { uploadFile, uploadPdf } from '../docs/storage';
+import { deleteDocumentObject, uploadFile, uploadPdf } from '../docs/storage';
+import { errorCodeOf, logOperationalEvent } from '../observability/logger';
 import { computeConsentTextHash, getLegalTexts, type LegalUiLocale } from './publicLegalTextsSource';
 import {
   formatWaiverMailEventDates,
@@ -452,11 +453,35 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   const baseKey = `signing/${session.eventId}/${participantId}/${evidenceId}`;
   const documentS3Key = `${baseKey}/waiver.pdf`;
   const auditS3Key = `${baseKey}/audit.json`;
-  await uploadPdf(documentS3Key, pdf);
-  await uploadFile(auditS3Key, Buffer.from(JSON.stringify({ auditSchemaVersion: 'terminal-participant-v1', sessionId, workflowType: session.workflowType, eventId: session.eventId, entryIds, participantId, signedAt: input.signedAt, privacyAcceptedAt: input.privacyAcceptedAt, waiverAcceptedAt: input.waiverAcceptedAt, documentSha256 }, null, 2)), 'application/json; charset=utf-8');
+  try {
+    await uploadPdf(documentS3Key, pdf);
+    await uploadFile(auditS3Key, Buffer.from(JSON.stringify({ auditSchemaVersion: 'terminal-participant-v1', sessionId, workflowType: session.workflowType, eventId: session.eventId, entryIds, participantId, signedAt: input.signedAt, privacyAcceptedAt: input.privacyAcceptedAt, waiverAcceptedAt: input.waiverAcceptedAt, documentSha256 }, null, 2)), 'application/json; charset=utf-8');
+  } catch (error) {
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    logOperationalEvent('error', 'signing.evidence_upload_failed', {
+      eventId: session.eventId,
+      sessionId,
+      workflowType: session.workflowType,
+      errorCode: errorCodeOf(error)
+    });
+    throw error;
+  }
 
-  const updatedSession = await db.transaction(async (tx) => {
+  let updatedSession: typeof session | null = null;
+  try {
+    updatedSession = await db.transaction(async (tx) => {
     const now = new Date();
+    const [claimed] = await tx.update(signingSession).set({
+      status: 'completed',
+      workflowStage: 'completed',
+      signedAt: new Date(input.signedAt),
+      evidenceAuditS3Key: auditS3Key,
+      updatedAt: now
+    }).where(and(
+      eq(signingSession.id, sessionId),
+      inArray(signingSession.status, ['pending', 'displayed'])
+    )).returning();
+    if (!claimed) return null;
     if (existingPerson) {
       await tx.update(person).set({ email: draft.email, firstName: draft.firstName, lastName: draft.lastName, birthdate: draft.birthdate, country: draft.country, street: draft.street, zip: draft.zip, city: draft.city, phone: draft.phone, emergencyContactFirstName: draft.emergencyContactFirstName, emergencyContactLastName: draft.emergencyContactLastName, emergencyContactPhone: draft.emergencyContactPhone, motorsportHistory: draft.motorsportHistory ?? null, updatedAt: now }).where(eq(person.id, participantId));
     } else {
@@ -478,9 +503,36 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
     }
     const documents = await tx.insert(document).values(entryIds.map((entryId) => ({ eventId: session.eventId, entryId, driverPersonId: participantId, signingSessionId: sessionId, type: 'waiver_signed', templateVariant: draft.locale, templateVersion: context.contract.version, sha256: documentSha256, s3Key: documentS3Key, status: 'generated', createdBy: session.operatorUserId }))).returning();
     await tx.insert(consentEvidence).values(entryIds.map((entryId) => ({ entryId, personId: participantId, participantRole: session.workflowType === 'charity_codriver_registration' ? 'charity_codriver' : 'codriver', terminalSessionId: sessionId, consentVersion: context.contract.version, consentTextHash: context.contract.textHash, locale: draft.locale, consentSource: 'admin_ui', termsAccepted: false, privacyAccepted: true, waiverAccepted: true, mediaAccepted: false, clubInfoAccepted: false, guardianFullName: draft.guardianFullName ?? null, guardianEmail: draft.guardianEmail ?? null, guardianPhone: draft.guardianPhone ?? null, guardianRelationship: draft.guardianRelationship ?? null, guardianConsentAccepted: context.isMinor === true, capturedAt: new Date(input.signedAt), createdAt: now })));
-    const [updated] = await tx.update(signingSession).set({ status: 'completed', workflowStage: 'completed', signedAt: new Date(input.signedAt), documentId: documents[0]?.id ?? null, evidenceAuditS3Key: auditS3Key, resultPayload: { participantId, charityRegistrationId, entryIds, operation: context.operation ?? 'create' }, draftPayload: null, updatedAt: now }).where(eq(signingSession.id, sessionId)).returning();
+    const [updated] = await tx.update(signingSession).set({ documentId: documents[0]?.id ?? null, resultPayload: { participantId, charityRegistrationId, entryIds, operation: context.operation ?? 'create' }, draftPayload: null, updatedAt: now }).where(eq(signingSession.id, sessionId)).returning();
     await writeAuditLog(tx as never, { eventId: session.eventId, actorUserId: session.operatorUserId, action: 'terminal_participant_session_completed', entityType: 'signing_session', entityId: sessionId, payload: { workflowType: session.workflowType, operation: context.operation ?? 'create', participantId, charityRegistrationId, entryIds, documentIds: documents.map((item) => item.id) } });
     return updated;
+    });
+  } catch (error) {
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    logOperationalEvent('error', 'terminal.completion_transaction_failed', {
+      eventId: session.eventId,
+      sessionId,
+      workflowType: session.workflowType,
+      errorCode: errorCodeOf(error)
+    });
+    throw error;
+  }
+  if (!updatedSession) {
+    await Promise.allSettled([deleteDocumentObject(documentS3Key), deleteDocumentObject(auditS3Key)]);
+    const [completed] = await db.select().from(signingSession).where(and(
+      eq(signingSession.id, sessionId),
+      eq(signingSession.deviceSessionId, device.id),
+      eq(signingSession.status, 'completed')
+    )).limit(1);
+    if (completed) return projectParticipantSessionWithLiveIdentity(db, completed);
+    throw new Error('TERMINAL_SESSION_NOT_ACTIVE');
+  }
+
+  logOperationalEvent('info', 'terminal.session_completed', {
+    eventId: session.eventId,
+    sessionId,
+    workflowType: session.workflowType,
+    documentId: updatedSession.documentId ?? undefined
   });
 
   try {
@@ -521,6 +573,12 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
       errorLast: error instanceof Error ? `WAIVER_MAIL_QUEUE_FAILED:${error.message}` : 'WAIVER_MAIL_QUEUE_FAILED',
       updatedAt: new Date()
     }).where(eq(signingSession.id, sessionId));
+    logOperationalEvent('error', 'signing.waiver_mail_queue_failed', {
+      eventId: session.eventId,
+      sessionId,
+      workflowType: session.workflowType,
+      errorCode: errorCodeOf(error)
+    });
   }
 
   return projectParticipantSessionWithLiveIdentity(db, updatedSession);

@@ -128,6 +128,16 @@ export const doesAssetObjectExist = async (key: string): Promise<boolean> => {
   }
 };
 
+export const doesDocumentObjectExist = async (key: string): Promise<boolean> => {
+  const client = getS3Client();
+  try {
+    await client.send(new HeadObjectCommand({ Bucket: getDocumentsBucket(), Key: key }));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const getAssetObjectMetadata = async (key: string): Promise<{ contentType: string | null; contentLength: number | null } | null> => {
   const client = getS3Client();
   const bucket = getAssetsBucket();

@@ -15,6 +15,7 @@ import { buildPublicRateLimitKey, enforcePublicRateLimit } from './http/publicRa
 import { errorJson, json } from './http/response';
 import { parseJsonBody } from './http/parse';
 import { isPgUniqueViolation } from './http/dbErrors';
+import { errorCodeOf, logOperationalEvent } from './observability/logger';
 import { getPresignedAssetsDownloadUrl } from './docs/storage';
 import {
   archiveEvent,
@@ -392,9 +393,9 @@ const enforcePublicRequestRateLimit = async (
 };
 
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyStructuredResultV2> => {
+  const method = event.requestContext.http.method;
+  const path = event.requestContext.http.path;
   try {
-    const method = event.requestContext.http.method;
-    const path = event.requestContext.http.path;
     const stage = process.env.STAGE ?? 'dev';
     const adminAuth = path.startsWith('/admin/') ? getAuthContext(event) : null;
     const requireAdminMfa = process.env.REQUIRE_ADMIN_MFA === 'true';
@@ -2785,7 +2786,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       return json(200, { ok: true, documentId: doc.id });
     } catch (error) {
-      console.error('create waiver document failed', error);
+      logOperationalEvent('error', 'document.waiver_generation_failed', {
+        requestId: event.requestContext.requestId,
+        route: path,
+        method,
+        errorCode: errorCodeOf(error)
+      });
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
@@ -2828,7 +2834,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         sha256: doc.sha256
       });
     } catch (error) {
-      console.error('create tech-check document failed', error);
+      logOperationalEvent('error', 'document.tech_check_generation_failed', {
+        requestId: event.requestContext.requestId,
+        route: path,
+        method,
+        errorCode: errorCodeOf(error)
+      });
       if (error instanceof ZodError) {
         return errorJson(400, 'Validation failed', { issues: error.issues });
       }
@@ -3843,7 +3854,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const job = await createProgrammheftExport({ eventId, classIds }, auth.sub);
       return json(200, { ok: true, exportJobId: job!.id, status: job!.status });
     } catch (err) {
-      console.error('Programmheft export error:', err);
+      logOperationalEvent('error', 'export.programmheft_failed', {
+        requestId: event.requestContext.requestId,
+        route: path,
+        method,
+        errorCode: errorCodeOf(err)
+      });
       return errorJson(500, 'Create export failed');
     }
   }
@@ -4219,9 +4235,11 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'EXPORT_INVALIDATED') {
         return errorJson(409, 'Export invalidated after publication name change', undefined, 'EXPORT_INVALIDATED');
       }
-      console.error('stamp_card_export_failed', {
-        name: error instanceof Error ? error.name : 'UnknownError',
-        message: error instanceof Error ? error.message : String(error)
+      logOperationalEvent('error', 'export.stamp_card_failed', {
+        requestId: event.requestContext.requestId,
+        route: path,
+        method,
+        errorCode: errorCodeOf(error)
       });
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
       return errorJson(500, 'Stamp-card export failed', details);
@@ -4518,6 +4536,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
     return errorJson(404, 'Not Found');
   } catch (error) {
+    logOperationalEvent('error', 'api.unhandled_error', {
+      requestId: event.requestContext.requestId,
+      route: path,
+      method,
+      errorCode: errorCodeOf(error)
+    });
     if (error instanceof ZodError) {
       return errorJson(400, 'Validation failed', { issues: error.issues }, 'VALIDATION_ERROR');
     }

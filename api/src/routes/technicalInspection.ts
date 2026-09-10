@@ -15,7 +15,9 @@ import {
 } from '../db/schema';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import type { AuthContext } from '../http/auth';
-import { sendEmail } from '../mail/ses';
+import { queueOperationalMails } from '../mail/operationalOutbox';
+import { getOrgaNotificationRecipients } from '../observability/recipients';
+import { logOperationalEvent } from '../observability/logger';
 import { resolveIamUserDisplayNames } from './adminIam';
 import { replaceProtectedLegalNamesInValue, standardPersonIdentity, type PersonIdentitySource } from '../domain/personIdentity';
 
@@ -96,10 +98,8 @@ type InspectionDecisionEmailInput = {
   eventName: string | null;
 };
 
-async function sendInspectionDecisionEmail(input: InspectionDecisionEmailInput): Promise<void> {
-  if (!input.driverEmail || input.techStatus === 'pending') {
-    return;
-  }
+function buildInspectionDecisionMail(input: InspectionDecisionEmailInput) {
+  if (input.techStatus === 'pending') return null;
   const vehicleName =
     [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || 'Ihr Fahrzeug';
   const vehicleLabel =
@@ -122,12 +122,7 @@ async function sendInspectionDecisionEmail(input: InspectionDecisionEmailInput):
       'Ihr Organisationsteam',
       'MSC Oberlausitzer Dreiländereck e.V.'
     ].join('\n');
-    const bodyHtml = `<p>Hallo ${driverName},</p>
-<p>Ihr Fahrzeug <strong>${vehicleLabel}</strong> wurde bei der technischen Abnahme <strong style="color:#15803d">zugelassen</strong>.${startInfo}</p>
-${input.note ? `<p><em>Hinweis des Prüfers:</em> ${input.note}</p>` : ''}
-<p>Wir freuen uns auf Sie bei der Veranstaltung.</p>
-<p>Mit freundlichen Grüßen<br>Ihr Organisationsteam<br>MSC Oberlausitzer Dreiländereck e.V.</p>`;
-    await sendEmail(input.driverEmail, subject, bodyText, bodyHtml);
+    return { subject, bodyText };
   } else {
     const subject = `Technische Abnahme: Fahrzeug nicht zugelassen – ${eventInfo}`;
     const bodyText = [
@@ -142,14 +137,30 @@ ${input.note ? `<p><em>Hinweis des Prüfers:</em> ${input.note}</p>` : ''}
       'Ihr Organisationsteam',
       'MSC Oberlausitzer Dreiländereck e.V.'
     ].join('\n');
-    const bodyHtml = `<p>Hallo ${driverName},</p>
-<p>Ihr Fahrzeug <strong>${vehicleLabel}</strong> wurde bei der technischen Abnahme leider <strong style="color:#dc2626">nicht zugelassen</strong>.${startInfo}</p>
-${input.note ? `<blockquote style="border-left:3px solid #dc2626;margin:1em 0;padding:0.5em 1em;color:#7f1d1d"><strong>Ablehnungsgrund:</strong><br>${input.note}</blockquote>` : ''}
-<p>Bitte wenden Sie sich bei Fragen an das Organisationsteam.</p>
-<p>Mit freundlichen Grüßen<br>Ihr Organisationsteam<br>MSC Oberlausitzer Dreiländereck e.V.</p>`;
-    await sendEmail(input.driverEmail, subject, bodyText, bodyHtml);
+    return { subject, bodyText };
   }
 }
+
+const buildInspectionOrgaMail = (input: InspectionDecisionEmailInput & { inspector: string | null }) => {
+  const statusLabel = input.techStatus === 'passed' ? 'BESTANDEN' : 'ABGELEHNT';
+  const vehicleName = [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || 'Unbekanntes Fahrzeug';
+  const bodyText = [
+    'Eine technische Abnahme wurde abgeschlossen.',
+    '',
+    `Veranstaltung: ${input.eventName ?? 'Unbekannte Veranstaltung'}`,
+    `Status: ${statusLabel}`,
+    `Fahrer: ${input.driverDisplayName}`,
+    `Startnummer: ${input.startNumber ?? '-'}`,
+    `Fahrzeug: ${vehicleName}`,
+    `Ziel: ${input.target === 'backup' ? 'Ersatzfahrzeug' : 'Hauptfahrzeug'}`,
+    `Prüfer: ${input.inspector ?? '-'}`,
+    ...(input.note ? ['', input.techStatus === 'failed' ? `Ablehnungsgrund: ${input.note}` : `Hinweis: ${input.note}`] : [])
+  ].join('\n');
+  return {
+    subject: `[Technische Abnahme][${statusLabel}] #${input.startNumber ?? '-'} – ${input.driverDisplayName}`,
+    bodyText
+  };
+};
 
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
 
@@ -446,6 +457,14 @@ export const updateInspectionDecision = async (
     throw new Error('INSPECTION_BACKUP_VEHICLE_REQUIRED');
   }
   const now = new Date();
+  const [delivery] = await db
+    .select({ email: person.email })
+    .from(entry)
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .where(eq(entry.id, entryId))
+    .limit(1);
+  const protectedPeople = await loadProtectedInspectionPeople(db, entryId);
+  const safeNote = replaceProtectedLegalNamesInValue(note, protectedPeople) as string | null;
   const result = await db.transaction(async (tx) => {
     const [updated] = await tx
       .update(entry)
@@ -495,32 +514,51 @@ export const updateInspectionDecision = async (
       entityId: entryId,
       payload: { techStatus: input.techStatus, target: input.target }
     });
+    if (input.techStatus !== 'pending') {
+      const baseMailInput: InspectionDecisionEmailInput = {
+        techStatus: input.techStatus,
+        target: input.target,
+        note: safeNote,
+        driverEmail: delivery?.email ?? null,
+        driverDisplayName: existing.driverDisplayName,
+        vehicleMake: input.target === 'backup' ? (existing.backupVehicle?.make ?? null) : existing.vehicleMake,
+        vehicleModel: input.target === 'backup' ? (existing.backupVehicle?.model ?? null) : existing.vehicleModel,
+        startNumber: existing.startNumber,
+        eventName: existing.eventName ?? null
+      };
+      const driverMail = buildInspectionDecisionMail(baseMailInput);
+      const orgaMail = buildInspectionOrgaMail({ ...baseMailInput, inspector: auth.email ?? actorUserId });
+      const mails = [
+        ...(delivery?.email && driverMail
+          ? [{ audience: 'driver' as const, toEmail: delivery.email, ...driverMail }]
+          : []),
+        ...getOrgaNotificationRecipients().map((toEmail) => ({ audience: 'orga' as const, toEmail, ...orgaMail }))
+      ];
+      await queueOperationalMails(tx, {
+        eventId: existing.eventId,
+        templateId: 'technical_inspection_decision',
+        idempotencyPrefix: `inspection:${decision.id}`,
+        commonTemplateData: {
+          decisionId: decision.id,
+          entryId,
+          status: input.techStatus,
+          target: input.target
+        },
+        mails
+      });
+    }
     return { entry: updated, decision };
   });
 
-  const [delivery] = await db
-    .select({ email: person.email, firstName: person.firstName, lastName: person.lastName, publicationName: person.publicationName })
-    .from(entry)
-    .innerJoin(person, eq(entry.driverPersonId, person.id))
-    .where(eq(entry.id, entryId))
-    .limit(1);
-  const protectedPeople = await loadProtectedInspectionPeople(db, entryId);
-  const safeNote = replaceProtectedLegalNamesInValue(note, protectedPeople) as string | null;
-
-  void sendInspectionDecisionEmail({
-    techStatus: input.techStatus,
+  logOperationalEvent('info', 'inspection.decision_recorded', {
+    eventId: existing.eventId,
+    entryId,
+    decisionId: result.decision.id,
+    status: input.techStatus,
     target: input.target,
-    note: safeNote,
-    driverEmail: delivery?.email ?? null,
-    driverDisplayName: existing.driverDisplayName,
-    vehicleMake:
-      input.target === 'backup' ? (existing.backupVehicle?.make ?? null) : existing.vehicleMake,
-    vehicleModel:
-      input.target === 'backup' ? (existing.backupVehicle?.model ?? null) : existing.vehicleModel,
-    startNumber: existing.startNumber,
-    eventName: existing.eventName ?? null
-  }).catch((mailError) => {
-    console.error('[inspection-mail] Failed to send decision email:', mailError);
+    recipientCount: input.techStatus === 'pending'
+      ? 0
+      : getOrgaNotificationRecipients().length + (delivery?.email ? 1 : 0)
   });
 
   return replaceProtectedLegalNamesInValue(result, protectedPeople) as typeof result;

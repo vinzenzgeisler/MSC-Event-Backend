@@ -567,6 +567,13 @@ type StampCardRenderInput = {
   assets: StampCardRenderAssets;
 };
 
+const prepareStampCardSheetPage = (doc: any) => {
+  const pageBox = [0, 0, PAGE_WIDTH, PAGE_HEIGHT];
+  doc.page.dictionary.data.CropBox = pageBox;
+  doc.page.dictionary.data.TrimBox = pageBox;
+  doc.save().fillColor('#FFFFFF').rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT).fill().restore();
+};
+
 export const renderStampCardPdf = ({ cards, eventId, startSlot, year, accentColor, assets }: StampCardRenderInput) =>
   new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({
@@ -592,9 +599,13 @@ export const renderStampCardPdf = ({ cards, eventId, startSlot, year, accentColo
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
+    prepareStampCardSheetPage(doc);
     cards.forEach((card, index) => {
       const absolute = startSlot - 1 + index;
-      if (index > 0 && absolute % 10 === 0) doc.addPage();
+      if (index > 0 && absolute % 10 === 0) {
+        doc.addPage();
+        prepareStampCardSheetPage(doc);
+      }
       const slot = absolute % 10;
       const x = PAGE_LEFT + (slot % 2) * CARD_WIDTH;
       const y = PAGE_TOP + Math.floor(slot / 2) * CARD_HEIGHT;

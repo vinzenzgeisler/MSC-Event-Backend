@@ -53,6 +53,11 @@ assert.match(routeSource, /const VISIBLE_INSET = mm\(3\)/);
 assert.match(routeSource, /const CONTENT_SCALE = 1\.04/);
 assert.match(routeSource, /size: \[PAGE_WIDTH, PAGE_HEIGHT\]/);
 assert.match(routeSource, /ViewerPreferences = doc\.ref\(\{ PrintScaling: 'None' \}\)/);
+assert.match(routeSource, /const prepareStampCardSheetPage = \(doc: any\) =>/);
+assert.match(routeSource, /doc\.page\.dictionary\.data\.CropBox = pageBox/);
+assert.match(routeSource, /doc\.page\.dictionary\.data\.TrimBox = pageBox/);
+assert.match(routeSource, /rect\(0, 0, PAGE_WIDTH, PAGE_HEIGHT\)\.fill\(\)\.restore\(\)/);
+assert.equal((routeSource.match(/prepareStampCardSheetPage\(doc\)/g) || []).length, 2);
 assert.match(routeSource, /drawCornerLogo\(doc, cornerLogoImage, logoRight, visualTop\)/);
 assert.match(routeSource, /const logoRight = visualRight/);
 assert.match(routeSource, /driverQrLayout\.qrY - scaledMm\(6\)/);
@@ -158,6 +163,8 @@ const main = async () => {
   assert.ok(data.length > 50_000);
   const pdfSource = data.toString('latin1');
   assert.match(pdfSource, /\/MediaBox \[0 0 595\.275591 841\.889764\]/);
+  assert.match(pdfSource, /\/CropBox \[0 0 595\.275591 841\.889764\]/);
+  assert.match(pdfSource, /\/TrimBox \[0 0 595\.275591 841\.889764\]/);
   assert.match(pdfSource, /\/ViewerPreferences \d+ 0 R/);
   assert.match(pdfSource, /\/PrintScaling \/None/);
 

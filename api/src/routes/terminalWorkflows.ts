@@ -198,6 +198,16 @@ const loadWorkflowContext = async (entryIds: string[]) => {
       driverPersonId: entry.driverPersonId,
       codriverPersonId: entry.codriverPersonId,
       acceptanceStatus: entry.acceptanceStatus,
+      techStatus: entry.techStatus,
+      backupVehicleId: entry.backupVehicleId,
+      backupTechStatus: entry.backupTechStatus,
+      driverWaiverSigned: sql<boolean>`exists(
+        select 1 from "document" signed_waiver
+        where signed_waiver.event_id = ${entry.eventId}
+          and signed_waiver.driver_person_id = ${entry.driverPersonId}
+          and signed_waiver.type = 'waiver_signed'
+          and signed_waiver.status = 'generated'
+      )`,
       deletedAt: entry.deletedAt,
       className: eventClass.name,
       allowsCodriver: eventClass.allowsCodriver,
@@ -225,7 +235,13 @@ const loadWorkflowContext = async (entryIds: string[]) => {
   if (rows.length !== entryIds.length) throw new Error('ENTRY_NOT_FOUND');
   const first = rows[0];
   if (rows.some((row) => row.eventId !== first.eventId || row.driverPersonId !== first.driverPersonId)) throw new Error('TERMINAL_ENTRIES_MUST_SHARE_DRIVER');
-  if (rows.some((row) => row.deletedAt || row.acceptanceStatus !== 'accepted')) throw new Error('TERMINAL_ENTRY_NOT_ELIGIBLE');
+  if (rows.some((row) => row.deletedAt)) throw new Error('TERMINAL_ENTRY_NOT_ELIGIBLE');
+  if (rows.some((row) => row.techStatus !== 'pending' || (row.backupVehicleId && row.backupTechStatus !== 'pending'))) {
+    throw new Error('TECHNICAL_INSPECTION_ALREADY_STARTED');
+  }
+  if (rows.some((row) => row.acceptanceStatus !== 'accepted' && !row.driverWaiverSigned)) {
+    throw new Error('TERMINAL_ENTRY_NOT_ELIGIBLE');
+  }
   return { first, rows };
 };
 

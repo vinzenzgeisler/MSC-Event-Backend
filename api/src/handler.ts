@@ -578,7 +578,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'SIGNING_DEVICE_UNAUTHORIZED') {
         return errorJson(401, 'Terminal device unauthorized', undefined, error.message);
       }
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('EMAIL_') || error.message.startsWith('BIRTHDATE_') || error.message.startsWith('GUARDIAN_'))) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('EMAIL_') || error.message.startsWith('BIRTHDATE_') || error.message.startsWith('GUARDIAN_') || error.message.startsWith('TECHNICAL_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       return errorJson(500, 'Save participant data failed');
@@ -607,7 +607,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && (error.message === 'SIGNING_TIMESTAMPS_INVALID' || error.message === 'SIGNATURE_INVALID' || error.message === 'SIGNING_GUARDIAN_EMAIL_REQUIRED')) {
         return errorJson(400, error.message, undefined, error.message);
       }
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('WAIVER_'))) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('WAIVER_') || error.message.startsWith('TECHNICAL_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
@@ -1754,7 +1754,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     } catch (error) {
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('WAIVER_'))) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('WAIVER_') || error.message.startsWith('TECHNICAL_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
@@ -1784,7 +1784,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     } catch (error) {
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_'))) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('TECHNICAL_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       return errorJson(500, 'Approve participant registration failed');

@@ -198,6 +198,7 @@ type SigningCasePayload = {
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 const hashText = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 let waiverPdfFontsPromise: Promise<{ regular: Buffer; bold: Buffer }> | null = null;
+let waiverPdfLogoPromise: Promise<Buffer> | null = null;
 export const loadWaiverPdfFonts = () => {
   if (!waiverPdfFontsPromise) {
     const pending = Promise.all([
@@ -214,6 +215,21 @@ export const loadWaiverPdfFonts = () => {
   }
   return waiverPdfFontsPromise;
 };
+
+export const loadWaiverPdfLogo = () => {
+  if (!waiverPdfLogoPromise) {
+    const pending = getAssetObjectBuffer('public/mail/msc-logo.png').then((logo) => {
+      if (!logo) throw new Error('WAIVER_PDF_LOGO_UNAVAILABLE');
+      return logo;
+    });
+    waiverPdfLogoPromise = pending.catch((error) => {
+      waiverPdfLogoPromise = null;
+      throw error;
+    });
+  }
+  return waiverPdfLogoPromise;
+};
+
 export const signatureDataUrlToBuffer = (value: string): Buffer => {
   const match = value.match(/^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/);
   if (!match) throw new Error('SIGNATURE_INVALID');

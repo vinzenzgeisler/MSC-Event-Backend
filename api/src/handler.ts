@@ -278,6 +278,8 @@ import {
   listSigningDevices,
   getSignedWaiverDocument,
   listSigningSessions,
+  loadWaiverPdfFonts,
+  loadWaiverPdfLogo,
   resendSignedWaiverMail,
   revokeSigningDevice,
   validateCompleteSigningSessionInput,
@@ -4513,7 +4515,11 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     try {
       const localeParam = event.queryStringParameters?.locale;
       const locale: WaiverLocale = localeParam === 'en-GB' || localeParam === 'cs-CZ' || localeParam === 'pl-PL' ? localeParam : 'de-DE';
-      const buffer = await renderBlankWaiverPdf(locale);
+      const [fonts, logoImage] = await Promise.all([
+        loadWaiverPdfFonts().catch(() => null),
+        loadWaiverPdfLogo().catch(() => null)
+      ]);
+      const buffer = await renderBlankWaiverPdf(locale, fonts ?? undefined, logoImage);
       return json(200, {
         ok: true,
         filename: `haftverzicht-blanko-${locale}.pdf`,

@@ -10,6 +10,7 @@ const fonts = {
   regular: fs.readFileSync(path.join(__dirname, '..', '..', 'infra', 'assets', 'mail-fonts', 'arial.ttf')),
   bold: fs.readFileSync(path.join(__dirname, '..', '..', 'infra', 'assets', 'mail-fonts', 'arialbd.ttf'))
 };
+const pageCount = (pdf) => (pdf.toString('latin1').match(/\/Type \/Page(?!s)/g) ?? []).length;
 
 (async () => {
   for (const locale of ['de-DE', 'en-GB', 'cs-CZ', 'pl-PL']) {
@@ -35,6 +36,7 @@ const fonts = {
     });
     assert.equal(pdf.subarray(0, 4).toString('ascii'), '%PDF');
     assert.ok(pdf.length > 10_000, `${locale} PDF should contain the full contract`);
+    assert.equal(pageCount(pdf), locale === 'de-DE' ? 2 : 3, `${locale} evidence PDF must use one audit page, one German legal page and at most one translation page`);
   }
   console.log('waiver PDF tests passed');
 })().catch((error) => {

@@ -270,11 +270,17 @@ export const buildWaiverContract = (locale: WaiverLocale) => {
     authoritativeTitle: authoritative.title,
     authoritativeFullText: fullText,
     authoritativeTextHash: waiverTextHash(authoritative),
+    // Structured form of the same text (title/intro/sections), for rendering with proper
+    // headings/paragraphs/bullets instead of one flattened block. Never used for hashing.
+    authoritativeIntro: authoritative.intro ?? [],
+    authoritativeSections: authoritative.sections,
     translation: translated ? {
       locale,
       title: translated.title,
       fullText: flattenWaiverDocument(translated),
       textHash: waiverTextHash(translated),
+      intro: translated.intro ?? [],
+      sections: translated.sections,
       binding: false as const
     } : null,
     source: 'backend_contract_context' as const

@@ -212,6 +212,157 @@ export const renderWaiverPdf = async (payload: WaiverPayload): Promise<Buffer> =
   return renderPdf('Haftverzicht', lines);
 };
 
+type WaiverBodySection = { title: string; paragraphs?: string[]; bullets?: string[] };
+type WaiverBodyDocument = { intro?: string[]; sections: WaiverBodySection[] };
+
+type WaiverBodyRenderContext = {
+  LEFT: number;
+  W: number;
+  /** Y where the first column starts (below any full-width header already drawn on this page). */
+  TOP: number;
+  /**
+   * Y where a genuinely NEW page (added because even the last column overflowed) should start,
+   * before onNewPage draws its own small continuation header. Defaults to TOP. Pass the actual
+   * page margin top explicitly whenever TOP is a large value (e.g. below a big one-page header
+   * on page 1) — otherwise every overflow page wastes that same amount of space at its top too,
+   * which can cascade into far more pages than the overflowing content actually needs.
+   */
+  pageTop?: number;
+  bottomMargin: number;
+  regularFont: string;
+  boldFont: string;
+  bodyColor: string;
+  headingColor: string;
+  /** Number of side-by-side columns the text flows through before adding a new page. Default 1. */
+  columns?: number;
+  columnGap?: number;
+  fontSize?: number;
+  headingFontSize?: number;
+  lineGap?: number;
+  paragraphGap?: number;
+  bulletGap?: number;
+  sectionGapBefore?: number;
+  onNewPage?: () => void;
+};
+
+type WaiverBodyBlock = {
+  kind: 'paragraph' | 'bullet' | 'heading';
+  text: string;
+  textHeight: number;
+  gapBefore: number;
+  gapAfter: number;
+  height: number;
+};
+
+// Renders a structured waiver document (title/intro/sections, each with paragraphs and/or
+// bullets) as properly separated headings, paragraphs and hanging-indent bullet lists —
+// instead of one flattened block of text — flowing through one or more columns and adding a
+// new page only once every column is full. Purely a rendering concern: the legal wording
+// itself is untouched, and the hashed/versioned flat text used for audit/legal purposes is
+// computed separately and never derived from this output.
+//
+// Columns are balanced by height (not just filled sequentially). All positioning uses an
+// explicit cursor: PDFKit mutates doc.y after text(), so combining doc.y with measured block
+// heights would otherwise count every line twice and force unreadably small type.
+const drawWaiverContractBody = (doc: PDFKit.PDFDocument, contractDoc: WaiverBodyDocument, ctx: WaiverBodyRenderContext): void => {
+  const columns = ctx.columns ?? 1;
+  const columnGap = ctx.columnGap ?? 16;
+  const columnWidth = columns > 1 ? (ctx.W - columnGap * (columns - 1)) / columns : ctx.W;
+  const fontSize = ctx.fontSize ?? 9.4;
+  const headingFontSize = ctx.headingFontSize ?? 10.3;
+  const lineGap = ctx.lineGap ?? 2;
+  const paragraphGap = ctx.paragraphGap ?? 8;
+  const bulletGap = ctx.bulletGap ?? 5;
+  const sectionGapBefore = ctx.sectionGapBefore ?? 12;
+  const bulletIndent = Math.max(7, fontSize * 1.35);
+
+  // ── pass 1: measure every block at this column width, so columns can be balanced ──────
+  const blocks: WaiverBodyBlock[] = [];
+  (contractDoc.intro ?? []).forEach((text) => {
+    doc.font(ctx.regularFont).fontSize(fontSize);
+    const textHeight = doc.heightOfString(text, { width: columnWidth, lineGap });
+    blocks.push({ kind: 'paragraph', text, textHeight, gapBefore: 0, gapAfter: paragraphGap, height: textHeight + paragraphGap });
+  });
+  contractDoc.sections.forEach((section) => {
+    if (section.title) {
+      doc.font(ctx.boldFont).fontSize(headingFontSize);
+      const textHeight = doc.heightOfString(section.title, { width: columnWidth });
+      const gapAfter = Math.min(3, paragraphGap);
+      blocks.push({ kind: 'heading', text: section.title, textHeight, gapBefore: sectionGapBefore, gapAfter, height: sectionGapBefore + textHeight + gapAfter });
+    }
+    (section.paragraphs ?? []).forEach((text) => {
+      doc.font(ctx.regularFont).fontSize(fontSize);
+      const textHeight = doc.heightOfString(text, { width: columnWidth, lineGap });
+      blocks.push({ kind: 'paragraph', text, textHeight, gapBefore: 0, gapAfter: paragraphGap, height: textHeight + paragraphGap });
+    });
+    (section.bullets ?? []).forEach((text) => {
+      doc.font(ctx.regularFont).fontSize(fontSize);
+      const textHeight = doc.heightOfString(text, { width: columnWidth - bulletIndent, lineGap });
+      blocks.push({ kind: 'bullet', text, textHeight, gapBefore: 0, gapAfter: bulletGap, height: textHeight + bulletGap });
+    });
+  });
+  const totalHeight = blocks.reduce((sum, block) => sum + block.height, 0);
+  // A small packing allowance absorbs keep-with-next decisions for headings. Without it,
+  // mathematically equal columns can leave enough unused space in the first columns to push
+  // the final paragraph onto an otherwise unnecessary extra page.
+  const columnCapacity = doc.page.height - ctx.bottomMargin - ctx.TOP;
+  const packingAllowance = Math.min(20, columnCapacity * 0.03);
+  const targetPerColumn = columns > 1 ? Math.min(columnCapacity, totalHeight / columns + packingAllowance) : Infinity;
+
+  // ── pass 2: draw, breaking to the next column once its share of the target is used up ──
+  let currentColumn = 0;
+  let columnAccum = 0;
+  let cursorY = ctx.TOP;
+  const columnX = () => ctx.LEFT + currentColumn * (columnWidth + columnGap);
+  const pageBottom = () => doc.page.height - ctx.bottomMargin;
+
+  const breakColumn = () => {
+    if (currentColumn < columns - 1) {
+      currentColumn += 1;
+      cursorY = ctx.TOP;
+      columnAccum = 0;
+    } else {
+      doc.addPage();
+      currentColumn = 0;
+      cursorY = ctx.pageTop ?? ctx.TOP;
+      columnAccum = 0;
+      doc.y = cursorY;
+      ctx.onNewPage?.();
+      cursorY = doc.y;
+    }
+  };
+
+  blocks.forEach((block, index) => {
+    // Keep a heading with at least the following paragraph/list item.
+    const keepWithNext = block.kind === 'heading' ? (blocks[index + 1]?.height ?? 0) : 0;
+    const prospectiveHeight = block.height + keepWithNext;
+    const wantsBalanceBreak = currentColumn < columns - 1 && columnAccum > 0 && columnAccum + prospectiveHeight > targetPerColumn;
+    const wantsHardBreak = cursorY + prospectiveHeight > pageBottom();
+    if (wantsBalanceBreak || wantsHardBreak) breakColumn();
+
+    const gapBefore = cursorY > ctx.TOP ? block.gapBefore : 0;
+    const textY = cursorY + gapBefore;
+    if (block.kind === 'heading') {
+      doc.font(ctx.boldFont).fontSize(headingFontSize).fillColor(ctx.headingColor)
+        .text(block.text, columnX(), textY, { width: columnWidth });
+    } else if (block.kind === 'bullet') {
+      const textWidth = columnWidth - bulletIndent;
+      const x = columnX();
+      doc.font(ctx.regularFont).fontSize(fontSize).fillColor(ctx.bodyColor)
+        .text('•', x, textY, { width: bulletIndent, lineGap });
+      doc.font(ctx.regularFont).fontSize(fontSize).fillColor(ctx.bodyColor)
+        .text(block.text, x + bulletIndent, textY, { width: textWidth, lineGap });
+    } else {
+      doc.font(ctx.regularFont).fontSize(fontSize).fillColor(ctx.bodyColor)
+        .text(block.text, columnX(), textY, { width: columnWidth, lineGap });
+    }
+    const renderedHeight = gapBefore + block.textHeight + block.gapAfter;
+    cursorY += renderedHeight;
+    columnAccum += renderedHeight;
+    doc.y = cursorY;
+  });
+};
+
 type SignedWaiverEvidencePdfPayload = {
   sessionId: string;
   payload: {
@@ -230,7 +381,9 @@ type SignedWaiverEvidencePdfPayload = {
       authoritativeTitle?: string;
       authoritativeFullText?: string;
       authoritativeTextHash?: string;
-      translation?: { locale: string; title: string; fullText: string; textHash: string; binding: false } | null;
+      authoritativeIntro?: string[];
+      authoritativeSections?: WaiverBodySection[];
+      translation?: { locale: string; title: string; fullText: string; textHash: string; intro?: string[]; sections?: WaiverBodySection[]; binding: false } | null;
     };
     entries: Array<{
       className: string;
@@ -323,7 +476,9 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     };
 
     const checkRow = (label: string, ts: string | null | undefined, required: boolean) => {
-      const mark = ts ? '✓' : (required ? '—' : 'n/a');
+      // ASCII marker stays reliable in every embedded font; some Arial builds render the
+      // checkmark glyph as an empty square in the archived evidence PDF.
+      const mark = ts ? 'OK' : (required ? '—' : 'n/a');
       const markColor = ts ? '#16A34A' : (required ? '#DC2626' : DIM);
       const startY = doc.y;
       doc.font(regularFont).fontSize(8.5).fillColor(LABEL)
@@ -345,15 +500,19 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
     // ════════════════════════════════════════════════════════════════════════
     doc.y = TOP;
 
-    // title bar
-    doc.font(boldFont).fontSize(13).fillColor(BLUE)
+    // Header follows the restrained hierarchy of the Nennbestätigung.
+    doc.font(boldFont).fontSize(16).fillColor(BODY)
       .text('Persönliche Haftverzichtserklärung', LEFT, doc.y, { width: W });
-    doc.font(regularFont).fontSize(8.5).fillColor(DIM)
-      .text('Vor-Ort-Unterzeichnung · MSC Oberlausitzer Dreiländereck e.V.', LEFT, doc.y, { width: W });
-    doc.y += 4;
-    doc.save().lineWidth(1.5).strokeColor(BLUE)
+    doc.y += 2;
+    doc.font(boldFont).fontSize(9.2).fillColor(BLUE)
+      .text(`${payload.payload.event.name} · ${payload.payload.event.startsAt} – ${payload.payload.event.endsAt}`, LEFT, doc.y, { width: W });
+    doc.y += 2;
+    doc.font(regularFont).fontSize(7.6).fillColor(DIM)
+      .text('Digitaler Unterzeichnungs- und Auditnachweis · MSC Oberlausitzer Dreiländereck e.V.', LEFT, doc.y, { width: W });
+    doc.y += 6;
+    doc.save().lineWidth(0.8).strokeColor(RULE)
       .moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
-    doc.y += 8;
+    doc.y += 5;
 
     // VERANSTALTUNG
     sectionHeader('Veranstaltung');
@@ -450,36 +609,39 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
 
     const authoritativeTitle = payload.payload.contract.authoritativeTitle ?? payload.payload.contract.title;
     const authoritativeFullText = payload.payload.contract.authoritativeFullText ?? payload.payload.contract.fullText;
-    const authoritativeTextHash = payload.payload.contract.authoritativeTextHash ?? payload.payload.contract.textHash;
-    doc.font(boldFont).fontSize(11).fillColor(BLUE)
+    const drawContinuationHeader = () => {
+      doc.font(boldFont).fontSize(9).fillColor(DIM)
+        .text(`${authoritativeTitle} · Fortsetzung`, LEFT, doc.y, { width: W });
+      doc.y += 14;
+    };
+    doc.font(boldFont).fontSize(16).fillColor(BODY)
       .text(authoritativeTitle, LEFT, doc.y, { width: W });
-    doc.y += 2;
-    doc.save().lineWidth(1).strokeColor(YELLOW)
+    doc.y += 5;
+    doc.save().lineWidth(0.8).strokeColor(RULE)
       .moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
-    doc.y += 10;
+    doc.y += 9;
+    const legalTextTop = doc.y;
 
-    // authoritativeFullText's first line repeats authoritativeTitle (see flattenWaiverDocument);
-    // strip it so the heading above isn't shown a second time as the first line of the body.
-    const authoritativeBody = authoritativeFullText.startsWith(authoritativeTitle)
-      ? authoritativeFullText.slice(authoritativeTitle.length).replace(/^\n+/, '')
-      : authoritativeFullText;
-    doc.font(regularFont).fontSize(9.4).fillColor(BODY)
-      .text(authoritativeBody, LEFT, doc.y, { width: W, lineGap: 1.5 });
-    doc.y += 14;
-
-    rule(RULE);
-    doc.y += 4;
-    const signerDisplay = payload.signer.type === 'guardian' && payload.signer.guardianName
-      ? payload.signer.guardianName
-      : signer
-        ? `${signer.firstName} ${signer.lastName}`
-        : `${driver.firstName} ${driver.lastName}`;
-    doc.font(regularFont).fontSize(7).fillColor(DIM)
-      .text(
-        `Diese Erklärung wurde am ${payload.signedAt} durch ${signerDisplay} digital unterzeichnet.  ` +
-        `Text-Hash: ${authoritativeTextHash}  ·  Version: ${payload.payload.contract.version}  ·  Audit-JSON: privat in S3 gespeichert.`,
-        LEFT, doc.y, { width: W, lineGap: 0.5 }
-      );
+    if (payload.payload.contract.authoritativeSections) {
+      drawWaiverContractBody(doc, { intro: payload.payload.contract.authoritativeIntro, sections: payload.payload.contract.authoritativeSections }, {
+        LEFT, W, TOP: legalTextTop, pageTop: TOP, bottomMargin: doc.page.margins.bottom,
+        regularFont, boldFont, bodyColor: BODY, headingColor: BLUE,
+        columns: 3, columnGap: 15,
+        fontSize: 6.9, headingFontSize: 7.5, lineGap: 0.3,
+        paragraphGap: 2.8, bulletGap: 1.35, sectionGapBefore: 4.2,
+        onNewPage: drawContinuationHeader
+      });
+    } else {
+      // authoritativeFullText's first line repeats authoritativeTitle (see flattenWaiverDocument);
+      // strip it so the heading above isn't shown a second time as the first line of the body.
+      const authoritativeBody = authoritativeFullText.startsWith(authoritativeTitle)
+        ? authoritativeFullText.slice(authoritativeTitle.length).replace(/^\n+/, '')
+        : authoritativeFullText;
+      doc.font(regularFont).fontSize(9.4).fillColor(BODY)
+        .text(authoritativeBody, LEFT, doc.y, { width: W, lineGap: 1.5 });
+    }
+    // Signature, version and hashes deliberately stay on page 1. This page contains only
+    // the authoritative German legal wording.
 
     if (payload.payload.contract.translation) {
       doc.addPage();
@@ -488,15 +650,32 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
         .text(payload.payload.contract.translation.title, LEFT, doc.y, { width: W });
       doc.y += 5;
       doc.font(boldFont).fontSize(8.5).fillColor('#9A3412')
-        .text('Unverbindliche Übersetzung als Verständnishilfe. Rechtsverbindlich ist ausschließlich die deutsche Fassung.', LEFT, doc.y, { width: W });
+        .text(waiverTranslationNotice(payload.payload.contract.translation.locale), LEFT, doc.y, { width: W });
       doc.y += 10;
       const translationTitle = payload.payload.contract.translation.title;
-      const translationFullText = payload.payload.contract.translation.fullText;
-      const translationBody = translationFullText.startsWith(translationTitle)
-        ? translationFullText.slice(translationTitle.length).replace(/^\n+/, '')
-        : translationFullText;
-      doc.font(regularFont).fontSize(9.4).fillColor(BODY)
-        .text(translationBody, LEFT, doc.y, { width: W, lineGap: 1.5 });
+      const translationSections = payload.payload.contract.translation.sections;
+      const drawTranslationContinuationHeader = () => {
+        doc.font(boldFont).fontSize(9).fillColor(DIM)
+          .text(`${translationTitle} · Fortsetzung`, LEFT, doc.y, { width: W });
+        doc.y += 14;
+      };
+      if (translationSections) {
+        drawWaiverContractBody(doc, { intro: payload.payload.contract.translation.intro, sections: translationSections }, {
+          LEFT, W, TOP: doc.y, pageTop: TOP, bottomMargin: doc.page.margins.bottom,
+          regularFont, boldFont, bodyColor: BODY, headingColor: BLUE,
+          columns: 3, columnGap: 15,
+          fontSize: 6.9, headingFontSize: 7.5, lineGap: 0.3,
+          paragraphGap: 2.8, bulletGap: 1.35, sectionGapBefore: 4.2,
+          onNewPage: drawTranslationContinuationHeader
+        });
+      } else {
+        const translationFullText = payload.payload.contract.translation.fullText;
+        const translationBody = translationFullText.startsWith(translationTitle)
+          ? translationFullText.slice(translationTitle.length).replace(/^\n+/, '')
+          : translationFullText;
+        doc.font(regularFont).fontSize(9.4).fillColor(BODY)
+          .text(translationBody, LEFT, doc.y, { width: W, lineGap: 1.5 });
+      }
       doc.y += 10;
       doc.font(regularFont).fontSize(7).fillColor(DIM)
         .text(`Übersetzung: ${payload.payload.contract.translation.locale} · Text-Hash: ${payload.payload.contract.translation.textHash}`, LEFT, doc.y, { width: W });
@@ -518,7 +697,9 @@ export type PaperWaiverPdfPayload = {
     authoritativeLocale?: string;
     authoritativeTitle?: string;
     authoritativeFullText?: string;
-    translation?: { locale: string; title: string; fullText: string; binding: false } | null;
+    authoritativeIntro?: string[];
+    authoritativeSections?: WaiverBodySection[];
+    translation?: { locale: string; title: string; fullText: string; intro?: string[]; sections?: WaiverBodySection[]; binding: false } | null;
   };
   entries: Array<{
     className: string;
@@ -527,16 +708,36 @@ export type PaperWaiverPdfPayload = {
     codriver: { firstName: string; lastName: string } | null;
     vehicles: Array<{ role: 'primary' | 'backup'; make: string; model: string; year: number | null; startNumber: string | null }>;
   }>;
+  // Without a Unicode-capable font, Czech/Polish diacritics (outside WinAnsi/Latin-1) render
+  // as garbage under the built-in Helvetica core font. Falls back to Helvetica for German
+  // text or when unavailable, which is not affected.
+  fonts?: { regular?: Buffer | null; bold?: Buffer | null };
+  logoImage?: Buffer | null;
 };
 
 const stripLeadingTitleText = (text: string, title: string): string =>
   text.startsWith(title) ? text.slice(title.length).replace(/^\n+/, '') : text;
 
+const WAIVER_ORGANIZER_CONTACT = 'MSC Oberlausitzer Dreiländereck e.V. · Am Weiher 4 · 02791 Oderwitz · nennung@msc-oberlausitzer-dreilaendereck.eu';
+
+const waiverTranslationNotice = (locale: string, previousPage = false): string => {
+  if (locale === 'en-GB') {
+    return `Non-binding translation for comprehension. Only the German version${previousPage ? ' on the previous page' : ''} is legally binding.`;
+  }
+  if (locale === 'cs-CZ') {
+    return `Nezávazný překlad pro snazší porozumění. Právně závazné je výhradně německé znění${previousPage ? ' na předchozí straně' : ''}.`;
+  }
+  if (locale === 'pl-PL') {
+    return `Niewiążące tłumaczenie pomocnicze. Wyłącznie niemiecka wersja${previousPage ? ' na poprzedniej stronie' : ''} jest prawnie wiążąca.`;
+  }
+  return `Unverbindliche Übersetzung als Verständnishilfe. Rechtsverbindlich ist ausschließlich die deutsche Fassung${previousPage ? ' auf der vorherigen Seite' : ''}.`;
+};
+
 export const renderPaperWaiverPdf = async (payload: PaperWaiverPdfPayload): Promise<Buffer> =>
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: 'A4',
-      margins: { top: 36, bottom: 36, left: 40, right: 40 },
+      margins: { top: 24, bottom: 18, left: 34, right: 34 },
       info: {
         Title: 'Persönliche Haftverzichtserklärung (Papierfassung)',
         Author: 'MSC Oberlausitzer Dreiländereck e.V.',
@@ -548,6 +749,13 @@ export const renderPaperWaiverPdf = async (payload: PaperWaiverPdfPayload): Prom
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
+    // Without a Unicode-capable font, Czech/Polish diacritics render as garbage under the
+    // built-in Helvetica core font (WinAnsi/Latin-1 only) — embed Arial when supplied.
+    const regularFont = payload.fonts?.regular ? 'PaperWaiverRegular' : 'Helvetica';
+    const boldFont = payload.fonts?.bold ? 'PaperWaiverBold' : 'Helvetica-Bold';
+    if (payload.fonts?.regular) doc.registerFont(regularFont, payload.fonts.regular);
+    if (payload.fonts?.bold) doc.registerFont(boldFont, payload.fonts.bold);
+
     const LEFT = doc.page.margins.left;
     const W = doc.page.width - doc.page.margins.left - doc.page.margins.right;
     const TOP = doc.page.margins.top;
@@ -556,134 +764,168 @@ export const renderPaperWaiverPdf = async (payload: PaperWaiverPdfPayload): Prom
     const LABEL = '#334155';
     const BODY = '#0F172A';
     const DIM = '#475569';
-    const RULE = '#D8DEE9';
-    const LW = Math.floor(W * 0.37);
+    const SIGNATURE_ZONE_HEIGHT = 28;
+    const HEADER_HEIGHT = 58;
+    const ROW_HEIGHT = 19;
 
-    const rule = (color = RULE) => {
-      doc.save().lineWidth(0.8).strokeColor(color)
-        .moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    const fillLine = (x: number, y: number, width: number, label: string, labelWidth: number, value: string) => {
+      const startY = y;
+      doc.font(boldFont).fontSize(7).fillColor(LABEL).text(label, x, startY, { width: labelWidth });
+      doc.font(regularFont).fontSize(7).fillColor(BODY).text(value || '—', x + labelWidth + 3, startY, { width: width - labelWidth - 3 });
+      const lineY = startY + 12;
+      doc.save().lineWidth(0.7).strokeColor('#94A3B8').moveTo(x + labelWidth, lineY).lineTo(x + width, lineY).stroke().restore();
     };
 
-    const sectionHeader = (title: string) => {
-      doc.y += 4;
-      doc.font('Helvetica-Bold').fontSize(7.8).fillColor(BLUE)
-        .text(title.toUpperCase(), LEFT, doc.y, { width: W, characterSpacing: 0.7 });
-      const lineY = doc.y + 1;
-      doc.save().lineWidth(1).strokeColor(YELLOW).moveTo(LEFT, lineY).lineTo(LEFT + W, lineY).stroke().restore();
-      doc.y = lineY + 7;
-    };
-
-    const kv = (label: string, value: string) => {
-      const startY = doc.y;
-      doc.font('Helvetica-Bold').fontSize(8.3).fillColor(LABEL).text(label, LEFT, startY, { width: LW });
-      const afterLabel = doc.y;
-      doc.font('Helvetica').fontSize(8.8).fillColor(BODY).text(value || '—', LEFT + LW, startY, { width: W - LW, lineGap: 0.5 });
-      doc.y = Math.max(doc.y, afterLabel) + 2;
-    };
-
-    const signatureBlock = (label: string) => {
-      doc.y += 20;
-      const lineY = doc.y;
-      doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT, lineY).lineTo(LEFT + Math.floor(W * 0.46), lineY).stroke().restore();
-      doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT + Math.floor(W * 0.56), lineY).lineTo(LEFT + W, lineY).stroke().restore();
-      doc.y += 3;
-      doc.font('Helvetica').fontSize(7.8).fillColor(DIM)
-        .text('Ort, Datum', LEFT, doc.y, { width: Math.floor(W * 0.46) });
-      doc.font('Helvetica').fontSize(7.8).fillColor(DIM)
-        .text(label, LEFT + Math.floor(W * 0.56), doc.y, { width: W - Math.floor(W * 0.56) });
-    };
-
-    // ── page 1 — personalized header ─────────────────────────────────────
+    // ── page 1 header ─────────────────────────────────────────────────────
     doc.y = TOP;
-    doc.font('Helvetica-Bold').fontSize(13).fillColor(BLUE)
-      .text('Persönliche Haftverzichtserklärung', LEFT, doc.y, { width: W });
-    doc.font('Helvetica').fontSize(8.5).fillColor(DIM)
-      .text('Papierfassung zur Unterschrift vor Ort · MSC Oberlausitzer Dreiländereck e.V.', LEFT, doc.y, { width: W });
+    const headerTextWidth = payload.logoImage ? W - 66 : W;
+    doc.font(boldFont).fontSize(16).fillColor(BODY)
+      .text('Persönliche Haftverzichtserklärung', LEFT, doc.y, { width: headerTextWidth });
+    doc.y += 2;
+    doc.font(boldFont).fontSize(9.5).fillColor(BLUE)
+      .text(`${payload.event.name} · ${payload.event.startsAt} – ${payload.event.endsAt}`, LEFT, doc.y, { width: headerTextWidth });
+    doc.y += 2;
+    doc.font(regularFont).fontSize(7.4).fillColor(DIM)
+      .text('Papierfassung zur Unterschrift vor Ort · MSC Oberlausitzer Dreiländereck e.V.', LEFT, doc.y, { width: headerTextWidth });
+    doc.y += 1;
+    doc.font(regularFont).fontSize(6.8).fillColor(DIM)
+      .text('Am Weiher 4 · 02791 Oderwitz · nennung@msc-oberlausitzer-dreilaendereck.eu', LEFT, doc.y, { width: headerTextWidth });
+    if (payload.logoImage) {
+      try {
+        doc.image(Buffer.from(payload.logoImage), LEFT + W - 54, TOP - 2, { fit: [54, 54], align: 'right', valign: 'top' });
+      } catch {
+        // Logo is decorative; the form remains usable if the asset is unavailable.
+      }
+    }
+    doc.y = TOP + HEADER_HEIGHT;
+    doc.save().lineWidth(0.8).strokeColor('#D8DEE9').moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 6;
+
+    // ── compact personal-data box spanning the full width ──────────────────
+    const dataBoxTop = doc.y;
     doc.y += 4;
-    doc.save().lineWidth(1.5).strokeColor(BLUE).moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
-    doc.y += 8;
-
-    sectionHeader('Veranstaltung');
-    kv('Veranstaltung', payload.event.name);
-    kv('Datum', `${payload.event.startsAt} – ${payload.event.endsAt}`);
-    kv('Ort', payload.event.location || '—');
-
-    sectionHeader('Teilnehmer');
-    kv('Fahrer', `${payload.driver.firstName} ${payload.driver.lastName}${payload.driver.birthdate ? `, geb. ${payload.driver.birthdate}` : ''}`);
+    const pad = LEFT + 6;
+    const boxWidth = W - 12;
+    const driverName = `${payload.driver.firstName} ${payload.driver.lastName}`;
+    const half = (boxWidth - 10) / 2;
+    const primaryEntry = payload.entries[0];
+    const firstRowY = doc.y;
+    fillLine(pad, firstRowY, half, 'Fahrer:', 40, `${driverName}${payload.driver.birthdate ? `, geb. ${payload.driver.birthdate}` : ''}`);
+    fillLine(pad + half + 10, firstRowY, half, 'Klasse / Nr.:', 62, primaryEntry ? [primaryEntry.className, primaryEntry.startNumber ? `#${primaryEntry.startNumber}` : null].filter(Boolean).join(' · ') : '—');
+    doc.y = firstRowY;
+    doc.y += ROW_HEIGHT;
+    payload.entries.forEach((entry) => {
+      entry.vehicles.forEach((v) => {
+        const vLabel = v.role === 'backup' ? 'Ersatzfahrzeug:' : 'Fahrzeug:';
+        const vVal = [v.make, v.model, v.year ? String(v.year) : null, v.startNumber ? `#${v.startNumber}` : null].filter(Boolean).join(' ');
+        fillLine(pad, doc.y, boxWidth, vLabel, 78, vVal);
+        doc.y += ROW_HEIGHT;
+      });
+      if (entry.codriver) {
+        fillLine(pad, doc.y, boxWidth, 'Beifahrer:', 78, `${entry.codriver.firstName} ${entry.codriver.lastName}`);
+        doc.y += ROW_HEIGHT;
+      }
+    });
     const flags: string[] = [];
     if (payload.isMinor) flags.push('Minderjährig – Unterschrift der/des Erziehungsberechtigten erforderlich');
     if (payload.requiresMedicalCertificate) flags.push('Attest ab 70 J. erforderlich');
-    if (flags.length > 0) kv('Hinweise', flags.join(' · '));
-
-    sectionHeader('Fahrzeuge & Nennungen');
-    payload.entries.forEach((entry, idx) => {
-      const entryVal = [entry.className, entry.startNumber ? `#${entry.startNumber}` : null, entry.orgaCode ? `Orga: ${entry.orgaCode}` : null]
-        .filter(Boolean).join(' · ');
-      kv(`Nennung ${idx + 1}`, entryVal);
-      if (entry.codriver) kv('  Beifahrer', `${entry.codriver.firstName} ${entry.codriver.lastName}`);
-      entry.vehicles.forEach((v) => {
-        const vLabel = v.role === 'backup' ? '  Ersatzfahrzeug' : '  Fahrzeug';
-        const vVal = [v.make, v.model, v.year ? String(v.year) : null, v.startNumber ? `#${v.startNumber}` : null].filter(Boolean).join(' ');
-        kv(vLabel, vVal);
-      });
-    });
-
+    if (flags.length > 0) {
+      doc.font(boldFont).fontSize(6.8).fillColor('#9A3412').text(flags.join(' · '), pad, doc.y, { width: boxWidth });
+      doc.y += doc.heightOfString(flags.join(' · '), { width: boxWidth }) + 4;
+    }
+    doc.save().lineWidth(0.9).strokeColor('#94A3B8')
+      .rect(LEFT, dataBoxTop, W, doc.y - dataBoxTop).stroke().restore();
     doc.y += 6;
-    doc.font('Helvetica').fontSize(8.5).fillColor(BODY)
-      .text('Die nachfolgenden Seiten enthalten den vollständigen Text der Vertrags- und Verzichtserklärung. Bitte lesen und anschließend unterschreiben.', LEFT, doc.y, { width: W, lineGap: 1.2 });
 
-    // ── page 2 — authoritative German text + signature ─────────────────────
-    doc.addPage();
-    doc.y = TOP;
-    const authoritativeLocale = payload.contract.authoritativeLocale ?? payload.contract.locale;
+    // ── contract text: small, three-column, so the whole declaration fits on this page ──
     const authoritativeTitle = payload.contract.authoritativeTitle ?? payload.contract.title;
     const authoritativeFullText = payload.contract.authoritativeFullText ?? payload.contract.fullText;
-    doc.font('Helvetica-Bold').fontSize(11).fillColor(BLUE).text(authoritativeTitle, LEFT, doc.y, { width: W });
+    doc.font(boldFont).fontSize(8.8).fillColor(BLUE).text(authoritativeTitle, LEFT, doc.y, { width: W });
     doc.y += 2;
-    doc.save().lineWidth(1).strokeColor(YELLOW).moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
-    doc.y += 10;
-    doc.font('Helvetica').fontSize(9.4).fillColor(BODY)
-      .text(stripLeadingTitleText(authoritativeFullText, authoritativeTitle), LEFT, doc.y, { width: W, lineGap: 1.5 });
-    doc.y += 10;
-    doc.font('Helvetica').fontSize(7).fillColor(DIM)
-      .text(`Sprache: ${authoritativeLocale} · Version: ${payload.contract.version} (Papierfassung)`, LEFT, doc.y, { width: W });
+    doc.save().lineWidth(0.8).strokeColor(YELLOW).moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 5;
+    const columnsTop = doc.y;
 
-    rule(RULE);
-    doc.y += 4;
-    signatureBlock(payload.isMinor ? 'Unterschrift Erziehungsberechtigte/r' : 'Unterschrift Fahrer/in');
-    if (payload.isMinor) {
-      signatureBlock('Unterschrift Fahrer/in (zur Kenntnisnahme)');
+    if (payload.contract.authoritativeSections) {
+      const drawOverflowContinuationHeader = () => {
+        doc.font(boldFont).fontSize(9).fillColor(DIM)
+          .text(`${authoritativeTitle} · Fortsetzung`, LEFT, doc.y, { width: W });
+        doc.y += 14;
+      };
+      drawWaiverContractBody(doc, { intro: payload.contract.authoritativeIntro, sections: payload.contract.authoritativeSections }, {
+        LEFT, W, TOP: columnsTop, pageTop: TOP,
+        bottomMargin: doc.page.margins.bottom + SIGNATURE_ZONE_HEIGHT,
+        regularFont, boldFont, bodyColor: BODY, headingColor: BLUE,
+        columns: 3, columnGap: 13,
+        fontSize: 6.35, headingFontSize: 6.9, lineGap: 0.2, paragraphGap: 2.1, bulletGap: 0.9, sectionGapBefore: 3.2,
+        onNewPage: drawOverflowContinuationHeader
+      });
+    } else {
+      doc.font(regularFont).fontSize(5.5).fillColor(BODY)
+        .text(stripLeadingTitleText(authoritativeFullText, authoritativeTitle), LEFT, doc.y, { width: W, lineGap: 0.2 });
     }
 
-    // ── page 3 — non-binding translation (only if the driver's locale differs) ──
+    // ── signature line(s), fixed at the bottom of the (reserved) signature zone ──
+    const signatureY = doc.page.height - doc.page.margins.bottom - SIGNATURE_ZONE_HEIGHT + 8;
+    const signatureLabel = payload.isMinor ? 'Unterschrift Erziehungsberechtigte/r' : 'Unterschrift Fahrer/in';
+    doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT, signatureY).lineTo(LEFT + Math.floor(W * 0.46), signatureY).stroke().restore();
+    doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT + Math.floor(W * 0.56), signatureY).lineTo(LEFT + W, signatureY).stroke().restore();
+    doc.font(regularFont).fontSize(7).fillColor(DIM).text('Ort, Datum', LEFT, signatureY + 2, { width: Math.floor(W * 0.46) });
+    doc.font(regularFont).fontSize(7).fillColor(DIM).text(signatureLabel, LEFT + Math.floor(W * 0.56), signatureY + 2, { width: W - Math.floor(W * 0.56) });
+
+    // ── page 2 (optional) — non-binding translation, only if the driver's locale differs ──
     if (payload.contract.translation) {
       doc.addPage();
       doc.y = TOP;
-      doc.font('Helvetica-Bold').fontSize(11).fillColor(BLUE).text(payload.contract.translation.title, LEFT, doc.y, { width: W });
+      doc.font(boldFont).fontSize(11).fillColor(BLUE).text(payload.contract.translation.title, LEFT, doc.y, { width: W });
       doc.y += 5;
-      doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#9A3412')
-        .text('Unverbindliche Übersetzung als Verständnishilfe. Rechtsverbindlich ist ausschließlich die deutsche Fassung auf der vorherigen Seite.', LEFT, doc.y, { width: W });
+      doc.font(boldFont).fontSize(8.5).fillColor('#9A3412')
+        .text(waiverTranslationNotice(payload.contract.translation.locale, true), LEFT, doc.y, { width: W });
       doc.y += 10;
-      doc.font('Helvetica').fontSize(9.4).fillColor(BODY)
-        .text(stripLeadingTitleText(payload.contract.translation.fullText, payload.contract.translation.title), LEFT, doc.y, { width: W, lineGap: 1.5 });
+      {
+        const translationTitle = payload.contract.translation.title;
+        const drawPaperTranslationContinuationHeader = () => {
+          doc.font(boldFont).fontSize(9).fillColor(DIM)
+            .text(`${translationTitle} · Fortsetzung`, LEFT, doc.y, { width: W });
+          doc.y += 14;
+        };
+        if (payload.contract.translation.sections) {
+          drawWaiverContractBody(doc, { intro: payload.contract.translation.intro, sections: payload.contract.translation.sections }, {
+            LEFT, W, TOP: doc.y, pageTop: TOP, bottomMargin: doc.page.margins.bottom,
+            regularFont, boldFont, bodyColor: BODY, headingColor: BLUE,
+            columns: 3, columnGap: 13,
+            fontSize: 6.35, headingFontSize: 6.9, lineGap: 0.2,
+            paragraphGap: 2.1, bulletGap: 0.9, sectionGapBefore: 3.2,
+            onNewPage: drawPaperTranslationContinuationHeader
+          });
+        } else {
+          doc.font(regularFont).fontSize(9.4).fillColor(BODY)
+            .text(stripLeadingTitleText(payload.contract.translation.fullText, translationTitle), LEFT, doc.y, { width: W, lineGap: 1.5 });
+        }
+      }
       doc.y += 10;
-      doc.font('Helvetica').fontSize(7).fillColor(DIM)
+      doc.font(regularFont).fontSize(7).fillColor(DIM)
         .text(`Übersetzung: ${payload.contract.translation.locale}`, LEFT, doc.y, { width: W });
     }
 
     doc.end();
   });
 
-// A single, unpersonalized paper form: same legal text and layout family as the per-driver
-// paper-fallback export, but with blank fill-in fields instead of data, for handing out and
-// filling in by hand (e.g. when a driver isn't in the system yet or as a spare template).
-export const renderBlankWaiverPdf = async (locale: WaiverLocale = 'de-DE'): Promise<Buffer> => {
+// A single, unpersonalized paper form: same legal text as the per-driver paper-fallback
+// export, but with blank fill-in fields instead of data, for handing out and filling in by
+// hand. The binding German form deliberately remains one compact page, with a separate
+// reading-aid page only when a translated locale was selected.
+export const renderBlankWaiverPdf = async (
+  locale: WaiverLocale = 'de-DE',
+  fonts?: { regular?: Buffer | null; bold?: Buffer | null },
+  logoImage?: Buffer | null
+): Promise<Buffer> => {
   const contract = buildPaperWaiverContract(locale);
 
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: 'A4',
-      margins: { top: 36, bottom: 36, left: 40, right: 40 },
+      margins: { top: 24, bottom: 18, left: 34, right: 34 },
       info: {
         Title: 'Haftverzichtserklärung (Blanko)',
         Author: 'MSC Oberlausitzer Dreiländereck e.V.'
@@ -694,6 +936,13 @@ export const renderBlankWaiverPdf = async (locale: WaiverLocale = 'de-DE'): Prom
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
+    // Without a Unicode-capable font, Czech/Polish diacritics render as garbage under the
+    // built-in Helvetica core font (WinAnsi/Latin-1 only) — embed Arial when supplied.
+    const regularFont = fonts?.regular ? 'BlankWaiverRegular' : 'Helvetica';
+    const boldFont = fonts?.bold ? 'BlankWaiverBold' : 'Helvetica-Bold';
+    if (fonts?.regular) doc.registerFont(regularFont, fonts.regular);
+    if (fonts?.bold) doc.registerFont(boldFont, fonts.bold);
+
     const LEFT = doc.page.margins.left;
     const W = doc.page.width - doc.page.margins.left - doc.page.margins.right;
     const TOP = doc.page.margins.top;
@@ -702,61 +951,109 @@ export const renderBlankWaiverPdf = async (locale: WaiverLocale = 'de-DE'): Prom
     const LABEL = '#334155';
     const DIM = '#475569';
     const BODY = '#0F172A';
+    const SIGNATURE_ZONE_HEIGHT = 28;
+    const HEADER_HEIGHT = 58;
+    const ROW_HEIGHT = 19;
 
-    const sectionHeader = (title: string) => {
-      doc.y += 4;
-      doc.font('Helvetica-Bold').fontSize(7.8).fillColor(BLUE)
-        .text(title.toUpperCase(), LEFT, doc.y, { width: W, characterSpacing: 0.7 });
-      const lineY = doc.y + 1;
-      doc.save().lineWidth(1).strokeColor(YELLOW).moveTo(LEFT, lineY).lineTo(LEFT + W, lineY).stroke().restore();
-      doc.y = lineY + 7;
-    };
-
-    const fillLine = (label: string, width: number) => {
-      const startY = doc.y;
-      doc.font('Helvetica-Bold').fontSize(8.3).fillColor(LABEL).text(label, LEFT, startY, { width: 130 });
-      const lineY = startY + 11;
-      doc.save().lineWidth(0.8).strokeColor('#94A3B8').moveTo(LEFT + 130, lineY).lineTo(LEFT + width, lineY).stroke().restore();
-      doc.y = lineY + 8;
+    const fillLine = (x: number, y: number, width: number, label: string, labelWidth: number) => {
+      const startY = y;
+      doc.font(boldFont).fontSize(7).fillColor(LABEL).text(label, x, startY, { width: labelWidth });
+      const lineY = startY + 12;
+      doc.save().lineWidth(0.7).strokeColor('#94A3B8').moveTo(x + labelWidth, lineY).lineTo(x + width, lineY).stroke().restore();
     };
 
     doc.y = TOP;
-    doc.font('Helvetica-Bold').fontSize(13).fillColor(BLUE)
-      .text('Haftverzichtserklärung', LEFT, doc.y, { width: W });
-    doc.font('Helvetica').fontSize(8.5).fillColor(DIM)
-      .text('Blankoformular zum handschriftlichen Ausfüllen · MSC Oberlausitzer Dreiländereck e.V.', LEFT, doc.y, { width: W });
+    const headerTextWidth = logoImage ? W - 66 : W;
+    doc.font(boldFont).fontSize(16).fillColor(BODY)
+      .text('Haftverzichtserklärung', LEFT, doc.y, { width: headerTextWidth });
+    doc.y += 2;
+    doc.font(regularFont).fontSize(7.2).fillColor(DIM)
+      .text(WAIVER_ORGANIZER_CONTACT, LEFT, doc.y, { width: headerTextWidth });
+    if (logoImage) {
+      try {
+        doc.image(Buffer.from(logoImage), LEFT + W - 54, TOP - 2, { fit: [54, 54], align: 'right', valign: 'top' });
+      } catch {
+        // Logo is decorative; the form remains usable if the asset is unavailable.
+      }
+    }
+    doc.y = TOP + HEADER_HEIGHT;
+    doc.save().lineWidth(0.8).strokeColor('#D8DEE9').moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 6;
+
+    // ── compact personal-data box: two rows of fill-in fields spanning the full width ──
+    const dataBoxTop = doc.y;
     doc.y += 4;
-    doc.save().lineWidth(1.5).strokeColor(BLUE).moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
-    doc.y += 8;
+    const col1 = LEFT + 6;
+    const boxWidth = W - 12;
+    const col2Width = (boxWidth - 20) / 3;
+    fillLine(col1, doc.y, W - 12, 'Name, Vorname:', 78);
+    doc.y += ROW_HEIGHT;
+    const secondRowY = doc.y;
+    fillLine(col1, secondRowY, col2Width, 'Geburtsdatum:', 62);
+    fillLine(col1 + col2Width + 10, secondRowY, col2Width, 'Klasse:', 40);
+    fillLine(col1 + 2 * (col2Width + 10), secondRowY, col2Width, 'Startnummer:', 62);
+    doc.y = secondRowY;
+    doc.y += ROW_HEIGHT;
+    fillLine(col1, doc.y, W - 12, 'Fahrzeug (Hersteller/Modell):', 130);
+    doc.y += 15;
+    doc.save().lineWidth(0.9).strokeColor('#94A3B8')
+      .rect(LEFT, dataBoxTop, W, doc.y - dataBoxTop).stroke().restore();
+    doc.y += 6;
 
-    sectionHeader('Teilnehmer und Fahrzeug');
-    fillLine('Name, Vorname:', W);
-    fillLine('Geburtsdatum:', W * 0.5);
-    fillLine('Klasse:', W * 0.5);
-    fillLine('Startnummer:', W * 0.5);
-    fillLine('Fahrzeug (Hersteller/Modell):', W);
-
-    doc.y += 4;
-    doc.font('Helvetica').fontSize(8.5).fillColor(BODY)
-      .text('Die nachfolgenden Seiten enthalten den vollständigen Text der Vertrags- und Verzichtserklärung. Bitte lesen und anschließend unterschreiben.', LEFT, doc.y, { width: W, lineGap: 1.2 });
-
-    doc.addPage();
-    doc.y = TOP;
+    // ── contract text: compact three-column layout, kept readable on one page ───
     const authoritativeTitle = contract.authoritativeTitle;
     const authoritativeFullText = contract.authoritativeFullText;
-    doc.font('Helvetica-Bold').fontSize(11).fillColor(BLUE).text(authoritativeTitle, LEFT, doc.y, { width: W });
+    doc.font(boldFont).fontSize(8.8).fillColor(BLUE).text(authoritativeTitle, LEFT, doc.y, { width: W });
     doc.y += 2;
-    doc.save().lineWidth(1).strokeColor(YELLOW).moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
-    doc.y += 10;
-    doc.font('Helvetica').fontSize(9.4).fillColor(BODY)
-      .text(stripLeadingTitleText(authoritativeFullText, authoritativeTitle), LEFT, doc.y, { width: W, lineGap: 1.5 });
-    doc.y += 20;
+    doc.save().lineWidth(0.8).strokeColor(YELLOW).moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 6;
+    // Columns must all start below this full-width header, not at the page's outer margin —
+    // otherwise the 2nd/3rd column reset to the very top of the page and overlap it.
+    const columnsTop = doc.y;
 
-    doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT, doc.y).lineTo(LEFT + Math.floor(W * 0.46), doc.y).stroke().restore();
-    doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT + Math.floor(W * 0.56), doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
-    doc.y += 3;
-    doc.font('Helvetica').fontSize(7.8).fillColor(DIM).text('Ort, Datum', LEFT, doc.y, { width: Math.floor(W * 0.46) });
-    doc.font('Helvetica').fontSize(7.8).fillColor(DIM).text('Unterschrift', LEFT + Math.floor(W * 0.56), doc.y, { width: W - Math.floor(W * 0.56) });
+    if (contract.authoritativeSections) {
+      const drawOverflowContinuationHeader = () => {
+        doc.font(boldFont).fontSize(9).fillColor(DIM)
+          .text(`${authoritativeTitle} · Fortsetzung`, LEFT, doc.y, { width: W });
+        doc.y += 14;
+      };
+      drawWaiverContractBody(doc, { intro: contract.authoritativeIntro, sections: contract.authoritativeSections }, {
+        LEFT, W, TOP: columnsTop, pageTop: TOP,
+        bottomMargin: doc.page.margins.bottom + SIGNATURE_ZONE_HEIGHT,
+        regularFont, boldFont, bodyColor: BODY, headingColor: BLUE,
+        columns: 3, columnGap: 13,
+        fontSize: 6.35, headingFontSize: 6.9, lineGap: 0.2, paragraphGap: 2.1, bulletGap: 0.9, sectionGapBefore: 3.2,
+        onNewPage: drawOverflowContinuationHeader
+      });
+    } else {
+      doc.font(regularFont).fontSize(5.9).fillColor(BODY)
+        .text(stripLeadingTitleText(authoritativeFullText, authoritativeTitle), LEFT, doc.y, { width: W, lineGap: 0.6 });
+    }
+
+    // ── signature line, fixed at the bottom of the (reserved) signature zone ──
+    const signatureY = doc.page.height - doc.page.margins.bottom - SIGNATURE_ZONE_HEIGHT + 8;
+    doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT, signatureY).lineTo(LEFT + Math.floor(W * 0.46), signatureY).stroke().restore();
+    doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT + Math.floor(W * 0.56), signatureY).lineTo(LEFT + W, signatureY).stroke().restore();
+    doc.font(regularFont).fontSize(7).fillColor(DIM).text('Ort, Datum', LEFT, signatureY + 2, { width: Math.floor(W * 0.46) });
+    doc.font(regularFont).fontSize(7).fillColor(DIM).text('Unterschrift', LEFT + Math.floor(W * 0.56), signatureY + 2, { width: W - Math.floor(W * 0.56) });
+
+    if (contract.translation) {
+      doc.addPage();
+      doc.y = TOP;
+      doc.font(boldFont).fontSize(14).fillColor(BODY).text(contract.translation.title, LEFT, doc.y, { width: W });
+      doc.y += 4;
+      doc.font(boldFont).fontSize(8).fillColor('#9A3412')
+        .text(waiverTranslationNotice(contract.translation.locale, true), LEFT, doc.y, { width: W });
+      doc.y += 9;
+      const translationTop = doc.y;
+      drawWaiverContractBody(doc, { intro: contract.translation.intro, sections: contract.translation.sections }, {
+        LEFT, W, TOP: translationTop, pageTop: TOP, bottomMargin: doc.page.margins.bottom,
+        regularFont, boldFont, bodyColor: BODY, headingColor: BLUE,
+        columns: 3, columnGap: 13,
+        fontSize: 6.35, headingFontSize: 6.9, lineGap: 0.2,
+        paragraphGap: 2.1, bulletGap: 0.9, sectionGapBefore: 3.2
+      });
+    }
 
     doc.end();
   });

@@ -10,6 +10,7 @@ import { renderPaperWaiverPdf } from '../docs/pdf';
 import { deleteDocumentObject, getPresignedDownloadUrl, uploadFile } from '../docs/storage';
 import { buildPaperWaiverContract, PAPER_WAIVER_VERSION } from '../legal/paperWaiverContract';
 import type { WaiverLocale } from '../legal/waiverContract';
+import { loadWaiverPdfFonts, loadWaiverPdfLogo } from './adminSigning';
 
 const exportSchema = z.object({
   eventId: z.string().uuid()
@@ -150,6 +151,10 @@ export const createWaiverPaperExport = async (input: WaiverPaperExportInput, act
 
   let unfinalizedS3Key: string | null = null;
   try {
+    const [fonts, logoImage] = await Promise.all([
+      loadWaiverPdfFonts().catch(() => null),
+      loadWaiverPdfLogo().catch(() => null)
+    ]);
     const archive = archiver('zip', { zlib: { level: 9 } });
     const zipChunks: Buffer[] = [];
     const zipDone = new Promise<Buffer>((resolve, reject) => {
@@ -168,7 +173,9 @@ export const createWaiverPaperExport = async (input: WaiverPaperExportInput, act
         isMinor: age !== null && age < 18,
         requiresMedicalCertificate: age !== null && age >= 70,
         contract: buildPaperWaiverContract(locale),
-        entries: driver.entries.map((item) => ({ className: item.className, orgaCode: item.orgaCode, startNumber: item.startNumber, codriver: null, vehicles: item.vehicles }))
+        entries: driver.entries.map((item) => ({ className: item.className, orgaCode: item.orgaCode, startNumber: item.startNumber, codriver: null, vehicles: item.vehicles })),
+        fonts: fonts ?? undefined,
+        logoImage
       });
 
       const baseName = sanitizeFilenamePart(`${driver.lastName}_${driver.firstName}`);

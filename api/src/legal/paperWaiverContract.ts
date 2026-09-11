@@ -123,11 +123,15 @@ export type PaperWaiverContract = {
   authoritativeTitle: string;
   authoritativeFullText: string;
   authoritativeTextHash: string;
+  authoritativeIntro: string[];
+  authoritativeSections: WaiverSection[];
   translation: {
     locale: WaiverLocale;
     title: string;
     fullText: string;
     textHash: string;
+    intro: string[];
+    sections: WaiverSection[];
     binding: false;
   } | null;
 };
@@ -147,12 +151,16 @@ export const buildPaperWaiverContract = (locale: WaiverLocale): PaperWaiverContr
     authoritativeTitle: authoritative.title,
     authoritativeFullText: fullText,
     authoritativeTextHash: waiverTextHash(authoritative),
+    authoritativeIntro: authoritative.intro ?? [],
+    authoritativeSections: authoritative.sections,
     translation: translated
       ? {
           locale,
           title: translated.title,
           fullText: flattenWaiverDocument(translated),
           textHash: waiverTextHash(translated),
+          intro: translated.intro ?? [],
+          sections: translated.sections,
           binding: false as const
         }
       : null

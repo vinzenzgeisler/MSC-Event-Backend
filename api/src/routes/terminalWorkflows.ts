@@ -189,7 +189,7 @@ export const buildParticipantWaiverContract = async (locale: ParticipantDraft['l
   return buildWaiverContract(locale);
 };
 
-const loadWorkflowContext = async (entryIds: string[]) => {
+const loadWorkflowContext = async (entryIds: string[], options: { allowAfterTechnicalInspection?: boolean } = {}) => {
   const db = await getDb();
   const rows = await db
     .select({
@@ -236,7 +236,7 @@ const loadWorkflowContext = async (entryIds: string[]) => {
   const first = rows[0];
   if (rows.some((row) => row.eventId !== first.eventId || row.driverPersonId !== first.driverPersonId)) throw new Error('TERMINAL_ENTRIES_MUST_SHARE_DRIVER');
   if (rows.some((row) => row.deletedAt)) throw new Error('TERMINAL_ENTRY_NOT_ELIGIBLE');
-  if (rows.some((row) => row.techStatus !== 'pending' || (row.backupVehicleId && row.backupTechStatus !== 'pending'))) {
+  if (!options.allowAfterTechnicalInspection && rows.some((row) => row.techStatus !== 'pending' || (row.backupVehicleId && row.backupTechStatus !== 'pending'))) {
     throw new Error('TECHNICAL_INSPECTION_ALREADY_STARTED');
   }
   if (rows.some((row) => row.acceptanceStatus !== 'accepted' && !row.driverWaiverSigned)) {
@@ -267,7 +267,9 @@ export const createParticipantTerminalSession = async (
   const db = await getDb();
   const [device] = await db.select().from(signingDeviceSession).where(and(eq(signingDeviceSession.id, input.deviceSessionId), eq(signingDeviceSession.status, 'connected'))).limit(1);
   if (!device) throw new Error('SIGNING_DEVICE_NOT_CONNECTED');
-  const context = await loadWorkflowContext(input.entryIds);
+  const context = await loadWorkflowContext(input.entryIds, {
+    allowAfterTechnicalInspection: input.workflowType === 'regular_codriver_registration' && input.operation === 'edit'
+  });
   if (input.workflowType === 'charity_codriver_registration' && input.entryIds.length !== 1) throw new Error('CHARITY_SINGLE_ENTRY_REQUIRED');
   if (context.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
   if (input.workflowType === 'regular_codriver_registration') {
@@ -342,7 +344,9 @@ export const submitParticipantDraft = async (sessionId: string, draft: Participa
   if (!session) return null;
   if (!['collecting_data', 'awaiting_operator_approval'].includes(session.workflowStage) || !['pending', 'displayed'].includes(session.status)) throw new Error('TERMINAL_SESSION_NOT_EDITABLE');
   const context = session.sessionPayload as any;
-  const liveContext = await loadWorkflowContext((context.entries as Array<{ id: string }>).map((item) => item.id));
+  const liveContext = await loadWorkflowContext((context.entries as Array<{ id: string }>).map((item) => item.id), {
+    allowAfterTechnicalInspection: session.workflowType === 'regular_codriver_registration' && context.operation === 'edit'
+  });
   if (draft.email === String(liveContext.first.driverEmail ?? '').toLowerCase()) throw new Error('CODRIVER_EMAIL_MUST_DIFFER');
   if (`${draft.firstName} ${draft.lastName}`.trim().toLowerCase() === `${liveContext.first.driverFirstName} ${liveContext.first.driverLastName}`.trim().toLowerCase()) throw new Error('CODRIVER_NAME_MUST_DIFFER');
   const age = ageAt(draft.birthdate, context.event.startsAt);
@@ -389,7 +393,9 @@ export const approveParticipantTerminalSession = async (sessionId: string, prech
   const draft = session.draftPayload as ParticipantDraft;
   const context = session.sessionPayload as any;
   const entryIds = (context.entries as Array<{ id: string }>).map((item) => item.id);
-  const liveContext = await loadWorkflowContext(entryIds);
+  const liveContext = await loadWorkflowContext(entryIds, {
+    allowAfterTechnicalInspection: session.workflowType === 'regular_codriver_registration' && context.operation === 'edit'
+  });
   if (liveContext.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
   if (session.workflowType === 'regular_codriver_registration') {
     assertRegularCodriverOperation(liveContext.rows, context.operation ?? 'create', context.participantPersonId ?? undefined);
@@ -434,7 +440,9 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   const draft = session.draftPayload as ParticipantDraft;
   const context = session.sessionPayload as any;
   const entryIds = (context.entries as Array<{ id: string }>).map((item) => item.id);
-  const liveContext = await loadWorkflowContext(entryIds);
+  const liveContext = await loadWorkflowContext(entryIds, {
+    allowAfterTechnicalInspection: session.workflowType === 'regular_codriver_registration' && context.operation === 'edit'
+  });
   if (liveContext.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
   if (session.workflowType === 'regular_codriver_registration') {
     assertRegularCodriverOperation(liveContext.rows, context.operation ?? 'create', context.participantPersonId ?? undefined);
@@ -449,7 +457,8 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   const existingPerson = editedPerson ?? emailPerson;
   if (!editedPerson && existingPerson && (`${existingPerson.firstName} ${existingPerson.lastName}`.trim().toLowerCase() !== `${draft.firstName} ${draft.lastName}`.trim().toLowerCase())) throw new Error('EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
   const participantId = editedPerson?.id ?? emailPerson?.id ?? randomUUID();
-  if (existingPerson) {
+  const editsAssignedCodriver = session.workflowType === 'regular_codriver_registration' && context.operation === 'edit' && Boolean(editedPerson);
+  if (existingPerson && !editsAssignedCodriver) {
     const [existingSignedDocument] = await db.select({ id: document.id }).from(document).where(and(
       eq(document.eventId, session.eventId),
       eq(document.driverPersonId, participantId),
@@ -552,14 +561,19 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   try {
     updatedSession = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${session.eventId}:${participantId}`}, 0))`);
-    const [alreadySigned] = await tx.select({ id: document.id }).from(document).where(and(
+    const alreadySigned = await tx.select({ id: document.id }).from(document).where(and(
       eq(document.eventId, session.eventId),
       eq(document.driverPersonId, participantId),
       eq(document.type, 'waiver_signed'),
       eq(document.templateVersion, context.contract.version),
       eq(document.status, 'generated')
-    )).limit(1);
-    if (alreadySigned) throw new Error('WAIVER_ALREADY_SIGNED');
+    ));
+    if (alreadySigned.length > 0 && !editsAssignedCodriver) throw new Error('WAIVER_ALREADY_SIGNED');
+    if (alreadySigned.length > 0 && editsAssignedCodriver) {
+      await tx.update(document)
+        .set({ status: 'superseded' })
+        .where(inArray(document.id, alreadySigned.map((item) => item.id)));
+    }
 
     const now = new Date();
     const [claimed] = await tx.update(signingSession).set({

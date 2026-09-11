@@ -114,3 +114,24 @@ const second = row({
     assert.equal(migration.includes(excludedMichaelIdentifier), false);
   }
 }
+
+{
+  const migration = fs.readFileSync(
+    require.resolve('../migrations/0088_merge_schreiber_mueller_registrations.sql'),
+    'utf8'
+  );
+  assert.match(migration, /christian-schreiber-class8-class6/);
+  assert.match(migration, /nico-mueller-class8-class6-class4/);
+  assert.match(migration, /secondary identity fingerprint mismatch/);
+  assert.match(migration, /invoice fingerprint mismatch/);
+  assert.match(migration, /run-group conflict/);
+  assert.match(migration, /expected_forecast_total_cents/);
+  assert.match(migration, /delete from "registration_group_email_verification"/);
+  assert.match(migration, /update "entry_run_group_reservation"/);
+  assert.match(migration, /update "registration_invitation"/);
+  assert.match(migration, /'doublestarter_migration_notice'/);
+
+  for (const intentionallyExcludedPerson of ['Michael Meurer', 'Sascha Genilke']) {
+    assert.equal(migration.includes(intentionallyExcludedPerson), false);
+  }
+}

@@ -105,6 +105,7 @@ import {
   createVoteChallenge,
   getDeviceVoteStatus,
   getPublicEventHub,
+  getPublicEventHubClass,
   getPublicEventHubSummary,
   submitVote,
   validateChallengeInput,
@@ -952,6 +953,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!summary) return errorJson(404, 'Current event not found');
       return json(200, { ok: true, ...summary });
     } catch { return errorJson(500, 'Get event hub summary failed'); }
+  }
+
+  const publicEventHubClassMatch = path.match(/^\/public\/events\/current\/event-hub\/classes\/([^/]+)$/);
+  if (method === 'GET' && publicEventHubClassMatch) {
+    try {
+      const current = await getPublicCurrentEventWithClasses();
+      if (!current) return errorJson(404, 'Current event not found');
+      const classData = await getPublicEventHubClass(current.event.id, publicEventHubClassMatch[1]);
+      if (!classData) return errorJson(404, 'Event class not found');
+      return json(200, { ok: true, ...classData });
+    } catch { return errorJson(500, 'Get event hub class failed'); }
   }
 
   if (method === 'GET' && path === '/public/events/current/auction') {

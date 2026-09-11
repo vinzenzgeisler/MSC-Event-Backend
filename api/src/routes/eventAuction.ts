@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/client';
@@ -35,6 +35,19 @@ const bidSchema = z.object({
   }
 });
 
+export const validateAuctionBidInput = (payload: unknown) => bidSchema.parse(payload);
+
+export const requiredAuctionBidCents = (
+  startingBidCents: number,
+  minIncrementCents: number,
+  currentHighestCents: number | null
+) => currentHighestCents === null ? startingBidCents : currentHighestCents + minIncrementCents;
+
+const termsVersionFor = (eventId: string, terms: unknown) => {
+  const digest = createHash('sha256').update(JSON.stringify(terms ?? {})).digest('hex').slice(0, 12);
+  return `auction-${eventId}-${digest}`;
+};
+
 const bidAdminPatchSchema = z.object({
   status: z.enum(['valid', 'invalid']).optional(),
   adminNote: z.string().trim().max(2000).nullable().optional()
@@ -53,10 +66,12 @@ const rowToAuction = (row: any) => row ? ({
   closedAt: row.closed_at,
   winnerBidId: row.winner_bid_id,
   currentHighestCents: row.current_highest_cents === null ? null : Number(row.current_highest_cents),
-  nextMinimumCents: row.current_highest_cents === null
-    ? Number(row.starting_bid_cents)
-    : Number(row.current_highest_cents) + Number(row.min_increment_cents),
-  termsVersion: `auction-${row.event_id}-v1`
+  nextMinimumCents: requiredAuctionBidCents(
+    Number(row.starting_bid_cents),
+    Number(row.min_increment_cents),
+    row.current_highest_cents === null ? null : Number(row.current_highest_cents)
+  ),
+  termsVersion: termsVersionFor(row.event_id, row.terms_i18n)
 }) : null;
 
 const auctionSelect = (eventId: string) => sql`
@@ -83,7 +98,7 @@ export const getAdminAuction = async (eventId: string) => {
     eventId, status: 'draft' as const, titleI18n: {}, descriptionI18n: {}, termsI18n: {},
     imageUrl: null, videoUrl: null, startingBidCents: 0, minIncrementCents: 1000,
     closedAt: null, winnerBidId: null, currentHighestCents: null, nextMinimumCents: 0,
-    termsVersion: `auction-${eventId}-v1`
+    termsVersion: termsVersionFor(eventId, {})
   };
 };
 
@@ -111,16 +126,18 @@ export const patchAdminAuction = async (eventId: string, payload: unknown, actor
     await db.execute(sql`update event_auction set winner_bid_id = (
       select id from event_auction_bid where event_id = ${eventId} and status = 'valid' order by amount_cents desc, created_at asc limit 1
     ) where event_id = ${eventId}`);
+  } else if (input.status === 'open' || input.status === 'draft') {
+    await db.execute(sql`update event_auction set winner_bid_id = null, closed_at = null where event_id = ${eventId}`);
   }
   return getAdminAuction(eventId);
 };
 
 export class AuctionBidError extends Error {
-  constructor(public code: 'AUCTION_NOT_OPEN' | 'BID_TOO_LOW', public nextMinimumCents?: number) { super(code); }
+  constructor(public code: 'AUCTION_NOT_OPEN' | 'BID_TOO_LOW' | 'AUCTION_TERMS_CHANGED', public nextMinimumCents?: number) { super(code); }
 }
 
 export const submitAuctionBid = async (eventId: string, payload: unknown) => {
-  const input = bidSchema.parse(payload);
+  const input = validateAuctionBidInput(payload);
   const db = await getDb();
   return db.transaction(async (tx) => {
     const existing = await tx.execute(sql`select id, amount_cents from event_auction_bid where client_submission_key = ${input.clientSubmissionKey} limit 1`);
@@ -128,9 +145,16 @@ export const submitAuctionBid = async (eventId: string, payload: unknown) => {
     const locked = await tx.execute(sql`select * from event_auction where event_id = ${eventId} for update`);
     const auction = locked.rows[0] as any;
     if (!auction || auction.status !== 'open') throw new AuctionBidError('AUCTION_NOT_OPEN');
+    if (input.termsVersion !== termsVersionFor(eventId, auction.terms_i18n)) {
+      throw new AuctionBidError('AUCTION_TERMS_CHANGED');
+    }
     const highestResult = await tx.execute(sql`select max(amount_cents) as amount from event_auction_bid where event_id = ${eventId} and status = 'valid'`);
     const highest = (highestResult.rows[0] as any)?.amount;
-    const minimum = highest === null || highest === undefined ? Number(auction.starting_bid_cents) : Number(highest) + Number(auction.min_increment_cents);
+    const minimum = requiredAuctionBidCents(
+      Number(auction.starting_bid_cents),
+      Number(auction.min_increment_cents),
+      highest === null || highest === undefined ? null : Number(highest)
+    );
     if (input.amountCents < minimum) throw new AuctionBidError('BID_TOO_LOW', minimum);
     const bidId = randomUUID();
     await tx.execute(sql`insert into event_auction_bid
@@ -155,5 +179,8 @@ export const patchAdminAuctionBid = async (eventId: string, bidId: string, paylo
     status = coalesce(${input.status ?? null}, status),
     admin_note = case when ${input.adminNote !== undefined} then ${input.adminNote ?? null} else admin_note end,
     updated_at = now() where id = ${bidId} and event_id = ${eventId}`);
+  await db.execute(sql`update event_auction set winner_bid_id = case when status = 'closed' then (
+    select id from event_auction_bid where event_id = ${eventId} and status = 'valid' order by amount_cents desc, created_at asc limit 1
+  ) else winner_bid_id end where event_id = ${eventId}`);
   return listAdminAuctionBids(eventId);
 };

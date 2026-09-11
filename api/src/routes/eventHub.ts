@@ -52,7 +52,11 @@ export const resolveVotingStatus = (
   return opensAt ? 'open' : 'not_open';
 };
 
-export const loadCandidateRows = async (db: Awaited<ReturnType<typeof getDb>>, eventId: string): Promise<EventHubCandidateRow[]> => {
+export const loadCandidateRows = async (
+  db: Awaited<ReturnType<typeof getDb>>,
+  eventId: string,
+  classId?: string
+): Promise<EventHubCandidateRow[]> => {
   const rows = await db
     .select({
       entryId: entry.id,
@@ -90,11 +94,21 @@ export const loadCandidateRows = async (db: Awaited<ReturnType<typeof getDb>>, e
         eq(entry.eventId, eventId),
         sql`${entry.deletedAt} is null`,
         eq(entry.registrationStatus, 'submitted_verified'),
-        eq(entry.acceptanceStatus, 'accepted')
+        eq(entry.acceptanceStatus, 'accepted'),
+        ...(classId ? [eq(entry.classId, classId)] : [])
       )
     );
   return rows as EventHubCandidateRow[];
 };
+
+const resolveFilteredCandidates = async (candidates: ReturnType<typeof filterPublicCandidates>) => Promise.all(
+  candidates.map(async ({ vehicleImageS3Key, ...candidate }) => ({
+    ...candidate,
+    vehicleImageUrl: await resolveVehicleThumbUrl(vehicleImageS3Key)
+  }))
+);
+
+const resolvePublicCandidates = async (rows: EventHubCandidateRow[]) => resolveFilteredCandidates(filterPublicCandidates(rows));
 
 const loadDriverGeo = async (
   db: Awaited<ReturnType<typeof getDb>>,
@@ -151,12 +165,7 @@ export const getPublicEventHub = async (eventId: string) => {
   const candidateRows = await loadCandidateRows(db, eventId);
   // The S3 key is an internal storage detail; the public API only exposes a resolved,
   // time-limited download URL (or null when no image exists / consent wasn't given).
-  const candidates = await Promise.all(
-    filterPublicCandidates(candidateRows).map(async ({ vehicleImageS3Key, ...candidate }) => ({
-      ...candidate,
-      vehicleImageUrl: await resolveVehicleThumbUrl(vehicleImageS3Key)
-    }))
-  );
+  const candidates = await resolvePublicCandidates(candidateRows);
 
   const venue =
     config?.venueLat && config?.venueLng
@@ -215,7 +224,43 @@ export const getPublicEventHubSummary = async (eventId: string) => {
   const [config] = await db.select().from(eventHubConfig).where(eq(eventHubConfig.eventId, eventId)).limit(1);
   const classes = await db.select({ id: eventClass.id, name: eventClass.name, vehicleType: eventClass.vehicleType })
     .from(eventClass).where(eq(eventClass.eventId, eventId)).orderBy(asc(eventClass.name));
-  return { event: eventRow, votingStatus: resolveVotingStatus(config ?? null, new Date()), classes };
+  const candidateRows = await loadCandidateRows(db, eventId);
+  const publicCandidates = filterPublicCandidates(candidateRows).filter((candidate) => candidate.vehicleImageS3Key);
+  const featured = publicCandidates.filter((candidate) => candidate.featured);
+  const highlightRows = [...featured, ...publicCandidates.filter((candidate) => !candidate.featured)].slice(0, 10);
+  const highlights = await resolveFilteredCandidates(highlightRows);
+  return { event: eventRow, votingStatus: resolveVotingStatus(config ?? null, new Date()), classes, highlights };
+};
+
+export const getPublicEventHubClass = async (eventId: string, classId: string) => {
+  const db = await getDb();
+  const [eventClassRow] = await db.select({ id: eventClass.id, name: eventClass.name, vehicleType: eventClass.vehicleType })
+    .from(eventClass).where(and(eq(eventClass.eventId, eventId), eq(eventClass.id, classId))).limit(1);
+  if (!eventClassRow) return null;
+
+  const [config] = await db.select().from(eventHubConfig).where(eq(eventHubConfig.eventId, eventId)).limit(1);
+  const votingStatus = resolveVotingStatus(config ?? null, new Date());
+  const candidates = await resolvePublicCandidates(await loadCandidateRows(db, eventId, classId));
+  let result: { classId: string; entries: Array<{ entryId: string; driverName: string; voteCount: number; percent: number }> } | null = null;
+
+  if (votingStatus === 'closed') {
+    let voteRows = await db.select({ entryId: eventVote.entryId, voteCount: sql<number>`count(*)::int` })
+      .from(eventVote).where(and(eq(eventVote.eventId, eventId), eq(eventVote.classId, classId))).groupBy(eventVote.entryId);
+    if (voteRows.length === 0) {
+      voteRows = await db.select({ entryId: eventVoteResultSnapshot.entryId, voteCount: eventVoteResultSnapshot.voteCount })
+        .from(eventVoteResultSnapshot).where(and(eq(eventVoteResultSnapshot.eventId, eventId), eq(eventVoteResultSnapshot.classId, classId)));
+    }
+    const names = new Map(candidates.map((candidate) => [candidate.entryId, candidate.driverName]));
+    const entries = voteRows.map((row) => ({ entryId: row.entryId, driverName: names.get(row.entryId) ?? 'Unbekannt', voteCount: row.voteCount }));
+    const total = entries.reduce((sum, entry) => sum + entry.voteCount, 0);
+    result = {
+      classId,
+      entries: entries.map((entry) => ({ ...entry, percent: total > 0 ? Math.round((entry.voteCount / total) * 1000) / 10 : 0 }))
+        .sort((a, b) => b.voteCount - a.voteCount)
+    };
+  }
+
+  return { eventClass: eventClassRow, votingStatus, candidates, result };
 };
 
 const challengeSchema = z.object({ publicKey: z.string().min(1).max(2000) });

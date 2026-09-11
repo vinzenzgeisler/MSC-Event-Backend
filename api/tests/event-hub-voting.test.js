@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { distanceKm } = require('../dist/domain/geoDistance.js');
 const { filterPublicCandidates, computeEventHubFacts } = require('../dist/domain/eventHubFacts.js');
 const { resolveVotingStatus } = require('../dist/routes/eventHub.js');
+const { requiredAuctionBidCents, validateAuctionBidInput } = require('../dist/routes/eventAuction.js');
 
 // distanceKm: Görlitz to Dresden is roughly 90km.
 const goerlitzToDresdenKm = distanceKm(51.1528, 14.9881, 51.0504, 13.7373);
@@ -77,6 +78,23 @@ const noBirthdateFacts = computeEventHubFacts(
   new Map()
 );
 assert.equal(noBirthdateFacts.youngestDriver, null, 'missing birthdate data must omit the fact instead of guessing');
+
+// Auction: first bid uses the configured start, later bids require one full increment.
+assert.equal(requiredAuctionBidCents(10_000, 500, null), 10_000);
+assert.equal(requiredAuctionBidCents(10_000, 500, 12_000), 12_500);
+const validBid = {
+  bidderName: 'Max Muster',
+  contactType: 'email',
+  contactValue: 'max@example.org',
+  amountCents: 12_500,
+  acceptedBinding: true,
+  termsVersion: 'auction-event-version',
+  clientSubmissionKey: '987e6543-e21b-42d3-a456-426614174000',
+  website: ''
+};
+assert.equal(validateAuctionBidInput(validBid).amountCents, 12_500);
+assert.throws(() => validateAuctionBidInput({ ...validBid, acceptedBinding: false }), /Invalid literal value/);
+assert.throws(() => validateAuctionBidInput({ ...validBid, contactValue: 'not-an-email' }), /Invalid email/);
 
 // Voting status boundaries.
 const now = new Date('2026-09-12T12:00:00Z');

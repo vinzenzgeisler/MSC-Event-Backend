@@ -1673,6 +1673,7 @@ export class ApiStack extends Stack {
       integration
     });
     this.api.addRoutes({ path: '/public/events/current/event-hub/summary', methods: [apigwv2.HttpMethod.GET], integration });
+    this.api.addRoutes({ path: '/public/events/current/event-hub/classes/{classId}', methods: [apigwv2.HttpMethod.GET], integration });
 
     this.api.addRoutes({ path: '/public/events/current/auction', methods: [apigwv2.HttpMethod.GET], integration });
     this.api.addRoutes({ path: '/public/events/{id}/auction/bids', methods: [apigwv2.HttpMethod.POST], integration });

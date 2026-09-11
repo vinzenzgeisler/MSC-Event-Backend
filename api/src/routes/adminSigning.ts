@@ -247,7 +247,18 @@ const assertSigningChronology = (displayedAt: string, acceptedAt: string, signed
   }
 };
 
-const normalizeConsentLocale = (value: string | null | undefined): SigningCasePayload['contract']['locale'] => {
+const COUNTRY_LOCALE_FALLBACK: Record<string, SigningCasePayload['contract']['locale']> = {
+  DE: 'de-DE',
+  AT: 'de-DE',
+  CH: 'de-DE',
+  CZ: 'cs-CZ',
+  PL: 'pl-PL'
+};
+
+export const normalizeConsentLocale = (
+  value: string | null | undefined,
+  countryFallback?: string | null
+): SigningCasePayload['contract']['locale'] => {
   if (value === 'en-GB' || value === 'en' || value === 'en-US') {
     return 'en-GB';
   }
@@ -256,6 +267,17 @@ const normalizeConsentLocale = (value: string | null | undefined): SigningCasePa
   }
   if (value === 'pl-PL' || value === 'pl') {
     return 'pl-PL';
+  }
+  if (value === 'de-DE' || value === 'de') {
+    return 'de-DE';
+  }
+  // No usable consent locale on file (e.g. signer never went through the
+  // online consent flow, or the recorded consent belongs to someone else on
+  // the entry). Fall back to a locale inferred from the signer's own
+  // registered country instead of silently defaulting to German.
+  const country = countryFallback?.trim().toUpperCase();
+  if (country) {
+    return COUNTRY_LOCALE_FALLBACK[country] ?? 'en-GB';
   }
   return 'de-DE';
 };
@@ -502,11 +524,11 @@ const buildSigningCasePayload = async (sourceEntryId: string, signerPersonId?: s
       locale: consentEvidence.locale
     })
     .from(consentEvidence)
-    .where(eq(consentEvidence.entryId, source.entryId))
+    .where(and(eq(consentEvidence.entryId, source.entryId), eq(consentEvidence.personId, signer.id)))
     .orderBy(desc(consentEvidence.capturedAt), desc(consentEvidence.createdAt))
     .limit(1);
   const consent = consentRows[0] ?? null;
-  const locale = normalizeConsentLocale(consent?.locale);
+  const locale = normalizeConsentLocale(consent?.locale, signer.country);
   const eventStart = new Date(`${source.eventStartsAt}T12:00:00.000Z`);
   const signerAge = ageAt(signer.birthdate, eventStart);
 

@@ -1672,6 +1672,10 @@ export class ApiStack extends Stack {
       methods: [apigwv2.HttpMethod.GET],
       integration
     });
+    this.api.addRoutes({ path: '/public/events/current/event-hub/summary', methods: [apigwv2.HttpMethod.GET], integration });
+
+    this.api.addRoutes({ path: '/public/events/current/auction', methods: [apigwv2.HttpMethod.GET], integration });
+    this.api.addRoutes({ path: '/public/events/{id}/auction/bids', methods: [apigwv2.HttpMethod.POST], integration });
 
     this.api.addRoutes({
       path: '/public/events/{id}/voting/challenge',
@@ -1715,6 +1719,25 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/admin/events/{id}/voting/results',
       methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{id}/auction',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+    this.api.addRoutes({
+      path: '/admin/events/{id}/auction/bids',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+    this.api.addRoutes({
+      path: '/admin/events/{id}/auction/bids/{bidId}',
+      methods: [apigwv2.HttpMethod.PATCH],
       integration,
       authorizer: jwtAuthorizer
     });

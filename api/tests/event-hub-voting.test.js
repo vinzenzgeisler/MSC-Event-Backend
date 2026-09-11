@@ -30,7 +30,8 @@ const baseRow = {
   displacementCcm: 1300,
   powerPs: 58,
   cylinders: 4,
-  overrideState: 'auto'
+  overrideState: 'auto',
+  featured: false
 };
 
 // Candidate filter: protected identity is excluded entirely.
@@ -56,7 +57,8 @@ assert.ok(!candidateIds.includes('e3'), 'objectionFlag driver must not appear');
 assert.ok(!candidateIds.includes('e4'), 'processingRestricted driver must not appear');
 assert.ok(!candidateIds.includes('e5'), 'hidden override must not appear');
 assert.ok(candidateIds.includes('e6'), 'pinned override must appear');
-assert.equal(candidates[0].entryId, 'e6', 'pinned candidates must be sorted first');
+assert.notEqual(candidates[0].entryId, 'e6', 'editorial pinning must not bias voting order');
+assert.equal(candidates.find((candidate) => candidate.entryId === 'e6').pinned, false, 'legacy pin is not exposed as voting priority');
 
 const noConsentCandidate = candidates.find((c) => c.entryId === 'e7');
 assert.equal(noConsentCandidate.vehicleImageS3Key, null, 'vehicle image must be withheld without media consent');

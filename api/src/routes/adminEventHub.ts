@@ -30,6 +30,7 @@ export const getAdminCandidates = async (eventId: string) => {
       vehicleMake: row.vehicleMake,
       vehicleModel: row.vehicleModel,
       overrideState: row.overrideState ?? 'auto',
+      featured: Boolean(row.featured),
       eligible: isPubliclyEligible(row),
       exclusionReason
     };
@@ -89,7 +90,10 @@ export const patchEventHubConfig = async (eventId: string, input: PatchEventHubC
   return updated;
 };
 
-const candidateOverrideSchema = z.object({ state: z.enum(['auto', 'pinned', 'hidden']) });
+const candidateOverrideSchema = z.object({
+  state: z.enum(['auto', 'pinned', 'hidden']).optional(),
+  featured: z.boolean().optional()
+}).refine((value) => value.state !== undefined || value.featured !== undefined, 'Provide state or featured');
 export type CandidateOverrideInput = z.infer<typeof candidateOverrideSchema>;
 export const validateCandidateOverrideInput = (payload: unknown): CandidateOverrideInput =>
   candidateOverrideSchema.parse(payload);
@@ -103,10 +107,14 @@ export const putCandidateOverride = async (
   const db = await getDb();
   const [updated] = await db
     .insert(eventHubCandidateOverride)
-    .values({ eventId, entryId, state: input.state, updatedAt: new Date(), updatedBy: actorUserId })
+    .values({ eventId, entryId, state: input.state ?? 'auto', featured: input.featured ?? false, updatedAt: new Date(), updatedBy: actorUserId })
     .onConflictDoUpdate({
       target: [eventHubCandidateOverride.eventId, eventHubCandidateOverride.entryId],
-      set: { state: input.state, updatedAt: new Date(), updatedBy: actorUserId }
+      set: {
+        ...(input.state === undefined ? {} : { state: input.state }),
+        ...(input.featured === undefined ? {} : { featured: input.featured }),
+        updatedAt: new Date(), updatedBy: actorUserId
+      }
     })
     .returning();
 
@@ -116,7 +124,7 @@ export const putCandidateOverride = async (
     action: 'event_hub_candidate_override_updated',
     entityType: 'event_hub_candidate_override',
     entityId: entryId,
-    payload: { entryId, state: input.state }
+    payload: { entryId, state: input.state, featured: input.featured }
   });
   return updated;
 };

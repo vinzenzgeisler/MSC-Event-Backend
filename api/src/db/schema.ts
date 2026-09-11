@@ -334,6 +334,7 @@ export const eventHubCandidateOverride = pgTable(
     eventId: uuid('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
     entryId: uuid('entry_id').notNull().references(() => entry.id, { onDelete: 'cascade' }),
     state: text('state').notNull().default('auto'),
+    featured: boolean('featured').notNull().default(false),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     updatedBy: text('updated_by')
   },

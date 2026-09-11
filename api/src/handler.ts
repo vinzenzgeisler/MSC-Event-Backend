@@ -105,6 +105,7 @@ import {
   createVoteChallenge,
   getDeviceVoteStatus,
   getPublicEventHub,
+  getPublicEventHubSummary,
   submitVote,
   validateChallengeInput,
   validateDeviceStatusInput,
@@ -122,6 +123,15 @@ import {
   validatePatchEventHubConfigInput,
   votingResultsToCsv
 } from './routes/adminEventHub';
+import {
+  AuctionBidError,
+  getAdminAuction,
+  getPublicCurrentAuction,
+  listAdminAuctionBids,
+  patchAdminAuction,
+  patchAdminAuctionBid,
+  submitAuctionBid
+} from './routes/eventAuction';
 import {
   getPricingRules,
   listInvoicePayments,
@@ -387,7 +397,8 @@ const publicRateLimitedScopes = {
   verifyEmail: { scope: 'public_registration_verify_email', limit: 30, windowSeconds: 600 },
   resendVerification: { scope: 'public_registration_resend_verification', limit: 6, windowSeconds: 3600 },
   eventHubVoteByDevice: { scope: 'event_hub_vote_by_device', limit: 30, windowSeconds: 900 },
-  eventHubVoteByIp: { scope: 'event_hub_vote_by_ip', limit: 1000, windowSeconds: 600 }
+  eventHubVoteByIp: { scope: 'event_hub_vote_by_ip', limit: 1000, windowSeconds: 600 },
+  auctionBidByIp: { scope: 'event_auction_bid_by_ip', limit: 20, windowSeconds: 600 }
 } as const;
 
 const VEHICLE_IMAGE_MAX_FILE_SIZE_MB = 15;
@@ -930,6 +941,43 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, ...hub });
     } catch (error) {
       return errorJson(500, 'Get event hub failed');
+    }
+  }
+
+  if (method === 'GET' && path === '/public/events/current/event-hub/summary') {
+    try {
+      const current = await getPublicCurrentEventWithClasses();
+      if (!current) return errorJson(404, 'Current event not found');
+      const summary = await getPublicEventHubSummary(current.event.id);
+      if (!summary) return errorJson(404, 'Current event not found');
+      return json(200, { ok: true, ...summary });
+    } catch { return errorJson(500, 'Get event hub summary failed'); }
+  }
+
+  if (method === 'GET' && path === '/public/events/current/auction') {
+    try {
+      const auction = await getPublicCurrentAuction();
+      if (!auction) return errorJson(404, 'Auction not found', undefined, 'AUCTION_NOT_FOUND');
+      return json(200, { ok: true, auction });
+    } catch {
+      return errorJson(500, 'Get auction failed');
+    }
+  }
+
+  const publicAuctionBidMatch = path.match(/^\/public\/events\/([^/]+)\/auction\/bids$/);
+  if (method === 'POST' && publicAuctionBidMatch) {
+    try {
+      const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.auctionBidByIp);
+      if (rateLimited) return rateLimited;
+      const result = await submitAuctionBid(publicAuctionBidMatch[1], parseJsonBody(event));
+      return json(201, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof AuctionBidError) {
+        return errorJson(409, error.code, { nextMinimumCents: error.nextMinimumCents }, error.code);
+      }
+      return errorJson(500, 'Submit auction bid failed');
     }
   }
 
@@ -4076,6 +4124,41 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, config });
     } catch (error) {
       return errorJson(500, 'Get event hub config failed');
+    }
+  }
+
+  const adminAuctionMatch = path.match(/^\/admin\/events\/([^/]+)\/auction$/);
+  if (adminAuctionMatch && (method === 'GET' || method === 'PATCH')) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, method === 'GET' ? 'event_hub.read' : 'event_hub.write')) return errorJson(403, 'Forbidden');
+    try {
+      const auction = method === 'GET'
+        ? await getAdminAuction(adminAuctionMatch[1])
+        : await patchAdminAuction(adminAuctionMatch[1], parseJsonBody(event), auth.sub);
+      return json(200, { ok: true, auction });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      return errorJson(500, 'Manage auction failed');
+    }
+  }
+
+  const adminAuctionBidsMatch = path.match(/^\/admin\/events\/([^/]+)\/auction\/bids$/);
+  if (method === 'GET' && adminAuctionBidsMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'event_hub.read')) return errorJson(403, 'Forbidden');
+    try { return json(200, { ok: true, bids: await listAdminAuctionBids(adminAuctionBidsMatch[1]) }); }
+    catch { return errorJson(500, 'List auction bids failed'); }
+  }
+
+  const adminAuctionBidMatch = path.match(/^\/admin\/events\/([^/]+)\/auction\/bids\/([^/]+)$/);
+  if (method === 'PATCH' && adminAuctionBidMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'event_hub.write')) return errorJson(403, 'Forbidden');
+    try { return json(200, { ok: true, bids: await patchAdminAuctionBid(adminAuctionBidMatch[1], adminAuctionBidMatch[2], parseJsonBody(event)) }); }
+    catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      return errorJson(500, 'Update auction bid failed');
     }
   }
   if (method === 'PATCH' && eventHubConfigMatch) {

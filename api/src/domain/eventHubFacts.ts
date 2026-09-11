@@ -22,6 +22,7 @@ export type EventHubCandidateRow = {
   powerPs: number | null;
   cylinders: number | null;
   overrideState: 'auto' | 'pinned' | 'hidden' | null;
+  featured: boolean | null;
 };
 
 export type EventHubCandidate = {
@@ -34,6 +35,7 @@ export type EventHubCandidate = {
   vehicleModel: string | null;
   vehicleYear: number | null;
   pinned: boolean;
+  featured: boolean;
 };
 
 /**
@@ -56,14 +58,15 @@ export const toPublicCandidate = (row: EventHubCandidateRow): EventHubCandidate 
   vehicleMake: row.vehicleMake,
   vehicleModel: row.vehicleModel,
   vehicleYear: row.vehicleYear,
-  pinned: row.overrideState === 'pinned'
+  pinned: false,
+  featured: Boolean(row.featured)
 });
 
 export const filterPublicCandidates = (rows: EventHubCandidateRow[]): EventHubCandidate[] =>
   rows
     .filter(isPubliclyEligible)
     .map(toPublicCandidate)
-    .sort((a, b) => (a.pinned === b.pinned ? 0 : a.pinned ? -1 : 1));
+    .sort((a, b) => (a.startNumberNorm ?? '').localeCompare(b.startNumberNorm ?? '', undefined, { numeric: true }));
 
 const ageAt = (birthdate: string, referenceDate: Date): number => {
   const dob = new Date(birthdate);

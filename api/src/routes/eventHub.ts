@@ -76,6 +76,7 @@ export const loadCandidateRows = async (db: Awaited<ReturnType<typeof getDb>>, e
       powerPs: vehicle.powerPs,
       cylinders: vehicle.cylinders,
       overrideState: eventHubCandidateOverride.state
+      ,featured: eventHubCandidateOverride.featured
     })
     .from(entry)
     .innerJoin(person, eq(entry.driverPersonId, person.id))
@@ -204,6 +205,17 @@ export const getPublicEventHub = async (eventId: string) => {
     facts,
     results
   };
+};
+
+export const getPublicEventHubSummary = async (eventId: string) => {
+  const db = await getDb();
+  const [eventRow] = await db.select({ id: eventTable.id, name: eventTable.name, startsAt: eventTable.startsAt, endsAt: eventTable.endsAt })
+    .from(eventTable).where(eq(eventTable.id, eventId)).limit(1);
+  if (!eventRow) return null;
+  const [config] = await db.select().from(eventHubConfig).where(eq(eventHubConfig.eventId, eventId)).limit(1);
+  const classes = await db.select({ id: eventClass.id, name: eventClass.name, vehicleType: eventClass.vehicleType })
+    .from(eventClass).where(eq(eventClass.eventId, eventId)).orderBy(asc(eventClass.name));
+  return { event: eventRow, votingStatus: resolveVotingStatus(config ?? null, new Date()), classes };
 };
 
 const challengeSchema = z.object({ publicKey: z.string().min(1).max(2000) });

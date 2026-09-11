@@ -112,6 +112,23 @@ export const getPresignedAssetsUploadUrl = async (
   };
 };
 
+/**
+ * Vehicle images are stored without a file extension (see `resolveVehicleImageS3Key` in
+ * publicRegistration.ts), so the actual object is found by probing common extensions.
+ */
+export const resolveVehicleThumbUrl = async (s3Key: string | null, expiresInSeconds = 900): Promise<string | null> => {
+  if (!s3Key) {
+    return null;
+  }
+  const candidates = [s3Key, `${s3Key}.jpg`, `${s3Key}.jpeg`, `${s3Key}.png`, `${s3Key}.webp`];
+  for (const candidate of candidates) {
+    if (await doesAssetObjectExist(candidate)) {
+      return getPresignedAssetsDownloadUrl(candidate, expiresInSeconds);
+    }
+  }
+  return null;
+};
+
 export const doesAssetObjectExist = async (key: string): Promise<boolean> => {
   const client = getS3Client();
   const bucket = getAssetsBucket();

@@ -25,7 +25,7 @@ import {
   type InspectionRequirement,
   type ParticipantInspectionSummary
 } from '../domain/inspectionReadiness';
-import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
+import { resolveVehicleThumbUrl } from '../docs/storage';
 import type { AuthContext } from '../http/auth';
 import { WAIVER_VERSION } from '../legal/waiverContract';
 import { queueOperationalMails } from '../mail/operationalOutbox';
@@ -250,18 +250,6 @@ const buildInspectionOrgaMail = (input: InspectionDecisionEmailInput & { inspect
 
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
 
-const getVehicleImageUrl = async (s3Key: string | null): Promise<string | null> => {
-  if (!s3Key) {
-    return null;
-  }
-  const candidates = [s3Key, `${s3Key}.jpg`, `${s3Key}.jpeg`, `${s3Key}.png`, `${s3Key}.webp`];
-  for (const candidate of candidates) {
-    if (await doesAssetObjectExist(candidate)) {
-      return getPresignedAssetsDownloadUrl(candidate, 900);
-    }
-  }
-  return null;
-};
 
 const resolveAssignedEvent = async (auth: AuthContext, requestedEventId?: string) => {
   const db = await getDb();
@@ -551,8 +539,8 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
   ]);
   const backupVehicle = backupVehicleRows[0] ?? null;
   const [vehicleImageUrl, backupVehicleImageUrl] = await Promise.all([
-    getVehicleImageUrl(result.vehicleImageS3Key),
-    getVehicleImageUrl(backupVehicle?.imageS3Key ?? null)
+    resolveVehicleThumbUrl(result.vehicleImageS3Key),
+    resolveVehicleThumbUrl(backupVehicle?.imageS3Key ?? null)
   ]);
   const identity = standardPersonIdentity({ firstName: result.driverFirstName, lastName: result.driverLastName, publicationName: result.driverPublicationName });
   const { vehicleImageS3Key: _vehicleImageS3Key, driverPublicationName: _driverPublicationName, ...entryResult } = result;

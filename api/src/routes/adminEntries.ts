@@ -21,7 +21,7 @@ import {
   registrationGroupEmailVerification,
   vehicle
 } from '../db/schema';
-import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
+import { resolveVehicleThumbUrl } from '../docs/storage';
 import { assertEventStatusAllowed } from '../domain/eventStatus';
 import {
   assertBackupClassCompatible,
@@ -292,20 +292,6 @@ export const listDeletedEntries = async (query: ListEntriesQuery, redactSensitiv
   return listEntriesByDeleteState(query, redactSensitiveFields, true);
 };
 
-const getVehicleThumbUrl = async (s3Key: string | null): Promise<string | null> => {
-  if (!s3Key) {
-    return null;
-  }
-  const candidates = [s3Key, `${s3Key}.jpg`, `${s3Key}.jpeg`, `${s3Key}.png`, `${s3Key}.webp`];
-  for (const candidate of candidates) {
-    const exists = await doesAssetObjectExist(candidate);
-    if (exists) {
-      return getPresignedAssetsDownloadUrl(candidate, 900);
-    }
-  }
-  return null;
-};
-
 const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitiveFields: boolean, deleted: boolean) => {
   const db = await getDb();
   const conditions: SQL<unknown>[] = [
@@ -537,7 +523,7 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
     const completed =
       row.acceptanceStatus === 'accepted' && (paymentStatus === 'paid' || paymentStatus === 'not_required');
     const vehicleLabel = toVehicleLabel(row.vehicleMake, row.vehicleModel, row.startNumberNorm);
-    const vehicleThumbUrl = await getVehicleThumbUrl(row.vehicleImageS3Key);
+    const vehicleThumbUrl = await resolveVehicleThumbUrl(row.vehicleImageS3Key);
     const identity = standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName });
     const shouldRedactSensitiveFields = redactSensitiveFields || row.driverProcessingRestricted || row.driverObjectionFlag || identity.identityProtected;
     const {
@@ -927,8 +913,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
 
   const vehicleLabel = toVehicleLabel(current.vehicleMake, current.vehicleModel, current.startNumberNorm);
   const [vehicleThumbUrl, backupVehicleThumbUrl] = await Promise.all([
-    getVehicleThumbUrl(current.vehicleImageS3Key),
-    getVehicleThumbUrl(backupVehicle?.imageS3Key ?? null)
+    resolveVehicleThumbUrl(current.vehicleImageS3Key),
+    resolveVehicleThumbUrl(backupVehicle?.imageS3Key ?? null)
   ]);
   const driverIdentity = standardPersonIdentity({ firstName: current.driverFirstName, lastName: current.driverLastName, publicationName: current.driverPublicationName });
   const codriverIdentity = codriver ? standardPersonIdentity(codriver) : null;

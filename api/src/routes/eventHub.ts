@@ -17,6 +17,7 @@ import {
   vehicle
 } from '../db/schema';
 import { buildLocationKey, toFiniteNumber } from './adminDashboard';
+import { resolveVehicleThumbUrl } from '../docs/storage';
 import {
   computeEventHubFacts,
   filterPublicCandidates,
@@ -147,7 +148,14 @@ export const getPublicEventHub = async (eventId: string) => {
   const now = new Date();
   const votingStatus = resolveVotingStatus(config ?? null, now);
   const candidateRows = await loadCandidateRows(db, eventId);
-  const candidates = filterPublicCandidates(candidateRows);
+  // The S3 key is an internal storage detail; the public API only exposes a resolved,
+  // time-limited download URL (or null when no image exists / consent wasn't given).
+  const candidates = await Promise.all(
+    filterPublicCandidates(candidateRows).map(async ({ vehicleImageS3Key, ...candidate }) => ({
+      ...candidate,
+      vehicleImageUrl: await resolveVehicleThumbUrl(vehicleImageS3Key)
+    }))
+  );
 
   const venue =
     config?.venueLat && config?.venueLng

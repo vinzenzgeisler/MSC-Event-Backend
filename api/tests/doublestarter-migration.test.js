@@ -117,6 +117,22 @@ const second = row({
 
 {
   const migration = fs.readFileSync(
+    require.resolve('../migrations/0089_merge_tom_van_beek_registration.sql'),
+    'utf8'
+  );
+  assert.match(migration, /tom-van-beek-class7-class4/);
+  assert.match(migration, /secondary identity fingerprint mismatch/);
+  assert.match(migration, /invoice fingerprint mismatch/);
+  assert.match(migration, /manual override fingerprint mismatch/);
+  assert.match(migration, /run-group conflict/);
+  assert.match(migration, /merged_snapshot->>'forecastTotalCents'[\s\S]*<> 26000/);
+  assert.match(migration, /update "entry_run_group_reservation"/);
+  assert.match(migration, /update "registration_invitation"/);
+  assert.match(migration, /'doublestarter_migration_notice'/);
+}
+
+{
+  const migration = fs.readFileSync(
     require.resolve('../migrations/0088_merge_schreiber_mueller_registrations.sql'),
     'utf8'
   );

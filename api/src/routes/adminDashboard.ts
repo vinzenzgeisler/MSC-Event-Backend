@@ -2,7 +2,9 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/client';
 import { standardPersonIdentity } from '../domain/personIdentity';
+import { WAIVER_VERSION } from '../legal/waiverContract';
 import { queueLifecycleMail } from './adminMail';
+import { resolveIamUserDisplayNames } from './adminIam';
 import { emailOutbox, entry, event, eventClass, exportJob, geoLocationCache, invoice, person, vehicle } from '../db/schema';
 
 const dashboardSummaryQuerySchema = z.object({
@@ -691,7 +693,7 @@ export const getDashboardOverview = async (query: DashboardOverviewQuery) => {
     getDashboardWarnings({ sampleLimit })
   ]);
 
-  const [registrationRows, financeRows, mailRows, templateRows, driverRows, countryRows, cityRows, vehicleRows, brandRows, classRows, operationRows, documentRows, documentTypeRows, activity30Rows, mapRows] =
+  const [registrationRows, financeRows, mailRows, templateRows, driverRows, countryRows, cityRows, vehicleRows, brandRows, classRows, operationRows, waiverProgressRows, inspectorRows, inspectionTimelineRows, recentInspectionRows, documentRows, documentTypeRows, activity30Rows, mapRows] =
     await Promise.all([
       db.execute(sql`
         select
@@ -829,9 +831,14 @@ export const getDashboardOverview = async (query: DashboardOverviewQuery) => {
         select
           count(*) filter (where e.checkin_id_verified = true and e.deleted_at is null)::int as "checkinCompletedTotal",
           count(*) filter (where e.checkin_id_verified = false and e.deleted_at is null)::int as "checkinPendingTotal",
-          count(*) filter (where e.tech_status = 'pending' and e.deleted_at is null)::int as "techPendingTotal",
-          count(*) filter (where e.tech_status = 'passed' and e.deleted_at is null)::int as "techPassedTotal",
-          count(*) filter (where e.tech_status = 'failed' and e.deleted_at is null)::int as "techFailedTotal",
+          count(*) filter (where e.deleted_at is null and e.acceptance_status = 'accepted')::int
+            + count(*) filter (where e.deleted_at is null and e.acceptance_status = 'accepted' and e.backup_vehicle_id is not null)::int as "techRequiredTotal",
+          count(*) filter (where e.deleted_at is null and e.acceptance_status = 'accepted' and e.tech_status = 'pending')::int
+            + count(*) filter (where e.deleted_at is null and e.acceptance_status = 'accepted' and e.backup_vehicle_id is not null and e.backup_tech_status = 'pending')::int as "techPendingTotal",
+          count(*) filter (where e.deleted_at is null and e.acceptance_status = 'accepted' and e.tech_status = 'passed')::int
+            + count(*) filter (where e.deleted_at is null and e.acceptance_status = 'accepted' and e.backup_vehicle_id is not null and e.backup_tech_status = 'passed')::int as "techPassedTotal",
+          count(*) filter (where e.deleted_at is null and e.acceptance_status = 'accepted' and e.tech_status = 'failed')::int
+            + count(*) filter (where e.deleted_at is null and e.acceptance_status = 'accepted' and e.backup_vehicle_id is not null and e.backup_tech_status = 'failed')::int as "techFailedTotal",
           (select count(*)::int from export_job x where x.event_id = ${query.eventId} and x.status = 'queued') as "exportsQueuedTotal",
           (select count(*)::int from export_job x where x.event_id = ${query.eventId} and x.status = 'processing') as "exportsProcessingTotal",
           (select count(*)::int from export_job x where x.event_id = ${query.eventId} and x.status = 'failed') as "exportsFailedTotal",
@@ -839,6 +846,75 @@ export const getDashboardOverview = async (query: DashboardOverviewQuery) => {
           (select count(*)::int from signing_session s where s.event_id = ${query.eventId} and s.status = 'completed') as "signingCompletedTotal"
         from entry e
         where e.event_id = ${query.eventId}
+      `),
+      db.execute(sql`
+        with required_signers as (
+          select e.driver_person_id as person_id
+          from entry e
+          where e.event_id = ${query.eventId} and e.deleted_at is null and e.acceptance_status = 'accepted'
+          union
+          select e.codriver_person_id as person_id
+          from entry e
+          where e.event_id = ${query.eventId} and e.deleted_at is null and e.acceptance_status = 'accepted' and e.codriver_person_id is not null
+        ), signed_signers as (
+          select distinct d.driver_person_id as person_id
+          from document d
+          join required_signers r on r.person_id = d.driver_person_id
+          where d.event_id = ${query.eventId}
+            and d.type = 'waiver_signed'
+            and d.template_version = ${WAIVER_VERSION}
+            and d.status = 'generated'
+        )
+        select
+          (select count(*)::int from required_signers) as "signingRequiredTotal",
+          (select count(*)::int from signed_signers) as "signingCompletedTotal",
+          ((select count(*) from required_signers) - (select count(*) from signed_signers))::int as "signingOpenTotal"
+      `),
+      db.execute(sql`
+        select
+          d.inspector_user_id as "inspectorUserId",
+          max(d.inspector_email) as "inspectorEmail",
+          count(*) filter (where d.status = 'passed')::int as "passedTotal",
+          count(*) filter (where d.status = 'failed')::int as "failedTotal",
+          count(*) filter (where d.status = 'pending')::int as "resetTotal",
+          count(*) filter (where d.status in ('passed', 'failed'))::int as "decisionTotal",
+          max(d.created_at) as "lastDecisionAt"
+        from technical_inspection_decision d
+        join entry e on e.id = d.entry_id
+        where d.event_id = ${query.eventId} and e.deleted_at is null and e.acceptance_status = 'accepted'
+        group by d.inspector_user_id
+        order by count(*) filter (where d.status in ('passed', 'failed')) desc, max(d.created_at) desc
+      `),
+      db.execute(sql`
+        select
+          to_char(date_trunc('hour', timezone('Europe/Berlin', d.created_at)), 'YYYY-MM-DD HH24:00') as bucket,
+          d.inspector_user_id as "inspectorUserId",
+          count(*) filter (where d.status = 'passed')::int as "passedTotal",
+          count(*) filter (where d.status = 'failed')::int as "failedTotal",
+          count(*) filter (where d.status in ('passed', 'failed'))::int as count
+        from technical_inspection_decision d
+        join entry e on e.id = d.entry_id
+        where d.event_id = ${query.eventId} and e.deleted_at is null and e.acceptance_status = 'accepted'
+          and d.status in ('passed', 'failed')
+        group by date_trunc('hour', timezone('Europe/Berlin', d.created_at)), d.inspector_user_id
+        order by date_trunc('hour', timezone('Europe/Berlin', d.created_at)) asc
+      `),
+      db.execute(sql`
+        select
+          d.id::text as id,
+          d.entry_id::text as "entryId",
+          e.start_number_norm as "startNumber",
+          d.target,
+          d.status,
+          d.inspector_user_id as "inspectorUserId",
+          d.inspector_email as "inspectorEmail",
+          d.created_at as "createdAt"
+        from technical_inspection_decision d
+        join entry e on e.id = d.entry_id
+        where d.event_id = ${query.eventId} and e.deleted_at is null and e.acceptance_status = 'accepted'
+          and d.status in ('passed', 'failed')
+        order by d.created_at desc
+        limit 12
       `),
       db.execute(sql`
         select
@@ -903,6 +979,19 @@ export const getDashboardOverview = async (query: DashboardOverviewQuery) => {
   const drivers = normalizeRows(driverRows.rows)[0] ?? {};
   const vehicles = normalizeRows(vehicleRows.rows)[0] ?? {};
   const operations = normalizeRows(operationRows.rows)[0] ?? {};
+  const waiverProgress = normalizeRows(waiverProgressRows.rows)[0] ?? {};
+  const inspectorStatistics = normalizeRows(inspectorRows.rows);
+  const inspectionTimeline = normalizeRows(inspectionTimelineRows.rows);
+  const recentInspections = normalizeRows(recentInspectionRows.rows);
+  const inspectorIds = Array.from(new Set([
+    ...inspectorStatistics.map((row) => String(row.inspectorUserId ?? '')).filter(Boolean),
+    ...recentInspections.map((row) => String(row.inspectorUserId ?? '')).filter(Boolean)
+  ]));
+  const inspectorDisplayNames = await resolveIamUserDisplayNames(inspectorIds);
+  const inspectorLabel = (row: Record<string, unknown>) => {
+    const userId = String(row.inspectorUserId ?? '');
+    return inspectorDisplayNames.get(userId) ?? (String(row.inspectorEmail ?? '') || 'Unbekannter Prüfer');
+  };
   const documents = normalizeRows(documentRows.rows)[0] ?? {};
   const map = normalizeRows(mapRows.rows)[0] ?? {};
   const eventActiveWarnings = eventWarnings.checks.filter((check) => check.status === 'active');
@@ -970,7 +1059,13 @@ export const getDashboardOverview = async (query: DashboardOverviewQuery) => {
       brands: normalizeRows(brandRows.rows)
     },
     classes: normalizeRows(classRows.rows),
-    operations,
+    operations: {
+      ...operations,
+      ...waiverProgress,
+      inspectorStatistics: inspectorStatistics.map((row) => ({ ...row, inspectorDisplay: inspectorLabel(row) })),
+      inspectionTimeline,
+      recentInspections: recentInspections.map((row) => ({ ...row, inspectorDisplay: inspectorLabel(row) }))
+    },
     documents: {
       ...documents,
       byType: normalizeRows(documentTypeRows.rows)

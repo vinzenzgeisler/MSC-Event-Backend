@@ -285,6 +285,44 @@ export const resolveIamUserDisplayNames = async (userIds: string[]) => {
   return resolved;
 };
 
+const iamUserEmailCache = new Map<string, string>();
+
+export const resolveIamUserEmail = async (userId: string | null): Promise<string | null> => {
+  const normalizedUserId = userId?.trim() ?? '';
+  if (!normalizedUserId) {
+    return null;
+  }
+  const cached = iamUserEmailCache.get(normalizedUserId);
+  if (cached) {
+    return cached;
+  }
+
+  const client = createClient();
+  let userPoolId: string;
+  try {
+    userPoolId = getUserPoolId();
+  } catch {
+    return null;
+  }
+
+  try {
+    const response = await client.send(
+      new AdminGetUserCommand({
+        UserPoolId: userPoolId,
+        Username: normalizedUserId
+      })
+    );
+    const email = getAttributesMap({ Attributes: response.UserAttributes }).get('email')?.trim().toLowerCase() ?? '';
+    if (!email) {
+      return null;
+    }
+    iamUserEmailCache.set(normalizedUserId, email);
+    return email;
+  } catch {
+    return null;
+  }
+};
+
 export const createIamUser = async (input: CreateUserInput) => {
   const client = createClient();
   const userPoolId = getUserPoolId();

@@ -12,6 +12,7 @@ const {
 const {
   createIamUser,
   patchIamUserProfile,
+  resolveIamUserEmail,
   validateCreateIamUserInput,
   validatePatchIamUserProfileInput
 } = require('../dist/routes/adminIam.js');
@@ -196,6 +197,19 @@ const run = async () => {
     });
     assert.equal(result?.user?.firstName, 'Petra');
     assert.equal(result?.user?.lastName, 'Prüfer');
+  });
+
+  await withMockedSend(async (command) => {
+    if (command instanceof AdminGetUserCommand) {
+      assert.equal(command.input.Username, 'inspector-sub');
+      return {
+        Username: 'inspector-sub',
+        UserAttributes: [{ Name: 'email', Value: 'Inspector@Example.org' }]
+      };
+    }
+    return {};
+  }, async () => {
+    assert.equal(await resolveIamUserEmail('inspector-sub'), 'inspector@example.org');
   });
 
   console.log('admin-iam.test.js: ok');

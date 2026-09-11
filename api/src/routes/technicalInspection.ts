@@ -32,7 +32,7 @@ import { queueOperationalMails } from '../mail/operationalOutbox';
 import { operationalPresentationData } from '../mail/operationalPresentation';
 import { getOrgaNotificationRecipients } from '../observability/recipients';
 import { logOperationalEvent } from '../observability/logger';
-import { resolveIamUserDisplayNames } from './adminIam';
+import { resolveIamUserDisplayNames, resolveIamUserEmail } from './adminIam';
 import { replaceProtectedLegalNamesInValue, standardPersonIdentity, type PersonIdentitySource } from '../domain/personIdentity';
 
 // Standalone build keeps Lambda PDF rendering independent from host font files.
@@ -265,13 +265,21 @@ const resolveAssignedEvent = async (auth: AuthContext, requestedEventId?: string
     return rows[0] ?? null;
   }
 
-  if (!auth.email || !auth.groups.includes('technical_inspector')) {
+  if (!auth.groups.includes('technical_inspector')) {
+    return null;
+  }
+
+  // Cognito access tokens contain the stable subject and groups, but normally no
+  // email claim. Resolve the verified account email server-side so event-scoped
+  // assignments also work when the API is called with an access token.
+  const inspectorEmail = auth.email ?? await resolveIamUserEmail(auth.sub);
+  if (!inspectorEmail) {
     return null;
   }
 
   const now = new Date();
   const conditions = [
-    eq(technicalInspectorAssignment.userEmailNorm, normalizeEmail(auth.email)),
+    eq(technicalInspectorAssignment.userEmailNorm, normalizeEmail(inspectorEmail)),
     lte(technicalInspectorAssignment.validFrom, now),
     gte(technicalInspectorAssignment.validUntil, now)
   ];

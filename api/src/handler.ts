@@ -151,8 +151,10 @@ import {
   createInspectionQrDownload,
   createParticipantInspectionQrDownload,
   createInspectionQrSheet,
+  checkInspectionAccess,
   getInspectionContext,
   getInspectionEntry,
+  getInspectionOverview,
   getInspectionParticipant,
   listInspectionHistory,
   listInspectorAssignments,
@@ -161,7 +163,9 @@ import {
   updateInspectionNote,
   upsertInspectorAssignment,
   validateInspectionDecisionInput,
+  validateInspectionAccessInput,
   validateInspectionNoteInput,
+  validateInspectionOverviewInput,
   validateInspectionSearchInput,
   validateInspectorAssignmentInput,
   validateQrExportInput
@@ -1925,6 +1929,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'WAIVER_ALREADY_SIGNED') {
         return errorJson(409, error.message, undefined, error.message);
+      }
+      if (error instanceof Error && (error.message === 'SIGNING_SESSION_ALREADY_ACTIVE' || error.message === 'SIGNING_DEVICE_BUSY')) {
+        return errorJson(409, error.message, undefined, error.message);
+      }
+      if (error instanceof Error && error.message === 'SIGNING_PAYMENT_REQUIRED') {
+        return errorJson(409, 'Nenngeld offen. Zahlung muss vor dem Fahrer-Haftverzicht verbucht werden.', undefined, 'SIGNING_PAYMENT_REQUIRED');
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
       return errorJson(500, 'Create signing session failed', details);
@@ -3759,6 +3769,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && error.message === 'PRE_ACCEPTANCE_PAYMENT_NOT_ALLOWED') {
         return errorJson(409, 'Payment can only be confirmed after acceptance', undefined, 'PRE_ACCEPTANCE_PAYMENT_NOT_ALLOWED');
       }
+      if (error instanceof Error && error.message === 'PAYMENT_AMOUNT_UNKNOWN') {
+        return errorJson(409, 'Nenngeldbetrag unbekannt. Bitte Zahlungsdaten prüfen.', undefined, 'PAYMENT_AMOUNT_UNKNOWN');
+      }
       if (error instanceof Error && error.message === 'EVENT_STATUS_FORBIDDEN') {
         return errorJson(409, 'Event is read-only');
       }
@@ -4298,6 +4311,37 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  if (method === 'POST' && path === '/inspection/access-check') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'inspection.read')) return errorJson(403, 'Forbidden');
+    try {
+      const result = await checkInspectionAccess(auth, validateInspectionAccessInput(parseJsonBody(event)));
+      if (!result) return errorJson(404, 'Nennung nicht gefunden');
+      if (!result.allowed) {
+        return errorJson(409, 'Fahrer muss zuerst im Org-Büro vollständig angemeldet werden.', { access: result }, 'INSPECTION_CHECKIN_REQUIRED');
+      }
+      return json(200, { ok: true, access: result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Ungültige Eingabe', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Ungültige Anfrage');
+      if (error instanceof Error && error.message === 'INSPECTION_ASSIGNMENT_REQUIRED') return errorJson(403, 'Keine aktive Zuweisung zur technischen Abnahme');
+      return errorJson(500, 'Anmeldestatus konnte nicht geprüft werden');
+    }
+  }
+
+  if (method === 'GET' && path === '/inspection/overview') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'inspection.read')) return errorJson(403, 'Forbidden');
+    try {
+      const result = await getInspectionOverview(auth, validateInspectionOverviewInput(event.queryStringParameters ?? {}));
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Ungültige Eingabe', { issues: error.issues });
+      if (error instanceof Error && error.message === 'INSPECTION_ASSIGNMENT_REQUIRED') return errorJson(403, 'Keine aktive Zuweisung zur technischen Abnahme');
+      return errorJson(500, 'Übersicht konnte nicht geladen werden');
+    }
+  }
+
   const inspectionHistoryMatch = path.match(/^\/inspection\/entries\/([^/]+)\/history$/);
   if (method === 'GET' && inspectionHistoryMatch) {
     const auth = getAuthContext(event);
@@ -4343,6 +4387,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'INSPECTION_BACKUP_VEHICLE_REQUIRED') {
         return errorJson(409, 'Entry has no backup vehicle');
+      }
+      if (error instanceof Error && error.message === 'INSPECTION_CHECKIN_REQUIRED') {
+        return errorJson(409, 'Fahrer muss zuerst im Org-Büro vollständig angemeldet werden.', undefined, 'INSPECTION_CHECKIN_REQUIRED');
+      }
+      if (error instanceof Error && error.message === 'INSPECTION_STATE_CONFLICT') {
+        return errorJson(409, 'Die Nennung wurde zwischenzeitlich von einem anderen Prüfer geändert.', undefined, 'INSPECTION_STATE_CONFLICT');
       }
       return errorJson(500, 'Inspection note update failed');
     }
@@ -4407,6 +4457,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
       if (error instanceof Error && error.message === 'INSPECTION_BACKUP_VEHICLE_REQUIRED') {
         return errorJson(409, 'This entry has no backup vehicle');
+      }
+      if (error instanceof Error && error.message === 'INSPECTION_CHECKIN_REQUIRED') {
+        return errorJson(409, 'Fahrer muss zuerst im Org-Büro vollständig angemeldet werden.', undefined, 'INSPECTION_CHECKIN_REQUIRED');
+      }
+      if (error instanceof Error && error.message === 'INSPECTION_STATE_CONFLICT') {
+        return errorJson(409, 'Die Nennung wurde zwischenzeitlich von einem anderen Prüfer geändert.', undefined, 'INSPECTION_STATE_CONFLICT');
       }
       return errorJson(500, 'Inspection update failed');
     }

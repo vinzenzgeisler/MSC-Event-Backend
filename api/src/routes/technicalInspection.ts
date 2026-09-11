@@ -1,20 +1,33 @@
 import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { buildGiroCodeMatrix, buildQrCodeMatrix, renderGiroCodePng } from '../docs/girocode';
 import { getDb } from '../db/client';
 import {
+  auditLog,
+  document,
   entry,
   entryCharityCodriver,
   event,
   eventClass,
+  invoice,
   person,
   technicalInspectionDecision,
   technicalInspectorAssignment,
   vehicle
 } from '../db/schema';
+import {
+  buildParticipantInspectionSummary,
+  evaluateInspectionEligibility,
+  type InspectionEligibility,
+  type InspectionProgressEntry,
+  type InspectionRequirement,
+  type ParticipantInspectionSummary
+} from '../domain/inspectionReadiness';
 import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/storage';
 import type { AuthContext } from '../http/auth';
+import { WAIVER_VERSION } from '../legal/waiverContract';
 import { queueOperationalMails } from '../mail/operationalOutbox';
 import { buildOperationalNoticeHtml, operationalPresentationData } from '../mail/operationalPresentation';
 import { getOrgaNotificationRecipients } from '../observability/recipients';
@@ -36,7 +49,12 @@ const inspectionDecisionSchema = z
   .object({
     techStatus: z.enum(['pending', 'passed', 'failed']),
     target: z.enum(['primary', 'backup']).default('primary'),
-    note: z.string().trim().max(2000).nullable().optional()
+    note: z.string().trim().max(2000).nullable().optional(),
+    expected: z.object({
+      techStatus: z.enum(['pending', 'passed', 'failed']),
+      checkedAt: z.string().datetime().nullable(),
+      note: z.string().max(2000).nullable()
+    }).optional()
   })
   .superRefine((value, ctx) => {
     if (value.techStatus === 'failed' && !value.note?.trim()) {
@@ -50,7 +68,28 @@ const inspectionDecisionSchema = z
 
 const inspectionNoteSchema = z.object({
   target: z.enum(['primary', 'backup']).default('primary'),
-  note: z.string().trim().max(2000).nullable()
+  note: z.string().trim().max(2000).nullable(),
+  expectedNote: z.string().max(2000).nullable().optional()
+});
+
+const inspectionAccessSourceSchema = z.enum(['qr', 'search', 'participant', 'history', 'direct']);
+const inspectionAccessSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('entry'),
+    entryId: z.string().uuid(),
+    source: inspectionAccessSourceSchema
+  }),
+  z.object({
+    type: z.literal('participant'),
+    eventId: z.string().uuid(),
+    personId: z.string().uuid(),
+    source: inspectionAccessSourceSchema
+  })
+]);
+
+const inspectionOverviewSchema = z.object({
+  eventId: z.string().uuid().optional(),
+  limit: z.number().int().min(1).max(100).default(40)
 });
 
 const inspectorAssignmentSchema = z
@@ -72,6 +111,9 @@ type InspectionSearchInput = z.infer<typeof inspectionSearchSchema>;
 type InspectionDecisionInput = z.infer<typeof inspectionDecisionSchema>;
 type InspectionNoteInput = z.infer<typeof inspectionNoteSchema>;
 type InspectorAssignmentInput = z.infer<typeof inspectorAssignmentSchema>;
+type InspectionAccessInput = z.infer<typeof inspectionAccessSchema>;
+type InspectionAccessSource = z.infer<typeof inspectionAccessSourceSchema>;
+type InspectionOverviewInput = z.infer<typeof inspectionOverviewSchema>;
 
 const loadProtectedInspectionPeople = async (db: any, entryId: string): Promise<PersonIdentitySource[]> => db
   .select({ firstName: person.firstName, lastName: person.lastName, publicationName: person.publicationName })
@@ -279,6 +321,101 @@ export const getInspectionContext = async (auth: AuthContext, requestedEventId?:
   return { event: assignedEvent };
 };
 
+const loadInspectionEligibility = async (
+  db: any,
+  eventId: string,
+  driverPersonId: string
+): Promise<InspectionEligibility> => {
+  const [paymentRows, waiverRows] = await Promise.all([
+    db
+      .select({ paymentStatus: invoice.paymentStatus })
+      .from(invoice)
+      .where(and(eq(invoice.eventId, eventId), eq(invoice.driverPersonId, driverPersonId)))
+      .limit(1),
+    db
+      .select({ id: document.id })
+      .from(document)
+      .where(and(
+        eq(document.eventId, eventId),
+        eq(document.driverPersonId, driverPersonId),
+        eq(document.type, 'waiver_signed'),
+        eq(document.templateVersion, WAIVER_VERSION),
+        eq(document.status, 'generated')
+      ))
+      .limit(1)
+  ]);
+  return evaluateInspectionEligibility(paymentRows[0]?.paymentStatus, waiverRows.length > 0);
+};
+
+const loadParticipantProgressEntries = async (
+  db: any,
+  eventId: string,
+  driverPersonId: string
+): Promise<InspectionProgressEntry[]> => {
+  const backupVehicle = alias(vehicle, 'inspection_progress_backup_vehicle');
+  return db
+    .select({
+      id: entry.id,
+      driverPersonId: entry.driverPersonId,
+      startNumber: entry.startNumberNorm,
+      className: eventClass.name,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model,
+      techStatus: entry.techStatus,
+      backupVehicleId: entry.backupVehicleId,
+      backupVehicleMake: backupVehicle.make,
+      backupVehicleModel: backupVehicle.model,
+      backupTechStatus: entry.backupTechStatus
+    })
+    .from(entry)
+    .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+    .leftJoin(backupVehicle, eq(entry.backupVehicleId, backupVehicle.id))
+    .where(and(
+      eq(entry.eventId, eventId),
+      eq(entry.driverPersonId, driverPersonId),
+      eq(entry.acceptanceStatus, 'accepted'),
+      sql`${entry.deletedAt} is null`
+    ))
+    .orderBy(asc(entry.startNumberNorm), asc(entry.id));
+};
+
+const loadParticipantInspectionState = async (
+  db: any,
+  eventId: string,
+  driverPersonId: string
+): Promise<{ eligibility: InspectionEligibility; participantSummary: ParticipantInspectionSummary }> => {
+  const [eligibility, progressEntries] = await Promise.all([
+    loadInspectionEligibility(db, eventId, driverPersonId),
+    loadParticipantProgressEntries(db, eventId, driverPersonId)
+  ]);
+  return {
+    eligibility,
+    participantSummary: buildParticipantInspectionSummary(progressEntries, eligibility)
+  };
+};
+
+const recordBlockedInspectionAccess = async (
+  db: any,
+  auth: AuthContext,
+  eventId: string,
+  entryIds: string[],
+  source: InspectionAccessSource,
+  missingRequirements: InspectionRequirement[],
+  attemptedAction: 'open' | 'decision' | 'note'
+) => {
+  for (const entryId of entryIds) {
+    await writeAuditLog(db, {
+      eventId,
+      actorUserId: auth.sub,
+      action: 'inspection_access_blocked',
+      entityType: 'entry',
+      entityId: entryId,
+      payload: { source, missingRequirements, attemptedAction }
+    });
+  }
+};
+
 export const searchInspectionEntries = async (auth: AuthContext, input: InspectionSearchInput) => {
   const assignedEvent = await resolveAssignedEvent(auth, input.eventId);
   if (!assignedEvent) {
@@ -289,6 +426,7 @@ export const searchInspectionEntries = async (auth: AuthContext, input: Inspecti
   const rows = await db
     .select({
       id: entry.id,
+      driverPersonId: entry.driverPersonId,
       startNumber: entry.startNumberNorm,
       driverFirstName: person.firstName,
       driverLastName: person.lastName,
@@ -321,9 +459,13 @@ export const searchInspectionEntries = async (auth: AuthContext, input: Inspecti
       )
     )
     .limit(input.limit);
+  const eligibilityByDriver = new Map<string, InspectionEligibility>();
+  await Promise.all(Array.from(new Set(rows.map((row) => row.driverPersonId))).map(async (driverPersonId) => {
+    eligibilityByDriver.set(driverPersonId, await loadInspectionEligibility(db, assignedEvent.id, driverPersonId));
+  }));
   return rows.map((row) => {
     const identity = standardPersonIdentity({ firstName: row.driverFirstName, lastName: row.driverLastName, publicationName: row.driverPublicationName });
-    return { ...row, driverDisplayName: identity.displayName, identityProtected: identity.identityProtected, driverFirstName: identity.firstName, driverLastName: identity.lastName, driverPublicationName: undefined };
+    return { ...row, eligibility: eligibilityByDriver.get(row.driverPersonId), driverDisplayName: identity.displayName, identityProtected: identity.identityProtected, driverFirstName: identity.firstName, driverLastName: identity.lastName, driverPublicationName: undefined };
   });
 };
 
@@ -333,6 +475,7 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
     .select({
       id: entry.id,
       eventId: entry.eventId,
+      driverPersonId: entry.driverPersonId,
       startNumber: entry.startNumberNorm,
       orgaCode: entry.orgaCode,
       acceptanceStatus: entry.acceptanceStatus,
@@ -385,7 +528,7 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
   if (!assignedEvent) {
     throw new Error('INSPECTION_ASSIGNMENT_REQUIRED');
   }
-  const [codriverRows, backupVehicleRows] = await Promise.all([
+  const [codriverRows, backupVehicleRows, participantState] = await Promise.all([
     result.codriverPersonId
       ? db
           .select({
@@ -415,7 +558,8 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
           .from(vehicle)
           .where(eq(vehicle.id, result.backupVehicleId))
           .limit(1)
-      : Promise.resolve([])
+      : Promise.resolve([]),
+    loadParticipantInspectionState(db, result.eventId, result.driverPersonId)
   ]);
   const backupVehicle = backupVehicleRows[0] ?? null;
   const [vehicleImageUrl, backupVehicleImageUrl] = await Promise.all([
@@ -455,7 +599,8 @@ export const getInspectionEntry = async (auth: AuthContext, entryId: string) => 
           ...backupVehicleResult,
           imageUrl: backupVehicleImageUrl
         }
-      : null
+      : null,
+    ...participantState
   };
   const protectedPeople: PersonIdentitySource[] = [
     { firstName: result.driverFirstName, lastName: result.driverLastName, publicationName: result.driverPublicationName },
@@ -490,9 +635,44 @@ export const getInspectionParticipant = async (auth: AuthContext, eventId: strin
       firstName: entries[0].driverFirstName,
       lastName: entries[0].driverLastName
     },
-    entries
+    entries,
+    eligibility: entries[0].eligibility,
+    participantSummary: entries[0].participantSummary
   };
 };
+
+export const checkInspectionAccess = async (auth: AuthContext, input: InspectionAccessInput) => {
+  let eligibility: InspectionEligibility;
+  let eventId: string;
+  let entryIds: string[];
+  let driverPersonId: string;
+  let driverDisplayName: string;
+  if (input.type === 'entry') {
+    const result = await getInspectionEntry(auth, input.entryId);
+    if (!result) return null;
+    eligibility = result.eligibility;
+    eventId = result.eventId;
+    entryIds = [result.id];
+    driverPersonId = result.driverPersonId;
+    driverDisplayName = result.driverDisplayName;
+  } else {
+    const result = await getInspectionParticipant(auth, input.eventId, input.personId);
+    if (!result) return null;
+    eligibility = result.eligibility;
+    eventId = result.event.id;
+    entryIds = result.entries.map((item) => item.id);
+    driverPersonId = result.driver.personId;
+    driverDisplayName = result.driver.displayName;
+  }
+  if (!eligibility.ready) {
+    const db = await getDb();
+    await recordBlockedInspectionAccess(db, auth, eventId, entryIds, input.source, eligibility.missingRequirements, 'open');
+  }
+  return { allowed: eligibility.ready, eventId, entryIds, driverPersonId, driverDisplayName, eligibility };
+};
+
+const sameTimestamp = (left: Date | string | null | undefined, right: string | null) =>
+  (left ? new Date(left).toISOString() : null) === right;
 
 export const updateInspectionDecision = async (
   auth: AuthContext,
@@ -508,6 +688,10 @@ export const updateInspectionDecision = async (
     return null;
   }
   const db = await getDb();
+  if (!existing.eligibility.ready) {
+    await recordBlockedInspectionAccess(db, auth, existing.eventId, [entryId], 'direct', existing.eligibility.missingRequirements, 'decision');
+    throw new Error('INSPECTION_CHECKIN_REQUIRED');
+  }
   const note = input.note?.trim() || null;
   if (input.target === 'backup' && !existing.backupVehicleId) {
     throw new Error('INSPECTION_BACKUP_VEHICLE_REQUIRED');
@@ -522,6 +706,32 @@ export const updateInspectionDecision = async (
   const protectedPeople = await loadProtectedInspectionPeople(db, entryId);
   const safeNote = replaceProtectedLegalNamesInValue(note, protectedPeople) as string | null;
   const result = await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({
+        eventId: entry.eventId,
+        driverPersonId: entry.driverPersonId,
+        techStatus: entry.techStatus,
+        techCheckedAt: entry.techCheckedAt,
+        inspectionNote: entry.inspectionNote,
+        backupTechStatus: entry.backupTechStatus,
+        backupTechCheckedAt: entry.backupTechCheckedAt,
+        backupInspectionNote: entry.backupInspectionNote
+      })
+      .from(entry)
+      .where(eq(entry.id, entryId))
+      .for('update')
+      .limit(1);
+    if (!locked) return null;
+    const eligibility = await loadInspectionEligibility(tx, locked.eventId, locked.driverPersonId);
+    if (!eligibility.ready) throw new Error('INSPECTION_CHECKIN_REQUIRED');
+    if (input.expected) {
+      const currentStatus = input.target === 'backup' ? locked.backupTechStatus : locked.techStatus;
+      const currentCheckedAt = input.target === 'backup' ? locked.backupTechCheckedAt : locked.techCheckedAt;
+      const currentNote = input.target === 'backup' ? locked.backupInspectionNote : locked.inspectionNote;
+      if (currentStatus !== input.expected.techStatus || !sameTimestamp(currentCheckedAt, input.expected.checkedAt) || (currentNote ?? null) !== input.expected.note) {
+        throw new Error('INSPECTION_STATE_CONFLICT');
+      }
+    }
     const [updated] = await tx
       .update(entry)
       .set(
@@ -606,6 +816,7 @@ export const updateInspectionDecision = async (
     return { entry: updated, decision };
   });
 
+  if (!result) return null;
   logOperationalEvent('info', 'inspection.decision_recorded', {
     eventId: existing.eventId,
     entryId,
@@ -636,6 +847,12 @@ export const updateInspectionNote = async (
     throw new Error('INSPECTION_BACKUP_VEHICLE_REQUIRED');
   }
 
+  const db = await getDb();
+  if (!existing.eligibility.ready) {
+    await recordBlockedInspectionAccess(db, auth, existing.eventId, [entryId], 'direct', existing.eligibility.missingRequirements, 'note');
+    throw new Error('INSPECTION_CHECKIN_REQUIRED');
+  }
+
   const note = input.note?.trim() || null;
   const currentNote =
     input.target === 'backup' ? existing.backupInspectionNote ?? null : existing.inspectionNote ?? null;
@@ -643,9 +860,26 @@ export const updateInspectionNote = async (
     return { changed: false, note, target: input.target };
   }
 
-  const db = await getDb();
   const now = new Date();
   const result = await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({
+        eventId: entry.eventId,
+        driverPersonId: entry.driverPersonId,
+        inspectionNote: entry.inspectionNote,
+        backupInspectionNote: entry.backupInspectionNote
+      })
+      .from(entry)
+      .where(eq(entry.id, entryId))
+      .for('update')
+      .limit(1);
+    if (!locked) return null;
+    const eligibility = await loadInspectionEligibility(tx, locked.eventId, locked.driverPersonId);
+    if (!eligibility.ready) throw new Error('INSPECTION_CHECKIN_REQUIRED');
+    const lockedNote = input.target === 'backup' ? locked.backupInspectionNote : locked.inspectionNote;
+    if (input.expectedNote !== undefined && (lockedNote ?? null) !== input.expectedNote) {
+      throw new Error('INSPECTION_STATE_CONFLICT');
+    }
     await tx
       .update(entry)
       .set(
@@ -666,6 +900,7 @@ export const updateInspectionNote = async (
 
     return { changed: true, note, target: input.target };
   });
+  if (!result) return null;
   return replaceProtectedLegalNamesInValue(result, await loadProtectedInspectionPeople(db, entryId)) as typeof result;
 };
 
@@ -675,20 +910,154 @@ export const listInspectionHistory = async (auth: AuthContext, entryId: string) 
     return null;
   }
   const db = await getDb();
-  const rows = await db
+  const [rows, blockedRows] = await Promise.all([db
     .select()
     .from(technicalInspectionDecision)
     .where(eq(technicalInspectionDecision.entryId, entryId))
     .orderBy(desc(technicalInspectionDecision.createdAt))
-    .limit(50);
+    .limit(50),
+  db.select().from(auditLog).where(and(
+    eq(auditLog.entityType, 'entry'),
+    eq(auditLog.entityId, entryId),
+    eq(auditLog.action, 'inspection_access_blocked')
+  )).orderBy(desc(auditLog.createdAt)).limit(50)]);
   const displayNames = await resolveIamUserDisplayNames(
-    Array.from(new Set(rows.map((row) => row.inspectorUserId).filter(Boolean)))
+    Array.from(new Set([...rows.map((row) => row.inspectorUserId), ...blockedRows.map((row) => row.actorUserId)].filter((id): id is string => Boolean(id))))
   );
-  const result = rows.map((row) => ({
-    ...row,
-    inspectorDisplay: displayNames.get(row.inspectorUserId) ?? row.inspectorEmail ?? null
-  }));
+  const result = [
+    ...rows.map((row) => ({ ...row, kind: 'decision' as const, inspectorDisplay: displayNames.get(row.inspectorUserId) ?? row.inspectorEmail ?? null })),
+    ...blockedRows.map((row) => ({
+      id: row.id,
+      kind: 'blocked_access' as const,
+      entryId,
+      createdAt: row.createdAt,
+      inspectorUserId: row.actorUserId,
+      inspectorDisplay: row.actorUserId ? displayNames.get(row.actorUserId) ?? null : null,
+      source: (row.payload as Record<string, unknown> | null)?.source ?? null,
+      missingRequirements: (row.payload as Record<string, unknown> | null)?.missingRequirements ?? [],
+      attemptedAction: (row.payload as Record<string, unknown> | null)?.attemptedAction ?? 'open'
+    }))
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 50);
   return replaceProtectedLegalNamesInValue(result, await loadProtectedInspectionPeople(db, entryId)) as typeof result;
+};
+
+export const getInspectionOverview = async (auth: AuthContext, input: InspectionOverviewInput) => {
+  if (!auth.sub) throw new Error('INSPECTION_IDENTITY_REQUIRED');
+  const assignedEvent = await resolveAssignedEvent(auth, input.eventId);
+  if (!assignedEvent) throw new Error('INSPECTION_ASSIGNMENT_REQUIRED');
+  const db = await getDb();
+  const backupVehicle = alias(vehicle, 'inspection_overview_backup_vehicle');
+  const rows = await db
+    .select({
+      id: entry.id,
+      driverPersonId: entry.driverPersonId,
+      driverFirstName: person.firstName,
+      driverLastName: person.lastName,
+      driverPublicationName: person.publicationName,
+      startNumber: entry.startNumberNorm,
+      className: eventClass.name,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model,
+      techStatus: entry.techStatus,
+      backupVehicleId: entry.backupVehicleId,
+      backupVehicleMake: backupVehicle.make,
+      backupVehicleModel: backupVehicle.model,
+      backupTechStatus: entry.backupTechStatus
+    })
+    .from(entry)
+    .innerJoin(person, eq(entry.driverPersonId, person.id))
+    .innerJoin(eventClass, eq(entry.classId, eventClass.id))
+    .innerJoin(vehicle, eq(entry.vehicleId, vehicle.id))
+    .leftJoin(backupVehicle, eq(entry.backupVehicleId, backupVehicle.id))
+    .where(and(
+      eq(entry.eventId, assignedEvent.id),
+      eq(entry.acceptanceStatus, 'accepted'),
+      sql`${entry.deletedAt} is null`
+    ));
+  const driverIds = Array.from(new Set(rows.map((row) => row.driverPersonId)));
+  const [invoiceRows, waiverRows] = driverIds.length > 0 ? await Promise.all([
+    db.select({ driverPersonId: invoice.driverPersonId, paymentStatus: invoice.paymentStatus })
+      .from(invoice)
+      .where(and(eq(invoice.eventId, assignedEvent.id), inArray(invoice.driverPersonId, driverIds))),
+    db.select({ driverPersonId: document.driverPersonId })
+      .from(document)
+      .where(and(
+        eq(document.eventId, assignedEvent.id),
+        inArray(document.driverPersonId, driverIds),
+        eq(document.type, 'waiver_signed'),
+        eq(document.templateVersion, WAIVER_VERSION),
+        eq(document.status, 'generated')
+      ))
+  ]) : [[], []];
+  const paymentByDriver = new Map(invoiceRows.map((row) => [row.driverPersonId, row.paymentStatus]));
+  const waiverDrivers = new Set(waiverRows.map((row) => row.driverPersonId).filter(Boolean));
+  const grouped = new Map<string, typeof rows>();
+  for (const row of rows) grouped.set(row.driverPersonId, [...(grouped.get(row.driverPersonId) ?? []), row]);
+  const participants = Array.from(grouped.entries()).map(([driverPersonId, driverRows]) => {
+    const eligibility = evaluateInspectionEligibility(paymentByDriver.get(driverPersonId), waiverDrivers.has(driverPersonId));
+    const participantSummary = buildParticipantInspectionSummary(driverRows as unknown as InspectionProgressEntry[], eligibility);
+    const identity = standardPersonIdentity({
+      firstName: driverRows[0].driverFirstName,
+      lastName: driverRows[0].driverLastName,
+      publicationName: driverRows[0].driverPublicationName
+    });
+    return {
+      driverPersonId,
+      driverDisplayName: identity.displayName,
+      identityProtected: identity.identityProtected,
+      eligibility,
+      participantSummary
+    };
+  });
+  const counters = participants.reduce((sum, item) => {
+    if (!item.eligibility.ready) sum.notEligibleTargets += item.participantSummary.totalTargets;
+    else {
+      sum.pendingTargets += item.participantSummary.pendingTargets;
+      sum.passedTargets += item.participantSummary.passedTargets;
+      sum.failedTargets += item.participantSummary.failedTargets;
+    }
+    if (item.participantSummary.stampReady) sum.stampReadyDrivers += 1;
+    sum.totalTargets += item.participantSummary.totalTargets;
+    return sum;
+  }, { totalTargets: 0, notEligibleTargets: 0, pendingTargets: 0, passedTargets: 0, failedTargets: 0, stampReadyDrivers: 0 });
+
+  const recentRows = await db
+    .select()
+    .from(technicalInspectionDecision)
+    .where(and(
+      eq(technicalInspectionDecision.eventId, assignedEvent.id),
+      eq(technicalInspectionDecision.inspectorUserId, auth.sub)
+    ))
+    .orderBy(desc(technicalInspectionDecision.createdAt))
+    .limit(Math.min(input.limit * 4, 400));
+  const rowByEntry = new Map(rows.map((row) => [row.id, row]));
+  const participantByDriver = new Map(participants.map((item) => [item.driverPersonId, item]));
+  const seenEntries = new Set<string>();
+  const recentEntries = recentRows.flatMap((decision) => {
+    if (seenEntries.has(decision.entryId)) return [];
+    const entryRow = rowByEntry.get(decision.entryId);
+    if (!entryRow) return [];
+    seenEntries.add(decision.entryId);
+    const participant = participantByDriver.get(entryRow.driverPersonId)!;
+    return [{
+      entryId: decision.entryId,
+      driverPersonId: entryRow.driverPersonId,
+      driverDisplayName: participant.driverDisplayName,
+      startNumber: entryRow.startNumber,
+      className: entryRow.className,
+      vehicleMake: entryRow.vehicleMake,
+      vehicleModel: entryRow.vehicleModel,
+      techStatus: entryRow.techStatus,
+      backupTechStatus: entryRow.backupTechStatus,
+      lastAction: { status: decision.status, target: decision.target, note: decision.note, createdAt: decision.createdAt },
+      stampReady: participant.participantSummary.stampReady
+    }];
+  }).slice(0, input.limit);
+  return {
+    event: assignedEvent,
+    counters: { ...counters, totalDrivers: participants.length },
+    recentEntries
+  };
 };
 
 export const listInspectorAssignments = async (eventId?: string) => {
@@ -853,5 +1222,10 @@ export const validateInspectionSearchInput = (query: Record<string, string | und
   });
 export const validateInspectionDecisionInput = (payload: unknown) => inspectionDecisionSchema.parse(payload);
 export const validateInspectionNoteInput = (payload: unknown) => inspectionNoteSchema.parse(payload);
+export const validateInspectionAccessInput = (payload: unknown) => inspectionAccessSchema.parse(payload);
+export const validateInspectionOverviewInput = (query: Record<string, string | undefined>) => inspectionOverviewSchema.parse({
+  eventId: query.eventId,
+  limit: query.limit === undefined ? undefined : Number(query.limit)
+});
 export const validateInspectorAssignmentInput = (payload: unknown) => inspectorAssignmentSchema.parse(payload);
 export const validateQrExportInput = (payload: unknown) => qrExportSchema.parse(payload);

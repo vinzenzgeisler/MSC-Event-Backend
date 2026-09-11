@@ -977,6 +977,18 @@ export const createSigningSession = async (input: CreateSigningSessionInput, act
       .limit(1);
     if (activeForDevice) throw new Error('SIGNING_DEVICE_BUSY');
 
+    if (payload.signer.role === 'driver') {
+      const [paymentRow] = await tx
+        .select({ status: invoice.paymentStatus })
+        .from(invoice)
+        .where(and(eq(invoice.eventId, payload.event.id), eq(invoice.driverPersonId, payload.driver.id)))
+        .limit(1);
+      const paymentStatus = paymentRow?.status;
+      if (paymentStatus !== 'paid' && paymentStatus !== 'not_required') {
+        throw new Error('SIGNING_PAYMENT_REQUIRED');
+      }
+    }
+
     const [existingSignedDocument] = await tx
       .select({ id: document.id })
       .from(document)

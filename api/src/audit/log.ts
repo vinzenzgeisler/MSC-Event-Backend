@@ -23,6 +23,7 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   ],
   entry_tech_status_updated: ['techStatus', 'target'],
   entry_inspection_note_updated: ['target', 'noteUpdated'],
+  inspection_access_blocked: ['source', 'missingRequirements', 'attemptedAction'],
   entry_notes_updated: ['internalNoteUpdated', 'driverNoteUpdated', 'inspectionNoteUpdated'],
   person_publication_name_changed: [
     'previousProtected',

@@ -2162,6 +2162,10 @@ export const patchEntryPaymentStatus = async (
     throw new Error('PRE_ACCEPTANCE_PAYMENT_NOT_ALLOWED');
   }
 
+  if (current.entryFeeCents === null || current.entryFeeCents === undefined) {
+    throw new Error('PAYMENT_AMOUNT_UNKNOWN');
+  }
+
   const paidAt = input.paidAt ? new Date(input.paidAt) : new Date();
   const now = new Date();
   await recalculateInvoices(
@@ -2171,105 +2175,110 @@ export const patchEntryPaymentStatus = async (
     },
     actorUserId
   );
-  const invoiceRows = await db
-    .select({
-      id: invoice.id,
-      totalCents: invoice.totalCents,
-      paidAmountCents: invoice.paidAmountCents,
-      paymentStatus: invoice.paymentStatus
-    })
-    .from(invoice)
-    .where(and(eq(invoice.eventId, current.eventId), eq(invoice.driverPersonId, current.driverPersonId)))
-    .limit(1);
 
-  let currentInvoice = invoiceRows[0];
-  if (!currentInvoice) {
-    const [createdInvoice] = await db
-      .insert(invoice)
-      .values({
-        eventId: current.eventId,
-        driverPersonId: current.driverPersonId,
-        totalCents: current.entryFeeCents ?? 0,
-        pricingSnapshot: {
-          source: 'entry_payment_status_patch',
-          entryId: current.id
-        },
-        paymentStatus: deriveInvoicePaymentStatus(current.entryFeeCents ?? 0, 0),
-        paidAmountCents: 0,
-        updatedAt: now
-      })
-      .returning({
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`invoice-payment:${current.eventId}:${current.driverPersonId}`}, 0))`);
+
+    const invoiceRows = await tx
+      .select({
         id: invoice.id,
         totalCents: invoice.totalCents,
         paidAmountCents: invoice.paidAmountCents,
         paymentStatus: invoice.paymentStatus
-      });
-    if (!createdInvoice) {
-      throw new Error('INVOICE_CREATE_FAILED');
-    }
-    currentInvoice = createdInvoice;
-  }
+      })
+      .from(invoice)
+      .where(and(eq(invoice.eventId, current.eventId), eq(invoice.driverPersonId, current.driverPersonId)))
+      .for('update');
 
-  if (currentInvoice.paymentStatus !== 'paid') {
-    const amountToRecord = Math.max(0, currentInvoice.totalCents - (currentInvoice.paidAmountCents ?? 0));
-    if (amountToRecord > 0) {
-      await db.insert(invoicePayment).values({
-        invoiceId: currentInvoice.id,
-        amountCents: amountToRecord,
-        paidAt,
-        method: 'other',
+    let currentInvoice = invoiceRows[0];
+    if (!currentInvoice) {
+      const [createdInvoice] = await tx
+        .insert(invoice)
+        .values({
+          eventId: current.eventId,
+          driverPersonId: current.driverPersonId,
+          totalCents: current.entryFeeCents ?? 0,
+          pricingSnapshot: {
+            source: 'entry_payment_status_patch',
+            entryId: current.id
+          },
+          paymentStatus: deriveInvoicePaymentStatus(current.entryFeeCents ?? 0, 0),
+          paidAmountCents: 0,
+          updatedAt: now
+        })
+        .returning({
+          id: invoice.id,
+          totalCents: invoice.totalCents,
+          paidAmountCents: invoice.paidAmountCents,
+          paymentStatus: invoice.paymentStatus
+        });
+      if (!createdInvoice) {
+        throw new Error('INVOICE_CREATE_FAILED');
+      }
+      currentInvoice = createdInvoice;
+    }
+
+    if (currentInvoice.paymentStatus !== 'paid') {
+      const amountToRecord = Math.max(0, currentInvoice.totalCents - (currentInvoice.paidAmountCents ?? 0));
+      if (amountToRecord > 0) {
+        await tx.insert(invoicePayment).values({
+          invoiceId: currentInvoice.id,
+          amountCents: amountToRecord,
+          paidAt,
+          method: 'other',
+          recordedBy: actorUserId,
+          note: input.note,
+          createdAt: now
+        });
+      }
+    }
+
+    const sumRows = await tx
+      .select({
+        paidAmountCents: sql<number>`coalesce(sum(${invoicePayment.amountCents}), 0)`,
+        maxPaidAt: sql<Date | string | null>`max(${invoicePayment.paidAt})`
+      })
+      .from(invoicePayment)
+      .where(eq(invoicePayment.invoiceId, currentInvoice.id));
+
+    const paidAmountCents = sumRows[0]?.paidAmountCents ?? 0;
+    const maxPaidAtRaw = sumRows[0]?.maxPaidAt ?? null;
+    const maxPaidAt = maxPaidAtRaw ? new Date(maxPaidAtRaw) : paidAt;
+    const effectiveTotal = currentInvoice.totalCents ?? 0;
+    const amountOpenCents = Math.max(0, effectiveTotal - paidAmountCents);
+    const effectiveStatus = deriveInvoicePaymentStatus(effectiveTotal, paidAmountCents);
+
+    await tx
+      .update(invoice)
+      .set({
+        paidAmountCents,
+        paymentStatus: effectiveStatus,
+        paidAt: effectiveStatus === 'paid' ? maxPaidAt : null,
         recordedBy: actorUserId,
-        note: input.note,
-        createdAt: now
-      });
-    }
-  }
+        updatedAt: now
+      })
+      .where(eq(invoice.id, currentInvoice.id));
 
-  const sumRows = await db
-    .select({
-      paidAmountCents: sql<number>`coalesce(sum(${invoicePayment.amountCents}), 0)`,
-      maxPaidAt: sql<Date | string | null>`max(${invoicePayment.paidAt})`
-    })
-    .from(invoicePayment)
-    .where(eq(invoicePayment.invoiceId, currentInvoice.id));
+    await writeAuditLog(tx as never, {
+      eventId: current.eventId,
+      actorUserId,
+      action: 'entry_payment_status_set',
+      entityType: 'entry',
+      entityId: entryId,
+      payload: {
+        paymentStatus: effectiveStatus,
+        paidAmountCents,
+        amountOpenCents,
+        invoiceId: currentInvoice.id
+      }
+    });
 
-  const paidAmountCents = sumRows[0]?.paidAmountCents ?? 0;
-  const maxPaidAtRaw = sumRows[0]?.maxPaidAt ?? null;
-  const maxPaidAt = maxPaidAtRaw ? new Date(maxPaidAtRaw) : paidAt;
-  const effectiveTotal = currentInvoice.totalCents ?? 0;
-  const amountOpenCents = Math.max(0, effectiveTotal - paidAmountCents);
-  const effectiveStatus = deriveInvoicePaymentStatus(effectiveTotal, paidAmountCents);
-
-  await db
-    .update(invoice)
-    .set({
-      paidAmountCents,
-      paymentStatus: effectiveStatus,
-      paidAt: effectiveStatus === 'paid' ? maxPaidAt : null,
-      recordedBy: actorUserId,
-      updatedAt: now
-    })
-    .where(eq(invoice.id, currentInvoice.id));
-
-  await writeAuditLog(db as never, {
-    eventId: current.eventId,
-    actorUserId,
-    action: 'entry_payment_status_set',
-    entityType: 'entry',
-    entityId: entryId,
-    payload: {
-      paymentStatus: effectiveStatus,
-      paidAmountCents,
-      amountOpenCents,
-      invoiceId: currentInvoice.id
-    }
+    return { paymentStatus: effectiveStatus, paidAmountCents, amountOpenCents };
   });
 
   return {
     entryId,
-    paymentStatus: effectiveStatus,
-    paidAmountCents,
-    amountOpenCents
+    ...result
   };
 };
 

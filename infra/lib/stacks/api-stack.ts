@@ -1487,6 +1487,13 @@ export class ApiStack extends Stack {
     });
 
     this.api.addRoutes({
+      path: '/admin/iam/users/{id}/profile',
+      methods: [apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
       path: '/admin/iam/users/{id}/roles',
       methods: [apigwv2.HttpMethod.PATCH],
       integration,
@@ -1537,6 +1544,27 @@ export class ApiStack extends Stack {
 
     this.api.addRoutes({
       path: '/inspection/entries/{id}/history',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/inspection/entries/{id}/note',
+      methods: [apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/inspection/access-check',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/inspection/overview',
       methods: [apigwv2.HttpMethod.GET],
       integration,
       authorizer: jwtAuthorizer
@@ -1621,6 +1649,58 @@ export class ApiStack extends Stack {
     this.api.addRoutes({
       path: '/admin/sim/entries/{id}',
       methods: [apigwv2.HttpMethod.DELETE],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/public/events/current/event-hub',
+      methods: [apigwv2.HttpMethod.GET],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/events/{id}/voting/challenge',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/events/{id}/votes',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/public/events/{id}/voting/device-status',
+      methods: [apigwv2.HttpMethod.POST],
+      integration
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{id}/event-hub',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PATCH],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{id}/event-hub/candidates',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{id}/event-hub/candidates/{entryId}',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/events/{id}/voting/results',
+      methods: [apigwv2.HttpMethod.GET],
       integration,
       authorizer: jwtAuthorizer
     });

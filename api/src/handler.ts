@@ -281,6 +281,7 @@ import {
   loadWaiverPdfFonts,
   loadWaiverPdfLogo,
   resendSignedWaiverMail,
+  restartSignedWaiver,
   revokeSigningDevice,
   validateCompleteSigningSessionInput,
   validateCreateSigningSessionInput,
@@ -1900,6 +1901,34 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     } catch (error) {
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
       return errorJson(500, 'Load signing requirements failed', details);
+    }
+  }
+
+  const adminSigningRestartMatch = path.match(/^\/admin\/signing\/entries\/([^/]+)\/restart$/);
+  if (method === 'POST' && adminSigningRestartMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'entries.checkin.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const body = parseJsonBody(event) as { signerPersonId?: string } | null;
+      const requirements = await restartSignedWaiver(adminSigningRestartMatch[1], body?.signerPersonId, auth.sub);
+      if (!requirements) {
+        return errorJson(404, 'Entry not found');
+      }
+      return json(200, { ok: true, requirements });
+    } catch (error) {
+      if (isInvalidJson(error)) {
+        return errorJson(400, 'Invalid JSON body');
+      }
+      if (error instanceof Error && error.message === 'SIGNING_SIGNER_NOT_FOUND') {
+        return errorJson(400, 'Signing signer not found', undefined, 'SIGNING_SIGNER_NOT_FOUND');
+      }
+      if (error instanceof Error && error.message === 'SIGNING_WAIVER_NOT_SIGNED') {
+        return errorJson(409, 'No signed waiver to restart', undefined, 'SIGNING_WAIVER_NOT_SIGNED');
+      }
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Restart signed waiver failed', details);
     }
   }
 

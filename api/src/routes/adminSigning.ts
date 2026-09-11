@@ -1108,6 +1108,44 @@ export const cancelSigningSession = async (sessionId: string, actorUserId: strin
   return projectSigningSessionWithLiveIdentity(db, updated);
 };
 
+export const restartSignedWaiver = async (
+  entryId: string,
+  signerPersonId: string | undefined,
+  actorUserId: string | null
+) => {
+  const payload = await buildSigningCasePayload(entryId, signerPersonId);
+  if (!payload) {
+    return null;
+  }
+  const db = await getDb();
+  const superseded = await db
+    .update(document)
+    .set({ status: 'superseded' })
+    .where(and(
+      eq(document.eventId, payload.event.id),
+      eq(document.driverPersonId, payload.signer.id),
+      eq(document.type, 'waiver_signed'),
+      eq(document.status, 'generated')
+    ))
+    .returning({ id: document.id });
+  if (superseded.length === 0) {
+    throw new Error('SIGNING_WAIVER_NOT_SIGNED');
+  }
+  await writeAuditLog(db as never, {
+    eventId: payload.event.id,
+    actorUserId,
+    action: 'signing_waiver_restarted',
+    entityType: 'person',
+    entityId: payload.signer.id,
+    payload: {
+      entryId,
+      signerRole: payload.signer.role,
+      supersededDocumentIds: superseded.map((row) => row.id)
+    }
+  });
+  return getSigningRequirements(entryId);
+};
+
 export const getCurrentDeviceSigningSession = async (deviceToken: string) => {
   const device = await resolveDeviceByToken(deviceToken);
   if (!device) {

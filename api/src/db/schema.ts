@@ -928,7 +928,7 @@ export const document = pgTable(
       'document_type_check',
       sql`${table.type} in ('waiver', 'tech_check', 'waiver_batch', 'tech_check_batch', 'entry_confirmation', 'waiver_signed')`
     ),
-    statusCheck: check('document_status_check', sql`${table.status} in ('generated', 'failed')`),
+    statusCheck: check('document_status_check', sql`${table.status} in ('generated', 'failed', 'superseded')`),
     templateVariantCheck: check(
       'document_template_variant_check',
       sql`${table.type} != 'tech_check' or ${table.templateVariant} in ('auto', 'moto')`

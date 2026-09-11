@@ -72,7 +72,8 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   terminal_participant_session_returned: [],
   terminal_participant_session_completed: ['entryIds', 'workflowType', 'operation', 'participantId', 'charityRegistrationId', 'documentIds'],
   waiver_signed_mail_queued: ['signingSessionId', 'outboxId', 'recipient'],
-  waiver_signed_mail_resent: ['signingSessionId', 'outboxId', 'recipient']
+  waiver_signed_mail_resent: ['signingSessionId', 'outboxId', 'recipient'],
+  waiver_paper_export_created: ['driverCount', 'version']
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

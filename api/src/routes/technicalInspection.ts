@@ -29,7 +29,7 @@ import { doesAssetObjectExist, getPresignedAssetsDownloadUrl } from '../docs/sto
 import type { AuthContext } from '../http/auth';
 import { WAIVER_VERSION } from '../legal/waiverContract';
 import { queueOperationalMails } from '../mail/operationalOutbox';
-import { buildOperationalNoticeHtml, operationalPresentationData } from '../mail/operationalPresentation';
+import { operationalPresentationData } from '../mail/operationalPresentation';
 import { getOrgaNotificationRecipients } from '../observability/recipients';
 import { logOperationalEvent } from '../observability/logger';
 import { resolveIamUserDisplayNames } from './adminIam';
@@ -135,41 +135,12 @@ type InspectionDecisionEmailInput = {
   note: string | null;
   driverEmail: string | null;
   driverDisplayName: string;
+  className: string | null;
   vehicleMake: string | null;
   vehicleModel: string | null;
   startNumber: string | null;
   eventName: string | null;
-};
-
-const buildInspectionResultHtml = (input: InspectionDecisionEmailInput, audience: 'driver' | 'orga', inspector?: string | null): string => {
-  const passed = input.techStatus === 'passed';
-  const statusLabel = passed ? 'BESTANDEN' : 'NICHT BESTANDEN';
-  const vehicleName = [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || 'Unbekanntes Fahrzeug';
-  const targetLabel = input.target === 'backup' ? 'Ersatzfahrzeug' : 'Hauptfahrzeug';
-  const footer = audience === 'driver'
-    ? passed
-      ? 'Das Fahrzeug ist für die Veranstaltung technisch zugelassen.'
-      : 'Bitte klären Sie die genannten Punkte mit der technischen Abnahme.'
-    : 'Interne Prozessmeldung – keine Teilnehmerkommunikation.';
-
-  return buildOperationalNoticeHtml({
-    intro: audience === 'orga'
-      ? 'Interne Statusmeldung aus der technischen Abnahme.'
-      : `Hallo ${input.driverDisplayName}, die technische Prüfung Ihres Fahrzeugs wurde abgeschlossen.`,
-    statusLabel,
-    tone: passed ? 'success' : 'danger',
-    fields: [
-      { label: 'Veranstaltung', value: input.eventName ?? 'Unbekannte Veranstaltung' },
-      { label: 'Fahrer', value: input.driverDisplayName },
-      { label: 'Startnummer', value: input.startNumber ? `#${input.startNumber}` : '-' },
-      { label: 'Fahrzeug', value: vehicleName },
-      { label: 'Prüfobjekt', value: targetLabel },
-      ...(audience === 'orga' ? [{ label: 'Prüfer', value: inspector ?? '-' }] : [])
-    ],
-    noteTitle: passed ? 'Hinweis des Prüfers' : 'Ablehnungsgrund',
-    note: input.note,
-    footer
-  });
+  decidedAt: string;
 };
 
 const inspectionPresentationData = (status: 'passed' | 'failed', audience: 'driver' | 'orga') => {
@@ -183,79 +154,96 @@ const inspectionPresentationData = (status: 'passed' | 'failed', audience: 'driv
   });
 };
 
+// Driver-facing mails use the same canonical customer-facing layout as every other system
+// mail (entry-context card + prose), instead of the operational-notice box used for the
+// internal orga notification below — the two audiences intentionally look different.
+const driverInspectionPresentationData = (
+  input: InspectionDecisionEmailInput,
+  status: 'passed' | 'failed'
+) => {
+  const statusLabel = status === 'passed' ? 'BESTANDEN' : 'NICHT BESTANDEN';
+  const vehicleLabel = [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || null;
+  return {
+    headerTitle: `TECHNISCHE ABNAHME · ${statusLabel}`,
+    preheader: `Prüfergebnis technische Abnahme: ${statusLabel}`,
+    eventName: input.eventName ?? undefined,
+    startNumber: input.startNumber ?? undefined,
+    vehicleLabel: vehicleLabel ?? undefined,
+    renderOptions: {
+      showBadge: true,
+      mailLabel: 'Technische Abnahme',
+      includeEntryContext: true
+    }
+  };
+};
+
 function buildInspectionDecisionMail(input: InspectionDecisionEmailInput) {
   if (input.techStatus === 'pending') return null;
   const vehicleName =
-    [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || 'Ihr Fahrzeug';
+    [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || 'dein Fahrzeug';
   const vehicleLabel =
     input.target === 'backup' ? `${vehicleName} (Ersatzfahrzeug)` : vehicleName;
   const driverName = input.driverDisplayName;
   const startInfo = input.startNumber ? ` · Startnummer #${input.startNumber}` : '';
   const eventInfo = input.eventName ?? 'MSC Oberlausitzer Dreiländereck';
+  // Driver-facing mails use the standard canonical layout (entry-context card + prose)
+  // like every other system mail, instead of a bespoke HTML box.
+  const templateData = driverInspectionPresentationData(input, input.techStatus);
 
   if (input.techStatus === 'passed') {
     const subject = `Technische Abnahme bestätigt – ${eventInfo}`;
     const bodyText = [
       `Hallo ${driverName},`,
       '',
-      `Ihr Fahrzeug ${vehicleLabel} wurde bei der technischen Abnahme zugelassen.${startInfo}`,
+      `dein Fahrzeug ${vehicleLabel} wurde bei der technischen Abnahme zugelassen.${startInfo}`,
       '',
       ...(input.note ? [`Hinweis des Prüfers: ${input.note}`, ''] : []),
-      'Wir freuen uns auf Sie bei der Veranstaltung.',
+      'Wir freuen uns auf dich bei der Veranstaltung.',
       '',
-      'Mit freundlichen Grüßen',
-      'Ihr Organisationsteam',
+      'Viele Grüße',
+      'Dein Organisationsteam',
       'MSC Oberlausitzer Dreiländereck e.V.'
     ].join('\n');
-    return {
-      subject,
-      bodyText,
-      bodyHtml: buildInspectionResultHtml(input, 'driver'),
-      templateData: inspectionPresentationData(input.techStatus, 'driver')
-    };
+    return { subject, bodyText, templateData };
   } else {
     const subject = `Technische Abnahme: Fahrzeug nicht zugelassen – ${eventInfo}`;
     const bodyText = [
       `Hallo ${driverName},`,
       '',
-      `Ihr Fahrzeug ${vehicleLabel} wurde bei der technischen Abnahme leider nicht zugelassen.${startInfo}`,
+      `dein Fahrzeug ${vehicleLabel} wurde bei der technischen Abnahme leider nicht zugelassen.${startInfo}`,
       '',
       ...(input.note ? [`Ablehnungsgrund: ${input.note}`, ''] : []),
-      'Bitte wenden Sie sich bei Fragen an das Organisationsteam.',
+      'Bitte wende dich bei Fragen an das Organisationsteam.',
       '',
-      'Mit freundlichen Grüßen',
-      'Ihr Organisationsteam',
+      'Viele Grüße',
+      'Dein Organisationsteam',
       'MSC Oberlausitzer Dreiländereck e.V.'
     ].join('\n');
-    return {
-      subject,
-      bodyText,
-      bodyHtml: buildInspectionResultHtml(input, 'driver'),
-      templateData: inspectionPresentationData(input.techStatus, 'driver')
-    };
+    return { subject, bodyText, templateData };
   }
 }
 
+// Kept deliberately short and technical: a driver/class/timestamp/inspector fact sheet,
+// plus the rejection note when relevant. This is an internal alert, not a customer mail.
 const buildInspectionOrgaMail = (input: InspectionDecisionEmailInput & { inspector: string | null }) => {
   const completedStatus: 'passed' | 'failed' = input.techStatus === 'passed' ? 'passed' : 'failed';
   const statusLabel = input.techStatus === 'passed' ? 'BESTANDEN' : 'ABGELEHNT';
   const vehicleName = [input.vehicleMake, input.vehicleModel].filter(Boolean).join(' ') || 'Unbekanntes Fahrzeug';
   const bodyText = [
-    'Eine technische Abnahme wurde abgeschlossen.',
+    `Technische Abnahme: ${statusLabel}`,
     '',
-    `Veranstaltung: ${input.eventName ?? 'Unbekannte Veranstaltung'}`,
-    `Status: ${statusLabel}`,
     `Fahrer: ${input.driverDisplayName}`,
+    `Klasse: ${input.className ?? '-'}`,
     `Startnummer: ${input.startNumber ?? '-'}`,
-    `Fahrzeug: ${vehicleName}`,
-    `Ziel: ${input.target === 'backup' ? 'Ersatzfahrzeug' : 'Hauptfahrzeug'}`,
+    `Fahrzeug: ${vehicleName}${input.target === 'backup' ? ' (Ersatzfahrzeug)' : ''}`,
+    `Veranstaltung: ${input.eventName ?? '-'}`,
+    `Zeit: ${input.decidedAt}`,
     `Prüfer: ${input.inspector ?? '-'}`,
-    ...(input.note ? ['', input.techStatus === 'failed' ? `Ablehnungsgrund: ${input.note}` : `Hinweis: ${input.note}`] : [])
+    ...(input.techStatus === 'failed' && input.note ? ['', `Ablehnungsgrund: ${input.note}`] : [])
   ].join('\n');
   return {
     subject: `[Technische Abnahme][${statusLabel}] #${input.startNumber ?? '-'} – ${input.driverDisplayName}`,
     bodyText,
-    bodyHtml: buildInspectionResultHtml(input, 'orga', input.inspector),
     templateData: inspectionPresentationData(completedStatus, 'orga')
   };
 };
@@ -705,6 +693,13 @@ export const updateInspectionDecision = async (
     .limit(1);
   const protectedPeople = await loadProtectedInspectionPeople(db, entryId);
   const safeNote = replaceProtectedLegalNamesInValue(note, protectedPeople) as string | null;
+  // Resolved before opening the transaction below so the Cognito network call never holds
+  // the row lock taken inside it.
+  const inspectorDisplayNames = await resolveIamUserDisplayNames([actorUserId]);
+  const inspectorDisplayName = inspectorDisplayNames.get(actorUserId);
+  const inspectorLabel = inspectorDisplayName
+    ? `${inspectorDisplayName} (${auth.email ?? actorUserId})`
+    : (auth.email ?? actorUserId);
   const result = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select({
@@ -787,13 +782,15 @@ export const updateInspectionDecision = async (
         note: safeNote,
         driverEmail: delivery?.email ?? null,
         driverDisplayName: existing.driverDisplayName,
+        className: existing.className ?? null,
         vehicleMake: input.target === 'backup' ? (existing.backupVehicle?.make ?? null) : existing.vehicleMake,
         vehicleModel: input.target === 'backup' ? (existing.backupVehicle?.model ?? null) : existing.vehicleModel,
         startNumber: existing.startNumber,
-        eventName: existing.eventName ?? null
+        eventName: existing.eventName ?? null,
+        decidedAt: now.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })
       };
       const driverMail = buildInspectionDecisionMail(baseMailInput);
-      const orgaMail = buildInspectionOrgaMail({ ...baseMailInput, inspector: auth.email ?? actorUserId });
+      const orgaMail = buildInspectionOrgaMail({ ...baseMailInput, inspector: inspectorLabel });
       const mails = [
         ...(delivery?.email && driverMail
           ? [{ audience: 'driver' as const, toEmail: delivery.email, ...driverMail }]

@@ -285,6 +285,9 @@ import {
   validatePairingClaimInput
 } from './routes/adminSigning';
 import { createStampCardExport, validateStampCardExportInput } from './routes/stampCards';
+import { createWaiverPaperExport, validateWaiverPaperExportInput } from './routes/adminWaiverPaperExport';
+import { renderBlankWaiverPdf } from './docs/pdf';
+import type { WaiverLocale } from './legal/waiverContract';
 import {
   completePublicCodriverInvitation,
   createCodriverInvitation,
@@ -4504,6 +4507,24 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   }
 
+  if (method === 'GET' && path === '/admin/waiver/blank-export') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'exports.read')) return errorJson(403, 'Forbidden');
+    try {
+      const localeParam = event.queryStringParameters?.locale;
+      const locale: WaiverLocale = localeParam === 'en-GB' || localeParam === 'cs-CZ' || localeParam === 'pl-PL' ? localeParam : 'de-DE';
+      const buffer = await renderBlankWaiverPdf(locale);
+      return json(200, {
+        ok: true,
+        filename: `haftverzicht-blanko-${locale}.pdf`,
+        mimeType: 'application/pdf',
+        dataBase64: buffer.toString('base64')
+      });
+    } catch (error) {
+      return errorJson(500, 'Blank waiver PDF generation failed');
+    }
+  }
+
   if (method === 'POST' && path === '/admin/stamp-cards/export') {
     const auth = getAuthContext(event);
     if (!hasPermission(auth, 'stamp_cards.print')) return errorJson(403, 'Forbidden');
@@ -4532,6 +4553,37 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       });
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
       return errorJson(500, 'Stamp-card export failed', details);
+    }
+  }
+
+  if (method === 'POST' && path === '/admin/waiver/paper-export') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'exports.write')) return errorJson(403, 'Forbidden');
+    try {
+      const input = validateWaiverPaperExportInput(parseJsonBody(event));
+      const download = await createWaiverPaperExport(input, auth.sub);
+      return json(200, {
+        ok: true,
+        filename: download.filename,
+        mimeType: 'application/zip',
+        downloadUrl: download.downloadUrl,
+        driverCount: download.driverCount
+      });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof Error && error.message === 'EVENT_NOT_FOUND') return errorJson(404, 'Event not found');
+      if (error instanceof Error && error.message === 'WAIVER_PAPER_EXPORT_NO_ENTRIES') {
+        return errorJson(409, 'No accepted entries found for this event', undefined, 'WAIVER_PAPER_EXPORT_NO_ENTRIES');
+      }
+      logOperationalEvent('error', 'export.waiver_paper_failed', {
+        requestId: event.requestContext.requestId,
+        route: path,
+        method,
+        errorCode: errorCodeOf(error)
+      });
+      const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
+      return errorJson(500, 'Waiver paper export failed', details);
     }
   }
 

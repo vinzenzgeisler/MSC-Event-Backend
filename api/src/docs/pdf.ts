@@ -5,6 +5,8 @@ import { format } from 'node:util';
 import type { QrCodeMatrix } from './girocode';
 import { renderAutoChecklistV1 } from './templates/tech-check/auto/v1';
 import { renderMotoChecklistV1 } from './templates/tech-check/moto/v1';
+import { buildPaperWaiverContract } from '../legal/paperWaiverContract';
+import type { WaiverLocale } from '../legal/waiverContract';
 
 type PersonInfo = {
   fullName: string;
@@ -456,8 +458,13 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
       .moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
     doc.y += 10;
 
+    // authoritativeFullText's first line repeats authoritativeTitle (see flattenWaiverDocument);
+    // strip it so the heading above isn't shown a second time as the first line of the body.
+    const authoritativeBody = authoritativeFullText.startsWith(authoritativeTitle)
+      ? authoritativeFullText.slice(authoritativeTitle.length).replace(/^\n+/, '')
+      : authoritativeFullText;
     doc.font(regularFont).fontSize(9.4).fillColor(BODY)
-      .text(authoritativeFullText, LEFT, doc.y, { width: W, lineGap: 1.5 });
+      .text(authoritativeBody, LEFT, doc.y, { width: W, lineGap: 1.5 });
     doc.y += 14;
 
     rule(RULE);
@@ -483,8 +490,13 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
       doc.font(boldFont).fontSize(8.5).fillColor('#9A3412')
         .text('Unverbindliche Übersetzung als Verständnishilfe. Rechtsverbindlich ist ausschließlich die deutsche Fassung.', LEFT, doc.y, { width: W });
       doc.y += 10;
+      const translationTitle = payload.payload.contract.translation.title;
+      const translationFullText = payload.payload.contract.translation.fullText;
+      const translationBody = translationFullText.startsWith(translationTitle)
+        ? translationFullText.slice(translationTitle.length).replace(/^\n+/, '')
+        : translationFullText;
       doc.font(regularFont).fontSize(9.4).fillColor(BODY)
-        .text(payload.payload.contract.translation.fullText, LEFT, doc.y, { width: W, lineGap: 1.5 });
+        .text(translationBody, LEFT, doc.y, { width: W, lineGap: 1.5 });
       doc.y += 10;
       doc.font(regularFont).fontSize(7).fillColor(DIM)
         .text(`Übersetzung: ${payload.payload.contract.translation.locale} · Text-Hash: ${payload.payload.contract.translation.textHash}`, LEFT, doc.y, { width: W });
@@ -492,6 +504,263 @@ export const renderSignedWaiverEvidencePdf = async (payload: SignedWaiverEvidenc
 
     doc.end();
   });
+
+export type PaperWaiverPdfPayload = {
+  event: { name: string; startsAt: string; endsAt: string; location: string };
+  driver: { firstName: string; lastName: string; birthdate: string | null };
+  isMinor: boolean;
+  requiresMedicalCertificate: boolean;
+  contract: {
+    locale: string;
+    version: string;
+    title: string;
+    fullText: string;
+    authoritativeLocale?: string;
+    authoritativeTitle?: string;
+    authoritativeFullText?: string;
+    translation?: { locale: string; title: string; fullText: string; binding: false } | null;
+  };
+  entries: Array<{
+    className: string;
+    orgaCode: string | null;
+    startNumber: string | null;
+    codriver: { firstName: string; lastName: string } | null;
+    vehicles: Array<{ role: 'primary' | 'backup'; make: string; model: string; year: number | null; startNumber: string | null }>;
+  }>;
+};
+
+const stripLeadingTitleText = (text: string, title: string): string =>
+  text.startsWith(title) ? text.slice(title.length).replace(/^\n+/, '') : text;
+
+export const renderPaperWaiverPdf = async (payload: PaperWaiverPdfPayload): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: 'A4',
+      margins: { top: 36, bottom: 36, left: 40, right: 40 },
+      info: {
+        Title: 'Persönliche Haftverzichtserklärung (Papierfassung)',
+        Author: 'MSC Oberlausitzer Dreiländereck e.V.',
+        Subject: payload.event.name
+      }
+    });
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const LEFT = doc.page.margins.left;
+    const W = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const TOP = doc.page.margins.top;
+    const BLUE = '#163A70';
+    const YELLOW = '#E6B800';
+    const LABEL = '#334155';
+    const BODY = '#0F172A';
+    const DIM = '#475569';
+    const RULE = '#D8DEE9';
+    const LW = Math.floor(W * 0.37);
+
+    const rule = (color = RULE) => {
+      doc.save().lineWidth(0.8).strokeColor(color)
+        .moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    };
+
+    const sectionHeader = (title: string) => {
+      doc.y += 4;
+      doc.font('Helvetica-Bold').fontSize(7.8).fillColor(BLUE)
+        .text(title.toUpperCase(), LEFT, doc.y, { width: W, characterSpacing: 0.7 });
+      const lineY = doc.y + 1;
+      doc.save().lineWidth(1).strokeColor(YELLOW).moveTo(LEFT, lineY).lineTo(LEFT + W, lineY).stroke().restore();
+      doc.y = lineY + 7;
+    };
+
+    const kv = (label: string, value: string) => {
+      const startY = doc.y;
+      doc.font('Helvetica-Bold').fontSize(8.3).fillColor(LABEL).text(label, LEFT, startY, { width: LW });
+      const afterLabel = doc.y;
+      doc.font('Helvetica').fontSize(8.8).fillColor(BODY).text(value || '—', LEFT + LW, startY, { width: W - LW, lineGap: 0.5 });
+      doc.y = Math.max(doc.y, afterLabel) + 2;
+    };
+
+    const signatureBlock = (label: string) => {
+      doc.y += 20;
+      const lineY = doc.y;
+      doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT, lineY).lineTo(LEFT + Math.floor(W * 0.46), lineY).stroke().restore();
+      doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT + Math.floor(W * 0.56), lineY).lineTo(LEFT + W, lineY).stroke().restore();
+      doc.y += 3;
+      doc.font('Helvetica').fontSize(7.8).fillColor(DIM)
+        .text('Ort, Datum', LEFT, doc.y, { width: Math.floor(W * 0.46) });
+      doc.font('Helvetica').fontSize(7.8).fillColor(DIM)
+        .text(label, LEFT + Math.floor(W * 0.56), doc.y, { width: W - Math.floor(W * 0.56) });
+    };
+
+    // ── page 1 — personalized header ─────────────────────────────────────
+    doc.y = TOP;
+    doc.font('Helvetica-Bold').fontSize(13).fillColor(BLUE)
+      .text('Persönliche Haftverzichtserklärung', LEFT, doc.y, { width: W });
+    doc.font('Helvetica').fontSize(8.5).fillColor(DIM)
+      .text('Papierfassung zur Unterschrift vor Ort · MSC Oberlausitzer Dreiländereck e.V.', LEFT, doc.y, { width: W });
+    doc.y += 4;
+    doc.save().lineWidth(1.5).strokeColor(BLUE).moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 8;
+
+    sectionHeader('Veranstaltung');
+    kv('Veranstaltung', payload.event.name);
+    kv('Datum', `${payload.event.startsAt} – ${payload.event.endsAt}`);
+    kv('Ort', payload.event.location || '—');
+
+    sectionHeader('Teilnehmer');
+    kv('Fahrer', `${payload.driver.firstName} ${payload.driver.lastName}${payload.driver.birthdate ? `, geb. ${payload.driver.birthdate}` : ''}`);
+    const flags: string[] = [];
+    if (payload.isMinor) flags.push('Minderjährig – Unterschrift der/des Erziehungsberechtigten erforderlich');
+    if (payload.requiresMedicalCertificate) flags.push('Attest ab 70 J. erforderlich');
+    if (flags.length > 0) kv('Hinweise', flags.join(' · '));
+
+    sectionHeader('Fahrzeuge & Nennungen');
+    payload.entries.forEach((entry, idx) => {
+      const entryVal = [entry.className, entry.startNumber ? `#${entry.startNumber}` : null, entry.orgaCode ? `Orga: ${entry.orgaCode}` : null]
+        .filter(Boolean).join(' · ');
+      kv(`Nennung ${idx + 1}`, entryVal);
+      if (entry.codriver) kv('  Beifahrer', `${entry.codriver.firstName} ${entry.codriver.lastName}`);
+      entry.vehicles.forEach((v) => {
+        const vLabel = v.role === 'backup' ? '  Ersatzfahrzeug' : '  Fahrzeug';
+        const vVal = [v.make, v.model, v.year ? String(v.year) : null, v.startNumber ? `#${v.startNumber}` : null].filter(Boolean).join(' ');
+        kv(vLabel, vVal);
+      });
+    });
+
+    doc.y += 6;
+    doc.font('Helvetica').fontSize(8.5).fillColor(BODY)
+      .text('Die nachfolgenden Seiten enthalten den vollständigen Text der Vertrags- und Verzichtserklärung. Bitte lesen und anschließend unterschreiben.', LEFT, doc.y, { width: W, lineGap: 1.2 });
+
+    // ── page 2 — authoritative German text + signature ─────────────────────
+    doc.addPage();
+    doc.y = TOP;
+    const authoritativeLocale = payload.contract.authoritativeLocale ?? payload.contract.locale;
+    const authoritativeTitle = payload.contract.authoritativeTitle ?? payload.contract.title;
+    const authoritativeFullText = payload.contract.authoritativeFullText ?? payload.contract.fullText;
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(BLUE).text(authoritativeTitle, LEFT, doc.y, { width: W });
+    doc.y += 2;
+    doc.save().lineWidth(1).strokeColor(YELLOW).moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 10;
+    doc.font('Helvetica').fontSize(9.4).fillColor(BODY)
+      .text(stripLeadingTitleText(authoritativeFullText, authoritativeTitle), LEFT, doc.y, { width: W, lineGap: 1.5 });
+    doc.y += 10;
+    doc.font('Helvetica').fontSize(7).fillColor(DIM)
+      .text(`Sprache: ${authoritativeLocale} · Version: ${payload.contract.version} (Papierfassung)`, LEFT, doc.y, { width: W });
+
+    rule(RULE);
+    doc.y += 4;
+    signatureBlock(payload.isMinor ? 'Unterschrift Erziehungsberechtigte/r' : 'Unterschrift Fahrer/in');
+    if (payload.isMinor) {
+      signatureBlock('Unterschrift Fahrer/in (zur Kenntnisnahme)');
+    }
+
+    // ── page 3 — non-binding translation (only if the driver's locale differs) ──
+    if (payload.contract.translation) {
+      doc.addPage();
+      doc.y = TOP;
+      doc.font('Helvetica-Bold').fontSize(11).fillColor(BLUE).text(payload.contract.translation.title, LEFT, doc.y, { width: W });
+      doc.y += 5;
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#9A3412')
+        .text('Unverbindliche Übersetzung als Verständnishilfe. Rechtsverbindlich ist ausschließlich die deutsche Fassung auf der vorherigen Seite.', LEFT, doc.y, { width: W });
+      doc.y += 10;
+      doc.font('Helvetica').fontSize(9.4).fillColor(BODY)
+        .text(stripLeadingTitleText(payload.contract.translation.fullText, payload.contract.translation.title), LEFT, doc.y, { width: W, lineGap: 1.5 });
+      doc.y += 10;
+      doc.font('Helvetica').fontSize(7).fillColor(DIM)
+        .text(`Übersetzung: ${payload.contract.translation.locale}`, LEFT, doc.y, { width: W });
+    }
+
+    doc.end();
+  });
+
+// A single, unpersonalized paper form: same legal text and layout family as the per-driver
+// paper-fallback export, but with blank fill-in fields instead of data, for handing out and
+// filling in by hand (e.g. when a driver isn't in the system yet or as a spare template).
+export const renderBlankWaiverPdf = async (locale: WaiverLocale = 'de-DE'): Promise<Buffer> => {
+  const contract = buildPaperWaiverContract(locale);
+
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: 'A4',
+      margins: { top: 36, bottom: 36, left: 40, right: 40 },
+      info: {
+        Title: 'Haftverzichtserklärung (Blanko)',
+        Author: 'MSC Oberlausitzer Dreiländereck e.V.'
+      }
+    });
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const LEFT = doc.page.margins.left;
+    const W = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const TOP = doc.page.margins.top;
+    const BLUE = '#163A70';
+    const YELLOW = '#E6B800';
+    const LABEL = '#334155';
+    const DIM = '#475569';
+    const BODY = '#0F172A';
+
+    const sectionHeader = (title: string) => {
+      doc.y += 4;
+      doc.font('Helvetica-Bold').fontSize(7.8).fillColor(BLUE)
+        .text(title.toUpperCase(), LEFT, doc.y, { width: W, characterSpacing: 0.7 });
+      const lineY = doc.y + 1;
+      doc.save().lineWidth(1).strokeColor(YELLOW).moveTo(LEFT, lineY).lineTo(LEFT + W, lineY).stroke().restore();
+      doc.y = lineY + 7;
+    };
+
+    const fillLine = (label: string, width: number) => {
+      const startY = doc.y;
+      doc.font('Helvetica-Bold').fontSize(8.3).fillColor(LABEL).text(label, LEFT, startY, { width: 130 });
+      const lineY = startY + 11;
+      doc.save().lineWidth(0.8).strokeColor('#94A3B8').moveTo(LEFT + 130, lineY).lineTo(LEFT + width, lineY).stroke().restore();
+      doc.y = lineY + 8;
+    };
+
+    doc.y = TOP;
+    doc.font('Helvetica-Bold').fontSize(13).fillColor(BLUE)
+      .text('Haftverzichtserklärung', LEFT, doc.y, { width: W });
+    doc.font('Helvetica').fontSize(8.5).fillColor(DIM)
+      .text('Blankoformular zum handschriftlichen Ausfüllen · MSC Oberlausitzer Dreiländereck e.V.', LEFT, doc.y, { width: W });
+    doc.y += 4;
+    doc.save().lineWidth(1.5).strokeColor(BLUE).moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 8;
+
+    sectionHeader('Teilnehmer und Fahrzeug');
+    fillLine('Name, Vorname:', W);
+    fillLine('Geburtsdatum:', W * 0.5);
+    fillLine('Klasse:', W * 0.5);
+    fillLine('Startnummer:', W * 0.5);
+    fillLine('Fahrzeug (Hersteller/Modell):', W);
+
+    doc.y += 4;
+    doc.font('Helvetica').fontSize(8.5).fillColor(BODY)
+      .text('Die nachfolgenden Seiten enthalten den vollständigen Text der Vertrags- und Verzichtserklärung. Bitte lesen und anschließend unterschreiben.', LEFT, doc.y, { width: W, lineGap: 1.2 });
+
+    doc.addPage();
+    doc.y = TOP;
+    const authoritativeTitle = contract.authoritativeTitle;
+    const authoritativeFullText = contract.authoritativeFullText;
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(BLUE).text(authoritativeTitle, LEFT, doc.y, { width: W });
+    doc.y += 2;
+    doc.save().lineWidth(1).strokeColor(YELLOW).moveTo(LEFT, doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 10;
+    doc.font('Helvetica').fontSize(9.4).fillColor(BODY)
+      .text(stripLeadingTitleText(authoritativeFullText, authoritativeTitle), LEFT, doc.y, { width: W, lineGap: 1.5 });
+    doc.y += 20;
+
+    doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT, doc.y).lineTo(LEFT + Math.floor(W * 0.46), doc.y).stroke().restore();
+    doc.save().lineWidth(0.8).strokeColor('#111827').moveTo(LEFT + Math.floor(W * 0.56), doc.y).lineTo(LEFT + W, doc.y).stroke().restore();
+    doc.y += 3;
+    doc.font('Helvetica').fontSize(7.8).fillColor(DIM).text('Ort, Datum', LEFT, doc.y, { width: Math.floor(W * 0.46) });
+    doc.font('Helvetica').fontSize(7.8).fillColor(DIM).text('Unterschrift', LEFT + Math.floor(W * 0.56), doc.y, { width: W - Math.floor(W * 0.56) });
+
+    doc.end();
+  });
+};
 
 export const renderTechCheckPdf = async (payload: TechCheckPayload): Promise<Buffer> => {
   const baseData = {

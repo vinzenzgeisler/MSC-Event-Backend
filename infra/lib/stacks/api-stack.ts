@@ -1619,6 +1619,20 @@ export class ApiStack extends Stack {
       authorizer: jwtAuthorizer
     });
 
+    this.api.addRoutes({
+      path: '/admin/waiver/paper-export',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
+    this.api.addRoutes({
+      path: '/admin/waiver/blank-export',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+
     // --- Simulator Leaderboard ---
     this.api.addRoutes({
       path: '/public/sim/config',

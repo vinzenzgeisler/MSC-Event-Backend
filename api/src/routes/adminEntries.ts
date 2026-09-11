@@ -391,10 +391,10 @@ const listEntriesByDeleteState = async (query: ListEntriesQuery, redactSensitive
       techStatus: entry.techStatus,
       techCheckedAt: entry.techCheckedAt,
       techCheckedBy: entry.techCheckedBy,
-      waiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
-      waiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
-      codriverWaiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.codriverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
-      codriverWaiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.codriverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      waiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."event_id" = ${entry.eventId} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      waiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."event_id" = ${entry.eventId} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      codriverWaiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."event_id" = ${entry.eventId} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.codriverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      codriverWaiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."event_id" = ${entry.eventId} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.codriverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
       startNumberNorm: entry.startNumberNorm,
       orgaCode: entry.orgaCode,
       confirmationMailSentAt: entry.confirmationMailSentAt,
@@ -620,8 +620,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
       techStatus: entry.techStatus,
       techCheckedAt: entry.techCheckedAt,
       techCheckedBy: entry.techCheckedBy,
-      waiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
-      waiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."entry_id" = ${entry.id} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      waiverSignedDocumentId: sql<string | null>`(select d."id" from "document" d where d."event_id" = ${entry.eventId} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
+      waiverSignedAt: sql<Date | null>`(select d."created_at" from "document" d where d."event_id" = ${entry.eventId} and d."type" = 'waiver_signed' and d."status" = 'generated' and d."driver_person_id" = ${entry.driverPersonId} order by d."created_at" desc, d."id" desc limit 1)`,
       startNumberNorm: entry.startNumberNorm,
       orgaCode: entry.orgaCode,
       isBackupVehicle: entry.isBackupVehicle,
@@ -798,13 +798,40 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
     .where(eq(document.entryId, entryId))
     .orderBy(sql`${document.createdAt} desc`, sql`${document.id} desc`);
 
-  const driverSignedWaiverDocument = documentRows.find(
-    (row) => row.type === 'waiver_signed' && row.status === 'generated' && row.driverPersonId === current.driverPersonId
+  const waiverSignerPersonIds = Array.from(
+    new Set(
+      [current.driverPersonId, current.codriverPersonId, ...charityCodriverRows.map((row) => row.personId)].filter(
+        (id): id is string => Boolean(id)
+      )
+    )
+  );
+  const waiverDocumentRows = waiverSignerPersonIds.length
+    ? await db
+        .select({
+          id: document.id,
+          type: document.type,
+          status: document.status,
+          driverPersonId: document.driverPersonId,
+          signingSessionId: document.signingSessionId,
+          createdAt: document.createdAt
+        })
+        .from(document)
+        .where(
+          and(
+            eq(document.eventId, current.eventId),
+            eq(document.type, 'waiver_signed'),
+            eq(document.status, 'generated'),
+            inArray(document.driverPersonId, waiverSignerPersonIds)
+          )
+        )
+        .orderBy(sql`${document.createdAt} desc`, sql`${document.id} desc`)
+    : [];
+
+  const driverSignedWaiverDocument = waiverDocumentRows.find(
+    (row) => row.driverPersonId === current.driverPersonId
   ) ?? null;
   const codriverSignedWaiverDocument = current.codriverPersonId
-    ? documentRows.find(
-        (row) => row.type === 'waiver_signed' && row.status === 'generated' && row.driverPersonId === current.codriverPersonId
-      ) ?? null
+    ? waiverDocumentRows.find((row) => row.driverPersonId === current.codriverPersonId) ?? null
     : null;
 
   const driverEntryRows = await db
@@ -1038,10 +1065,8 @@ export const getEntryDetail = async (entryId: string, redactSensitiveFields: boo
             revokedBy: item.revokedBy,
             revocationReason: item.revocationReason,
             waiverSigned: (() => {
-              const signedDocument = documentRows.find(
-                (row) => row.type === 'waiver_signed'
-                  && row.status === 'generated'
-                  && row.driverPersonId === item.personId
+              const signedDocument = waiverDocumentRows.find(
+                (row) => row.driverPersonId === item.personId
                   && (!item.terminalSessionId || row.signingSessionId === item.terminalSessionId)
               ) ?? null;
               return {

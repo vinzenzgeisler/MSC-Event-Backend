@@ -2,7 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { entry, event as eventTable, eventClass, eventHubCandidateOverride, eventHubConfig, eventVote, person } from '../db/schema';
+import { entry, event as eventTable, eventClass, eventHubCandidateOverride, eventHubConfig, eventVote, eventVoteResultSnapshot, person } from '../db/schema';
 import { isPubliclyEligible } from '../domain/eventHubFacts';
 import { loadCandidateRows } from './eventHub';
 
@@ -194,6 +194,31 @@ export const getVotingResults = async (eventId: string) => {
   });
 
   return { classes, invalidVoteCount: invalidVoteCount[0]?.count ?? 0 };
+};
+
+export const deleteCandidateVotes = async (eventId: string, entryId: string, actorUserId: string | null) => {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const deletedVotes = await tx
+      .delete(eventVote)
+      .where(and(eq(eventVote.eventId, eventId), eq(eventVote.entryId, entryId)))
+      .returning({ id: eventVote.id });
+    const deletedSnapshots = await tx
+      .delete(eventVoteResultSnapshot)
+      .where(and(eq(eventVoteResultSnapshot.eventId, eventId), eq(eventVoteResultSnapshot.entryId, entryId)))
+      .returning({ entryId: eventVoteResultSnapshot.entryId });
+
+    await writeAuditLog(tx as never, {
+      eventId,
+      actorUserId,
+      action: 'event_hub_candidate_votes_deleted',
+      entityType: 'entry',
+      entityId: entryId,
+      payload: { deletedVoteCount: deletedVotes.length, deletedSnapshotCount: deletedSnapshots.length }
+    });
+
+    return { deletedVoteCount: deletedVotes.length };
+  });
 };
 
 const escapeCsv = (value: unknown): string => {

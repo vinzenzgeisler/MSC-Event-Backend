@@ -115,6 +115,7 @@ import {
 } from './routes/eventHub';
 import {
   eventExists,
+  deleteCandidateVotes,
   getAdminCandidates,
   getEventHubConfig,
   getVotingResults,
@@ -4271,6 +4272,20 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, ...results });
     } catch (error) {
       return errorJson(500, 'Get voting results failed');
+    }
+  }
+
+  const eventHubCandidateVotesMatch = path.match(/^\/admin\/events\/([^/]+)\/voting\/results\/([^/]+)$/);
+  if (method === 'DELETE' && eventHubCandidateVotesMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'event_hub.write')) {
+      return errorJson(403, 'Forbidden');
+    }
+    try {
+      const result = await deleteCandidateVotes(eventHubCandidateVotesMatch[1], eventHubCandidateVotesMatch[2], auth.sub);
+      return json(200, { ok: true, ...result });
+    } catch (error) {
+      return errorJson(500, 'Delete candidate votes failed');
     }
   }
 

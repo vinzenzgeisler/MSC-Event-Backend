@@ -4,6 +4,8 @@ const { distanceKm } = require('../dist/domain/geoDistance.js');
 const { filterPublicCandidates, computeEventHubFacts } = require('../dist/domain/eventHubFacts.js');
 const { resolveVotingStatus } = require('../dist/routes/eventHub.js');
 const { getMissingAuctionFields, requiredAuctionBidCents, validateAuctionBidInput } = require('../dist/routes/eventAuction.js');
+const fs = require('node:fs');
+const path = require('node:path');
 
 // distanceKm: Görlitz to Dresden is roughly 90km.
 const goerlitzToDresdenKm = distanceKm(51.1528, 14.9881, 51.0504, 13.7373);
@@ -127,5 +129,11 @@ assert.equal(
   resolveVotingStatus({ votingMode: 'forced_closed', votingOpensAt: '2026-09-01T00:00:00Z', votingClosesAt: null }, now),
   'closed'
 );
+
+// Admins can remove all votes for one candidate through a write-protected endpoint.
+const handlerSource = fs.readFileSync(path.join(__dirname, '../src/handler.ts'), 'utf8');
+const infraSource = fs.readFileSync(path.join(__dirname, '../../infra/lib/stacks/api-stack.ts'), 'utf8');
+assert.match(handlerSource, /DELETE'[\s\S]*eventHubCandidateVotesMatch[\s\S]*event_hub\.write[\s\S]*deleteCandidateVotes/);
+assert.match(infraSource, /voting\/results\/\{entryId\}'[\s\S]*HttpMethod\.DELETE/);
 
 console.log('event-hub-voting.test.js: ok');

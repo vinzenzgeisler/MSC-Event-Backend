@@ -59,7 +59,7 @@ const bidAdminPatchSchema = z.object({
 const mediaUploadSchema = z.object({
   kind: z.enum(['image', 'video']),
   contentType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm']),
-  fileSizeBytes: z.number().int().positive().max(100 * 1024 * 1024)
+  fileSizeBytes: z.number().int().positive().max(250 * 1024 * 1024)
 }).superRefine((value, context) => {
   if (value.kind === 'image' && (!value.contentType.startsWith('image/') || value.fileSizeBytes > 15 * 1024 * 1024)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['contentType'], message: 'Invalid auction image' });
@@ -68,6 +68,7 @@ const mediaUploadSchema = z.object({
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['contentType'], message: 'Invalid auction video' });
   }
 });
+export const validateAuctionMediaUploadInput = (payload: unknown) => mediaUploadSchema.parse(payload);
 
 const rowToAuction = async (row: any) => row ? ({
   eventId: row.event_id,
@@ -141,7 +142,7 @@ export const getMissingAuctionFields = (auction: {
 };
 
 export const initAuctionMediaUpload = async (eventId: string, payload: unknown) => {
-  const input = mediaUploadSchema.parse(payload);
+  const input = validateAuctionMediaUploadInput(payload);
   const extensionByType: Record<string, string> = {
     'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm'
   };

@@ -2,7 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
-import { entry, event as eventTable, eventHubCandidateOverride, eventHubConfig, eventVote, person } from '../db/schema';
+import { entry, event as eventTable, eventClass, eventHubCandidateOverride, eventHubConfig, eventVote, person } from '../db/schema';
 import { isPubliclyEligible } from '../domain/eventHubFacts';
 import { loadCandidateRows } from './eventHub';
 
@@ -10,7 +10,11 @@ export type AdminCandidateExclusionReason = 'processing_restricted' | 'objection
 
 export const getAdminCandidates = async (eventId: string) => {
   const db = await getDb();
-  const rows = await loadCandidateRows(db, eventId);
+  const [rows, classRows] = await Promise.all([
+    loadCandidateRows(db, eventId),
+    db.select({ id: eventClass.id, name: eventClass.name }).from(eventClass).where(eq(eventClass.eventId, eventId))
+  ]);
+  const classNames = new Map(classRows.map((eventClassRow) => [eventClassRow.id, eventClassRow.name]));
   return rows.map((row) => {
     let exclusionReason: AdminCandidateExclusionReason = null;
     if (row.overrideState === 'hidden') {
@@ -25,6 +29,7 @@ export const getAdminCandidates = async (eventId: string) => {
     return {
       entryId: row.entryId,
       classId: row.classId,
+      className: classNames.get(row.classId) ?? row.classId,
       startNumberNorm: row.startNumberNorm,
       driverName: `${row.driverFirstName} ${row.driverLastName}`.trim(),
       vehicleMake: row.vehicleMake,
@@ -145,6 +150,7 @@ export const getVotingResults = async (eventId: string) => {
   const rows = await db
     .select({
       classId: eventVote.classId,
+      className: eventClass.name,
       entryId: eventVote.entryId,
       startNumberNorm: entry.startNumberNorm,
       driverFirstName: person.firstName,
@@ -153,9 +159,10 @@ export const getVotingResults = async (eventId: string) => {
     })
     .from(eventVote)
     .innerJoin(entry, eq(eventVote.entryId, entry.id))
+    .innerJoin(eventClass, and(eq(eventVote.classId, eventClass.id), eq(eventVote.eventId, eventClass.eventId)))
     .innerJoin(person, eq(entry.driverPersonId, person.id))
     .where(eq(eventVote.eventId, eventId))
-    .groupBy(eventVote.classId, eventVote.entryId, entry.startNumberNorm, person.firstName, person.lastName);
+    .groupBy(eventVote.classId, eventClass.name, eventVote.entryId, entry.startNumberNorm, person.firstName, person.lastName);
 
   const byClass = new Map<string, typeof rows>();
   for (const row of rows) {
@@ -183,7 +190,7 @@ export const getVotingResults = async (eventId: string) => {
         percent: total > 0 ? Math.round((r.voteCount / total) * 1000) / 10 : 0
       };
     });
-    return { classId, entries: ranked };
+    return { classId, className: classRows[0]?.className ?? classId, entries: ranked };
   });
 
   return { classes, invalidVoteCount: invalidVoteCount[0]?.count ?? 0 };
@@ -198,12 +205,12 @@ const escapeCsv = (value: unknown): string => {
 };
 
 export const votingResultsToCsv = (results: Awaited<ReturnType<typeof getVotingResults>>): string => {
-  const headers = ['classId', 'rank', 'entryId', 'startNumber', 'driverName', 'voteCount', 'percent'];
+  const headers = ['classId', 'className', 'rank', 'entryId', 'startNumber', 'driverName', 'voteCount', 'percent'];
   const lines = [headers.join(',')];
   for (const cls of results.classes) {
     for (const entryRow of cls.entries) {
       lines.push(
-        [cls.classId, entryRow.rank, entryRow.entryId, entryRow.startNumberNorm, entryRow.driverName, entryRow.voteCount, entryRow.percent]
+        [cls.classId, cls.className, entryRow.rank, entryRow.entryId, entryRow.startNumberNorm, entryRow.driverName, entryRow.voteCount, entryRow.percent]
           .map(escapeCsv)
           .join(',')
       );

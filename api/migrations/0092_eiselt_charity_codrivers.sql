@@ -11,7 +11,7 @@ declare
   migration_key constant text := 'eiselt-charity-codrivers-sebastian-thiele';
   target_event_id constant uuid := 'e5dc0ac8-3a6f-4ee3-9a1c-45e2057d2a28';
   target_entry_id constant uuid := 'b13e4c30-62c9-4ec3-adb6-9ee24f30de3c';
-  driver_person_id constant uuid := '6ae5e057-4544-4c9a-88d4-c971f8e4f920';
+  target_driver_person_id constant uuid := '6ae5e057-4544-4c9a-88d4-c971f8e4f920';
   kai_person_id constant uuid := '98cd818a-dc93-4f4b-b122-84e80af734b3';
   selina_person_id constant uuid := '51f386c0-2eef-46aa-b2e2-3d70c06fbf79';
   alina_person_id constant uuid := 'e66fc370-1648-4b83-9eb7-285bc695906a';
@@ -34,7 +34,7 @@ begin
   end if;
 
   perform "id" from "entry" where "id" = target_entry_id for update;
-  perform "id" from "person" where "id" in (driver_person_id, kai_person_id) order by "id" for update;
+  perform "id" from "person" where "id" in (target_driver_person_id, kai_person_id) order by "id" for update;
 
   select count(*) into affected_count
   from "entry" e
@@ -43,7 +43,7 @@ begin
   join "class" c on c."id" = e."class_id"
   where e."id" = target_entry_id
     and e."event_id" = target_event_id
-    and e."driver_person_id" = driver_person_id
+    and e."driver_person_id" = target_driver_person_id
     and e."codriver_person_id" = kai_person_id
     and e."start_number_norm" = '76'
     and e."registration_status" = 'submitted_verified'
@@ -143,7 +143,7 @@ begin
     jsonb_build_object(
       'migrationKey', migration_key,
       'entryId', target_entry_id,
-      'driverPersonId', driver_person_id,
+      'driverPersonId', target_driver_person_id,
       'charityCodrivers', jsonb_build_array(
         jsonb_build_object('registrationId', kai_registration_id, 'personId', kai_person_id, 'name', 'Kai Eiselt'),
         jsonb_build_object('registrationId', selina_registration_id, 'personId', selina_person_id, 'name', 'Selina Eiselt'),

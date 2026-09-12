@@ -1731,6 +1731,12 @@ export class ApiStack extends Stack {
       authorizer: jwtAuthorizer
     });
     this.api.addRoutes({
+      path: '/admin/events/{id}/auction/media-upload',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: jwtAuthorizer
+    });
+    this.api.addRoutes({
       path: '/admin/events/{id}/auction/bids',
       methods: [apigwv2.HttpMethod.GET],
       integration,

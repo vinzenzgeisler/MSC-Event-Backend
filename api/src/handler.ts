@@ -129,6 +129,7 @@ import {
   AuctionConfigError,
   getAdminAuction,
   getPublicCurrentAuction,
+  initAuctionMediaUpload,
   listAdminAuctionBids,
   patchAdminAuction,
   patchAdminAuctionBid,
@@ -4152,6 +4153,19 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
       if (error instanceof AuctionConfigError) return errorJson(409, error.message, { missingFields: error.missingFields }, error.message);
       return errorJson(500, 'Manage auction failed');
+    }
+  }
+
+  const adminAuctionMediaUploadMatch = path.match(/^\/admin\/events\/([^/]+)\/auction\/media-upload$/);
+  if (method === 'POST' && adminAuctionMediaUploadMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'event_hub.write')) return errorJson(403, 'Forbidden');
+    try {
+      return json(200, { ok: true, ...(await initAuctionMediaUpload(adminAuctionMediaUploadMatch[1], parseJsonBody(event))) });
+    } catch (error) {
+      if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+      if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      return errorJson(500, 'Initialize auction media upload failed');
     }
   }
 

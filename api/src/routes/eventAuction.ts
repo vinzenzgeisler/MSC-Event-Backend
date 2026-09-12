@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/client';
+import { getPresignedAssetsDownloadUrl, getPresignedAssetsUploadUrl } from '../docs/storage';
 
 export type AuctionStatus = 'draft' | 'open' | 'closed';
 
@@ -13,6 +14,8 @@ const auctionPatchSchema = z.object({
   termsI18n: translationsSchema,
   imageUrl: z.string().url().max(2000).nullable().optional(),
   videoUrl: z.string().url().max(2000).nullable().optional(),
+  imageS3Key: z.string().max(1000).nullable().optional(),
+  videoS3Key: z.string().max(1000).nullable().optional(),
   startingBidCents: z.number().int().min(0).max(100_000_000).optional(),
   minIncrementCents: z.number().int().min(1).max(10_000_000).optional()
 }).refine((value) => Object.keys(value).length > 0, 'Provide at least one field');
@@ -53,14 +56,29 @@ const bidAdminPatchSchema = z.object({
   adminNote: z.string().trim().max(2000).nullable().optional()
 }).refine((value) => Object.keys(value).length > 0, 'Provide at least one field');
 
-const rowToAuction = (row: any) => row ? ({
+const mediaUploadSchema = z.object({
+  kind: z.enum(['image', 'video']),
+  contentType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm']),
+  fileSizeBytes: z.number().int().positive().max(100 * 1024 * 1024)
+}).superRefine((value, context) => {
+  if (value.kind === 'image' && (!value.contentType.startsWith('image/') || value.fileSizeBytes > 15 * 1024 * 1024)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['contentType'], message: 'Invalid auction image' });
+  }
+  if (value.kind === 'video' && !value.contentType.startsWith('video/')) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['contentType'], message: 'Invalid auction video' });
+  }
+});
+
+const rowToAuction = async (row: any) => row ? ({
   eventId: row.event_id,
   status: row.status as AuctionStatus,
   titleI18n: row.title_i18n ?? {},
   descriptionI18n: row.description_i18n ?? {},
   termsI18n: row.terms_i18n ?? {},
-  imageUrl: row.image_url,
-  videoUrl: row.video_url,
+  imageUrl: row.image_s3_key ? await getPresignedAssetsDownloadUrl(row.image_s3_key, 3600) : row.image_url,
+  videoUrl: row.video_s3_key ? await getPresignedAssetsDownloadUrl(row.video_s3_key, 3600) : row.video_url,
+  imageS3Key: row.image_s3_key ?? null,
+  videoS3Key: row.video_s3_key ?? null,
   startingBidCents: row.starting_bid_cents,
   minIncrementCents: row.min_increment_cents,
   closedAt: row.closed_at,
@@ -86,7 +104,7 @@ export const getPublicCurrentAuction = async () => {
   const eventId = (eventResult.rows[0] as any)?.id as string | undefined;
   if (!eventId) return null;
   const result = await db.execute(auctionSelect(eventId));
-  const auction = rowToAuction(result.rows[0]);
+  const auction = await rowToAuction(result.rows[0]);
   if (!auction || auction.status === 'draft') return null;
   return auction;
 };
@@ -94,9 +112,9 @@ export const getPublicCurrentAuction = async () => {
 export const getAdminAuction = async (eventId: string) => {
   const db = await getDb();
   const result = await db.execute(auctionSelect(eventId));
-  return rowToAuction(result.rows[0]) ?? {
+  return await rowToAuction(result.rows[0]) ?? {
     eventId, status: 'draft' as const, titleI18n: {}, descriptionI18n: {}, termsI18n: {},
-    imageUrl: null, videoUrl: null, startingBidCents: 0, minIncrementCents: 1000,
+    imageUrl: null, videoUrl: null, imageS3Key: null, videoS3Key: null, startingBidCents: 0, minIncrementCents: 1000,
     closedAt: null, winnerBidId: null, currentHighestCents: null, nextMinimumCents: 0,
     termsVersion: termsVersionFor(eventId, {})
   };
@@ -121,12 +139,22 @@ export const getMissingAuctionFields = (auction: {
   ];
 };
 
+export const initAuctionMediaUpload = async (eventId: string, payload: unknown) => {
+  const input = mediaUploadSchema.parse(payload);
+  const extensionByType: Record<string, string> = {
+    'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm'
+  };
+  const key = `public/event-auctions/${eventId}/${input.kind}-${randomUUID()}.${extensionByType[input.contentType]}`;
+  const upload = await getPresignedAssetsUploadUrl(key, input.contentType, 900);
+  return { key, uploadUrl: upload.url, requiredHeaders: upload.requiredHeaders };
+};
+
 export const patchAdminAuction = async (eventId: string, payload: unknown, actor: string | null) => {
   const input = auctionPatchSchema.parse(payload);
   const db = await getDb();
   if (input.status === 'open') {
     const currentResult = await db.execute(auctionSelect(eventId));
-    const current = rowToAuction(currentResult.rows[0]) ?? await getAdminAuction(eventId);
+    const current = await rowToAuction(currentResult.rows[0]) ?? await getAdminAuction(eventId);
     const candidate = {
       imageUrl: input.imageUrl === undefined ? current.imageUrl : input.imageUrl,
       videoUrl: input.videoUrl === undefined ? current.videoUrl : input.videoUrl,
@@ -139,10 +167,10 @@ export const patchAdminAuction = async (eventId: string, payload: unknown, actor
     if (missingFields.length > 0) throw new AuctionConfigError(missingFields);
   }
   await db.execute(sql`
-    insert into event_auction(event_id, status, title_i18n, description_i18n, terms_i18n, image_url, video_url, starting_bid_cents, min_increment_cents, updated_by)
+    insert into event_auction(event_id, status, title_i18n, description_i18n, terms_i18n, image_url, video_url, image_s3_key, video_s3_key, starting_bid_cents, min_increment_cents, updated_by)
     values (${eventId}, ${input.status ?? 'draft'}, ${JSON.stringify(input.titleI18n ?? {})}::jsonb,
       ${JSON.stringify(input.descriptionI18n ?? {})}::jsonb, ${JSON.stringify(input.termsI18n ?? {})}::jsonb,
-      ${input.imageUrl ?? null}, ${input.videoUrl ?? null}, ${input.startingBidCents ?? 0}, ${input.minIncrementCents ?? 1000}, ${actor})
+      ${input.imageUrl ?? null}, ${input.videoUrl ?? null}, ${input.imageS3Key ?? null}, ${input.videoS3Key ?? null}, ${input.startingBidCents ?? 0}, ${input.minIncrementCents ?? 1000}, ${actor})
     on conflict(event_id) do update set
       status = coalesce(${input.status ?? null}, event_auction.status),
       title_i18n = coalesce(${input.titleI18n ? JSON.stringify(input.titleI18n) : null}::jsonb, event_auction.title_i18n),
@@ -150,6 +178,8 @@ export const patchAdminAuction = async (eventId: string, payload: unknown, actor
       terms_i18n = coalesce(${input.termsI18n ? JSON.stringify(input.termsI18n) : null}::jsonb, event_auction.terms_i18n),
       image_url = case when ${input.imageUrl !== undefined} then ${input.imageUrl ?? null} else event_auction.image_url end,
       video_url = case when ${input.videoUrl !== undefined} then ${input.videoUrl ?? null} else event_auction.video_url end,
+      image_s3_key = case when ${input.imageS3Key !== undefined} then ${input.imageS3Key ?? null} else event_auction.image_s3_key end,
+      video_s3_key = case when ${input.videoS3Key !== undefined} then ${input.videoS3Key ?? null} else event_auction.video_s3_key end,
       starting_bid_cents = coalesce(${input.startingBidCents ?? null}, event_auction.starting_bid_cents),
       min_increment_cents = coalesce(${input.minIncrementCents ?? null}, event_auction.min_increment_cents),
       closed_at = case when ${input.status ?? null} = 'closed' then now() when ${input.status ?? null} = 'open' then null else event_auction.closed_at end,

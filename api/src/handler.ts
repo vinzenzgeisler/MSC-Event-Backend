@@ -126,6 +126,7 @@ import {
 } from './routes/adminEventHub';
 import {
   AuctionBidError,
+  AuctionConfigError,
   getAdminAuction,
   getPublicCurrentAuction,
   listAdminAuctionBids,
@@ -4149,6 +4150,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     } catch (error) {
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+      if (error instanceof AuctionConfigError) return errorJson(409, error.message, { missingFields: error.missingFields }, error.message);
       return errorJson(500, 'Manage auction failed');
     }
   }

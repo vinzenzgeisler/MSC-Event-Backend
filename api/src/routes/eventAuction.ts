@@ -102,9 +102,42 @@ export const getAdminAuction = async (eventId: string) => {
   };
 };
 
+export class AuctionConfigError extends Error {
+  constructor(public missingFields: string[]) { super('AUCTION_CONFIG_INCOMPLETE'); }
+}
+
+export const getMissingAuctionFields = (auction: {
+  imageUrl: string | null; videoUrl: string | null; minIncrementCents: number;
+  titleI18n: Record<string, string>; descriptionI18n: Record<string, string>; termsI18n: Record<string, string>;
+}) => {
+  const requiredLocales = ['de', 'en', 'cz', 'pl'];
+  return [
+    ...(!auction.imageUrl ? ['imageUrl'] : []),
+    ...(!auction.videoUrl ? ['videoUrl'] : []),
+    ...(auction.minIncrementCents <= 0 ? ['minIncrementCents'] : []),
+    ...requiredLocales.filter((locale) => !auction.titleI18n[locale]?.trim()).map((locale) => `titleI18n.${locale}`),
+    ...requiredLocales.filter((locale) => !auction.descriptionI18n[locale]?.trim()).map((locale) => `descriptionI18n.${locale}`),
+    ...requiredLocales.filter((locale) => !auction.termsI18n[locale]?.trim()).map((locale) => `termsI18n.${locale}`)
+  ];
+};
+
 export const patchAdminAuction = async (eventId: string, payload: unknown, actor: string | null) => {
   const input = auctionPatchSchema.parse(payload);
   const db = await getDb();
+  if (input.status === 'open') {
+    const currentResult = await db.execute(auctionSelect(eventId));
+    const current = rowToAuction(currentResult.rows[0]) ?? await getAdminAuction(eventId);
+    const candidate = {
+      imageUrl: input.imageUrl === undefined ? current.imageUrl : input.imageUrl,
+      videoUrl: input.videoUrl === undefined ? current.videoUrl : input.videoUrl,
+      minIncrementCents: input.minIncrementCents ?? current.minIncrementCents,
+      titleI18n: input.titleI18n ?? current.titleI18n,
+      descriptionI18n: input.descriptionI18n ?? current.descriptionI18n,
+      termsI18n: input.termsI18n ?? current.termsI18n
+    };
+    const missingFields = getMissingAuctionFields(candidate);
+    if (missingFields.length > 0) throw new AuctionConfigError(missingFields);
+  }
   await db.execute(sql`
     insert into event_auction(event_id, status, title_i18n, description_i18n, terms_i18n, image_url, video_url, starting_bid_cents, min_increment_cents, updated_by)
     values (${eventId}, ${input.status ?? 'draft'}, ${JSON.stringify(input.titleI18n ?? {})}::jsonb,

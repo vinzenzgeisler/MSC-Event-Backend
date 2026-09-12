@@ -126,12 +126,13 @@ export class AuctionConfigError extends Error {
 
 export const getMissingAuctionFields = (auction: {
   imageUrl: string | null; videoUrl: string | null; minIncrementCents: number;
+  imageS3Key?: string | null; videoS3Key?: string | null;
   titleI18n: Record<string, string>; descriptionI18n: Record<string, string>; termsI18n: Record<string, string>;
 }) => {
   const requiredLocales = ['de', 'en', 'cz', 'pl'];
   return [
-    ...(!auction.imageUrl ? ['imageUrl'] : []),
-    ...(!auction.videoUrl ? ['videoUrl'] : []),
+    ...(!auction.imageUrl && !auction.imageS3Key ? ['imageUrl'] : []),
+    ...(!auction.videoUrl && !auction.videoS3Key ? ['videoUrl'] : []),
     ...(auction.minIncrementCents <= 0 ? ['minIncrementCents'] : []),
     ...requiredLocales.filter((locale) => !auction.titleI18n[locale]?.trim()).map((locale) => `titleI18n.${locale}`),
     ...requiredLocales.filter((locale) => !auction.descriptionI18n[locale]?.trim()).map((locale) => `descriptionI18n.${locale}`),
@@ -158,6 +159,8 @@ export const patchAdminAuction = async (eventId: string, payload: unknown, actor
     const candidate = {
       imageUrl: input.imageUrl === undefined ? current.imageUrl : input.imageUrl,
       videoUrl: input.videoUrl === undefined ? current.videoUrl : input.videoUrl,
+      imageS3Key: input.imageS3Key === undefined ? current.imageS3Key : input.imageS3Key,
+      videoS3Key: input.videoS3Key === undefined ? current.videoS3Key : input.videoS3Key,
       minIncrementCents: input.minIncrementCents ?? current.minIncrementCents,
       titleI18n: input.titleI18n ?? current.titleI18n,
       descriptionI18n: input.descriptionI18n ?? current.descriptionI18n,

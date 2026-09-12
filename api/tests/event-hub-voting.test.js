@@ -105,6 +105,7 @@ const readyAuction = {
 };
 assert.deepEqual(getMissingAuctionFields(readyAuction), []);
 assert.deepEqual(getMissingAuctionFields({ ...readyAuction, videoUrl: null, titleI18n: { ...readyAuction.titleI18n, pl: '' } }), ['videoUrl', 'titleI18n.pl']);
+assert.deepEqual(getMissingAuctionFields({ ...readyAuction, imageUrl: null, videoUrl: null, imageS3Key: 'auction/helmet.jpg', videoS3Key: 'auction/reel.mp4' }), []);
 
 // Voting status boundaries.
 const now = new Date('2026-09-12T12:00:00Z');

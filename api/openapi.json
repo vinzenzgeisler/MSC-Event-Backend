@@ -368,7 +368,8 @@
                   "deviceSessionId": { "type": "string", "format": "uuid" },
                   "entryIds": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "type": "string", "format": "uuid" } },
                   "operation": { "type": "string", "enum": ["create", "edit"], "default": "create" },
-                  "participantPersonId": { "type": "string", "format": "uuid", "description": "Required only when operation is edit" }
+                  "participantPersonId": { "type": "string", "format": "uuid", "description": "Required only when operation is edit" },
+                  "participantDraft": { "$ref": "#/components/schemas/CharityParticipantDraft", "description": "Optional operator-entered draft for charity registrations. When present, the session starts at operator approval." }
                 }
               }
             }
@@ -410,6 +411,19 @@
         "tags": ["public"],
         "summary": "Submit customer-entered co-driver data for operator review",
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/RegularParticipantDraft" },
+                  { "$ref": "#/components/schemas/CharityParticipantDraft" }
+                ]
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "Draft submitted" }, "400": { "description": "Invalid participant data" } }
       }
     },
@@ -9503,6 +9517,50 @@
           "cylinders",
           "vehicleHistory"
         ]
+      },
+      "RegularParticipantDraft": {
+        "type": "object",
+        "properties": {
+          "locale": { "type": "string", "enum": ["de-DE", "en-GB", "cs-CZ", "pl-PL"], "default": "de-DE" },
+          "firstName": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "lastName": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "birthdate": { "type": "string", "format": "date" },
+          "country": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "street": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "zip": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9\\- ]{1,11}$" },
+          "city": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "email": { "type": "string", "format": "email" },
+          "phone": { "type": "string" },
+          "emergencyContactFirstName": { "type": "string" },
+          "emergencyContactLastName": { "type": "string" },
+          "emergencyContactPhone": { "type": "string" },
+          "motorsportHistory": { "type": ["string", "null"] },
+          "guardianFullName": { "type": ["string", "null"] },
+          "guardianEmail": { "type": ["string", "null"], "format": "email" },
+          "guardianPhone": { "type": ["string", "null"] },
+          "guardianRelationship": { "type": ["string", "null"] }
+        },
+        "required": ["firstName", "lastName", "birthdate", "country", "street", "zip", "city", "email", "phone", "emergencyContactFirstName", "emergencyContactLastName", "emergencyContactPhone"]
+      },
+      "CharityParticipantDraft": {
+        "type": "object",
+        "description": "Minimal charity co-driver data. For minors guardianFullName and guardianRelationship plus at least one of guardianEmail or guardianPhone are required by the API.",
+        "properties": {
+          "locale": { "type": "string", "enum": ["de-DE", "en-GB", "cs-CZ", "pl-PL"], "default": "de-DE" },
+          "firstName": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "lastName": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "birthdate": { "type": "string", "format": "date" },
+          "country": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "street": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "zip": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9\\- ]{1,11}$" },
+          "city": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "email": { "type": ["string", "null"], "format": "email", "description": "Optional PDF recipient for adult participants." },
+          "guardianFullName": { "type": ["string", "null"] },
+          "guardianEmail": { "type": ["string", "null"], "format": "email" },
+          "guardianPhone": { "type": ["string", "null"] },
+          "guardianRelationship": { "type": ["string", "null"] }
+        },
+        "required": ["firstName", "lastName", "birthdate", "country", "street", "zip", "city"]
       },
       "CodriverInvitationParticipantInput": {
         "type": "object",

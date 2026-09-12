@@ -319,8 +319,7 @@ import {
   submitParticipantDraft,
   validateCreateParticipantTerminalSession,
   validateParticipantApproval,
-  validateParticipantCompletion,
-  validateParticipantDraft
+  validateParticipantCompletion
 } from './routes/terminalWorkflows';
 import {
   getPublicLegalCurrent,
@@ -581,8 +580,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!deviceToken) {
         return errorJson(401, 'Terminal device token required', undefined, 'SIGNING_DEVICE_TOKEN_REQUIRED');
       }
-      const draft = validateParticipantDraft(parseJsonBody(event));
-      const session = await submitParticipantDraft(terminalDraftMatch[1], draft, deviceToken);
+      const session = await submitParticipantDraft(terminalDraftMatch[1], parseJsonBody(event), deviceToken);
       return json(200, { ok: true, session });
     } catch (error) {
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
@@ -619,7 +617,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (error instanceof Error && (error.message === 'SIGNING_TIMESTAMPS_INVALID' || error.message === 'SIGNATURE_INVALID' || error.message === 'SIGNING_GUARDIAN_EMAIL_REQUIRED')) {
         return errorJson(400, error.message, undefined, error.message);
       }
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('WAIVER_') || error.message.startsWith('TECHNICAL_'))) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('WAIVER_') || error.message.startsWith('TECHNICAL_') || error.message.startsWith('BIRTHDATE_') || error.message.startsWith('GUARDIAN_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;
@@ -1814,7 +1812,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     } catch (error) {
       if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
-      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('WAIVER_') || error.message.startsWith('TECHNICAL_'))) {
+      if (error instanceof Error && (error.message.startsWith('PARTICIPANT_') || error.message.startsWith('SIGNING_') || error.message.startsWith('TERMINAL_') || error.message.startsWith('CODRIVER_') || error.message.startsWith('CHARITY_') || error.message.startsWith('WAIVER_') || error.message.startsWith('TECHNICAL_') || error.message.startsWith('BIRTHDATE_') || error.message.startsWith('GUARDIAN_'))) {
         return errorJson(409, error.message, undefined, error.message);
       }
       const details = stage === 'dev' && error instanceof Error ? { error: error.message } : undefined;

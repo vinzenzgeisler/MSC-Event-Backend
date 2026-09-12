@@ -38,13 +38,24 @@ Fahrer mit zwei angenommenen Starts (Doppelstarter), davon einer mit Ersatzfahrz
   Beifahrer-HV die technische Abnahme nicht blockiert (siehe Schritt 10).
 
 ## 7. Charity-Beifahrer bei erlaubter Klasse
-- Unverändert testen.
+- Charity-Fahrt sowohl mit „Person gibt Daten am Tablet ein“ als auch mit „Daten hier erfassen“ starten.
+- Pflichtdaten: Vorname, Nachname, Geburtsdatum, Land, Straße, PLZ und Ort; E-Mail ist optional.
+- Ohne E-Mail vollständig unterschreiben: PDF und Auditnachweis werden gespeichert, ohne dass ein
+  fehlender Mailversand den Vorgang als Fehler markiert.
+- Mit E-Mail unterschreiben und den automatischen PDF-Versand prüfen.
+- Je eine Nennung mit offenem/bestandenem/abgelehntem TA-Status sowie nicht zugelassener Nennung
+  testen. Charity muss unabhängig von diesen Status möglich sein.
+- Gelöschte Nennungen und Klassen ohne Beifahrerfreigabe bleiben gesperrt.
 
 ## 8. Negativtest: Charity-/Beifahrerklasse nicht erlaubt
 - Unverändert testen.
 
 ## 9. Minderjährigenfall mit Sorgeberechtigten
-- Unverändert testen.
+- Charity-U18 jeweils mit Vertreter-E-Mail ohne Telefon und mit Vertreter-Telefon ohne E-Mail
+  abschließen. Name und Verhältnis der gesetzlichen Vertretung bleiben Pflicht.
+- Ohne E-Mail und Telefon muss die Eingabe verständlich abgewiesen werden.
+- Anwesenheit und Vertretungsberechtigung müssen vor der Tablet-Unterschrift weiterhin durch die
+  Orga bestätigt werden.
 
 ## 10. Technischen Zugriff bei offener Zahlung bzw. fehlendem HV blockieren
 - Fahrer mit offenem Nenngeld ODER ohne aktuellen Fahrer-HV in der technischen Abnahme (Suche, QR,

@@ -34,7 +34,7 @@ const workflowTypeSchema = z.enum(['regular_codriver_registration', 'charity_cod
 const localeSchema = z.enum(['de-DE', 'en-GB', 'cs-CZ', 'pl-PL']);
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const phoneSchema = z.string().trim().transform((value) => value.replace(/\D+/g, '')).refine((value) => value.length >= 6 && value.length <= 15);
-const draftSchema = z.object({
+const participantIdentitySchema = z.object({
   locale: localeSchema.default('de-DE'),
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
@@ -42,25 +42,33 @@ const draftSchema = z.object({
   country: z.string().trim().min(1).max(100),
   street: z.string().trim().min(1).max(160),
   zip: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9\- ]{1,11}$/),
-  city: z.string().trim().min(1).max(120),
+  city: z.string().trim().min(1).max(120)
+});
+const guardianFieldsSchema = z.object({
+  guardianFullName: z.string().trim().max(160).nullable().optional(),
+  guardianEmail: z.string().trim().email().transform((value) => value.toLowerCase()).nullable().optional(),
+  guardianPhone: phoneSchema.nullable().optional(),
+  guardianRelationship: z.string().trim().max(80).nullable().optional()
+});
+const regularDraftSchema = participantIdentitySchema.extend({
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
   phone: phoneSchema,
   emergencyContactFirstName: z.string().trim().min(1).max(100),
   emergencyContactLastName: z.string().trim().min(1).max(100),
   emergencyContactPhone: phoneSchema,
-  motorsportHistory: z.string().trim().max(4000).nullable().optional(),
-  guardianFullName: z.string().trim().max(160).nullable().optional(),
-  guardianEmail: z.string().trim().email().nullable().optional(),
-  guardianPhone: phoneSchema.nullable().optional(),
-  guardianRelationship: z.string().trim().max(80).nullable().optional()
-});
+  motorsportHistory: z.string().trim().max(4000).nullable().optional()
+}).and(guardianFieldsSchema);
+const charityDraftSchema = participantIdentitySchema.extend({
+  email: z.string().trim().email().transform((value) => value.toLowerCase()).nullable().optional()
+}).and(guardianFieldsSchema);
 
 const createSessionSchema = z.object({
   deviceSessionId: z.string().uuid(),
   workflowType: workflowTypeSchema,
   entryIds: z.array(z.string().uuid()).min(1).max(20),
   operation: z.enum(['create', 'edit']).optional().default('create'),
-  participantPersonId: z.string().uuid().optional()
+  participantPersonId: z.string().uuid().optional(),
+  participantDraft: charityDraftSchema.optional()
 }).superRefine((value, context) => {
   if (value.operation === 'edit' && value.workflowType !== 'regular_codriver_registration') {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['operation'], message: 'Only regular co-drivers can be edited' });
@@ -70,6 +78,9 @@ const createSessionSchema = z.object({
   }
   if (value.operation === 'create' && value.participantPersonId) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['participantPersonId'], message: 'participantPersonId is only allowed for editing' });
+  }
+  if (value.participantDraft && value.workflowType !== 'charity_codriver_registration') {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['participantDraft'], message: 'participantDraft is only allowed for charity registrations' });
   }
 });
 
@@ -90,9 +101,16 @@ const completeSchema = z.object({
 });
 
 type WorkflowType = z.infer<typeof workflowTypeSchema>;
-export type ParticipantDraft = z.infer<typeof draftSchema>;
+export type RegularParticipantDraft = z.infer<typeof regularDraftSchema>;
+export type CharityParticipantDraft = z.infer<typeof charityDraftSchema>;
+export type ParticipantDraft = RegularParticipantDraft | CharityParticipantDraft;
 type Prechecks = z.infer<typeof approveSchema>;
 type CompleteInput = z.infer<typeof completeSchema>;
+
+export const participantWorkflowContextOptions = (workflowType: WorkflowType, operation: 'create' | 'edit' = 'create') => ({
+  allowAfterTechnicalInspection: workflowType === 'charity_codriver_registration' || operation === 'edit',
+  allowWithoutEntryEligibility: workflowType === 'charity_codriver_registration'
+});
 
 const projectParticipantSession = (session: any) => {
   const draft = session?.draftPayload as (ParticipantDraft & { publicationName?: string | null }) | null | undefined;
@@ -176,6 +194,30 @@ const ageAt = (birthdate: string, startsAt: string) => {
   return age;
 };
 
+const parseParticipantDraft = (payload: unknown, workflowType: WorkflowType, eventStartsAt: string): ParticipantDraft => {
+  const parsed = workflowType === 'charity_codriver_registration'
+    ? charityDraftSchema.parse(payload)
+    : regularDraftSchema.parse(payload);
+  const age = ageAt(parsed.birthdate, eventStartsAt);
+  if (age < 6 || age > 100) throw new Error('BIRTHDATE_OUT_OF_RANGE');
+  if (age < 18) {
+    if (!parsed.guardianFullName || !parsed.guardianRelationship) throw new Error('GUARDIAN_REQUIRED');
+    if (workflowType === 'charity_codriver_registration') {
+      if (!parsed.guardianEmail && !parsed.guardianPhone) throw new Error('GUARDIAN_CONTACT_REQUIRED');
+    } else if (!parsed.guardianEmail || !parsed.guardianPhone) {
+      throw new Error('GUARDIAN_REQUIRED');
+    }
+  }
+  return {
+    ...parsed,
+    email: parsed.email || null,
+    guardianFullName: age < 18 ? parsed.guardianFullName ?? null : null,
+    guardianEmail: age < 18 ? parsed.guardianEmail ?? null : null,
+    guardianPhone: age < 18 ? parsed.guardianPhone ?? null : null,
+    guardianRelationship: age < 18 ? parsed.guardianRelationship ?? null : null
+  } as ParticipantDraft;
+};
+
 const assertSigningChronology = (displayedAt: string, acceptedAt: string, signedAt: string, now = new Date()) => {
   const displayed = new Date(displayedAt).getTime();
   const accepted = new Date(acceptedAt).getTime();
@@ -189,7 +231,7 @@ export const buildParticipantWaiverContract = async (locale: ParticipantDraft['l
   return buildWaiverContract(locale);
 };
 
-const loadWorkflowContext = async (entryIds: string[], options: { allowAfterTechnicalInspection?: boolean } = {}) => {
+const loadWorkflowContext = async (entryIds: string[], options: { allowAfterTechnicalInspection?: boolean; allowWithoutEntryEligibility?: boolean } = {}) => {
   const db = await getDb();
   const rows = await db
     .select({
@@ -239,7 +281,7 @@ const loadWorkflowContext = async (entryIds: string[], options: { allowAfterTech
   if (!options.allowAfterTechnicalInspection && rows.some((row) => row.techStatus !== 'pending' || (row.backupVehicleId && row.backupTechStatus !== 'pending'))) {
     throw new Error('TECHNICAL_INSPECTION_ALREADY_STARTED');
   }
-  if (rows.some((row) => row.acceptanceStatus !== 'accepted' && !row.driverWaiverSigned)) {
+  if (!options.allowWithoutEntryEligibility && rows.some((row) => row.acceptanceStatus !== 'accepted' && !row.driverWaiverSigned)) {
     throw new Error('TERMINAL_ENTRY_NOT_ELIGIBLE');
   }
   return { first, rows };
@@ -267,14 +309,20 @@ export const createParticipantTerminalSession = async (
   const db = await getDb();
   const [device] = await db.select().from(signingDeviceSession).where(and(eq(signingDeviceSession.id, input.deviceSessionId), eq(signingDeviceSession.status, 'connected'))).limit(1);
   if (!device) throw new Error('SIGNING_DEVICE_NOT_CONNECTED');
-  const context = await loadWorkflowContext(input.entryIds, {
-    allowAfterTechnicalInspection: input.workflowType === 'regular_codriver_registration' && input.operation === 'edit'
-  });
+  const context = await loadWorkflowContext(input.entryIds, participantWorkflowContextOptions(input.workflowType, input.operation));
   if (input.workflowType === 'charity_codriver_registration' && input.entryIds.length !== 1) throw new Error('CHARITY_SINGLE_ENTRY_REQUIRED');
   if (context.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
   if (input.workflowType === 'regular_codriver_registration') {
     assertRegularCodriverOperation(context.rows, input.operation, input.participantPersonId);
   }
+  const initialDraft = input.participantDraft
+    ? parseParticipantDraft(input.participantDraft, input.workflowType, String(context.first.eventStartsAt))
+    : null;
+  if (initialDraft?.email && initialDraft.email === String(context.first.driverEmail ?? '').toLowerCase()) throw new Error('CODRIVER_EMAIL_MUST_DIFFER');
+  if (initialDraft && `${initialDraft.firstName} ${initialDraft.lastName}`.trim().toLowerCase() === `${context.first.driverFirstName} ${context.first.driverLastName}`.trim().toLowerCase()) {
+    throw new Error('CODRIVER_NAME_MUST_DIFFER');
+  }
+  const initialAge = initialDraft ? ageAt(initialDraft.birthdate, String(context.first.eventStartsAt)) : null;
   const now = new Date();
   await expireOpenSigningSessions(db, now);
   const driverIdentity = standardPersonIdentity({
@@ -305,12 +353,14 @@ export const createParticipantTerminalSession = async (
       driverPersonId: context.first.driverPersonId,
       sourceEntryId: context.first.entryId,
       workflowType: input.workflowType,
-      workflowStage: 'collecting_data',
+      workflowStage: initialDraft ? 'awaiting_operator_approval' : 'collecting_data',
       status: 'pending',
       sessionPayload: {
         workflowType: input.workflowType,
         operation: input.operation,
+        dataEntryMode: initialDraft ? 'operator' : 'terminal',
         participantPersonId: input.participantPersonId ?? null,
+        ...(initialAge === null ? {} : { isMinor: initialAge < 18, requiresMedicalCertificate: false }),
         event: { id: context.first.eventId, name: context.first.eventName, startsAt: String(context.first.eventStartsAt), endsAt: String(context.first.eventEndsAt) },
         driver: {
           id: context.first.driverPersonId,
@@ -324,6 +374,8 @@ export const createParticipantTerminalSession = async (
       },
       precheckPayload: {},
       signerPayload: {},
+      draftPayload: initialDraft,
+      submittedAt: initialDraft ? now : null,
       operatorUserId: actorUserId,
       operatorDisplay: actorDisplay,
       expiresAt: new Date(now.getTime() + 20 * 60 * 1000),
@@ -336,7 +388,7 @@ export const createParticipantTerminalSession = async (
   return projectParticipantSessionWithLiveIdentity(db, created);
 };
 
-export const submitParticipantDraft = async (sessionId: string, draft: ParticipantDraft, deviceToken: string) => {
+export const submitParticipantDraft = async (sessionId: string, payload: unknown, deviceToken: string) => {
   const device = await resolveDeviceByToken(deviceToken);
   if (!device) throw new Error('SIGNING_DEVICE_UNAUTHORIZED');
   const db = await getDb();
@@ -344,37 +396,34 @@ export const submitParticipantDraft = async (sessionId: string, draft: Participa
   if (!session) return null;
   if (!['collecting_data', 'awaiting_operator_approval'].includes(session.workflowStage) || !['pending', 'displayed'].includes(session.status)) throw new Error('TERMINAL_SESSION_NOT_EDITABLE');
   const context = session.sessionPayload as any;
-  const liveContext = await loadWorkflowContext((context.entries as Array<{ id: string }>).map((item) => item.id), {
-    allowAfterTechnicalInspection: session.workflowType === 'regular_codriver_registration' && context.operation === 'edit'
-  });
-  if (draft.email === String(liveContext.first.driverEmail ?? '').toLowerCase()) throw new Error('CODRIVER_EMAIL_MUST_DIFFER');
+  const liveContext = await loadWorkflowContext(
+    (context.entries as Array<{ id: string }>).map((item) => item.id),
+    participantWorkflowContextOptions(session.workflowType as WorkflowType, context.operation)
+  );
+  const draft = parseParticipantDraft(payload, session.workflowType as WorkflowType, context.event.startsAt);
+  if (draft.email && draft.email === String(liveContext.first.driverEmail ?? '').toLowerCase()) throw new Error('CODRIVER_EMAIL_MUST_DIFFER');
   if (`${draft.firstName} ${draft.lastName}`.trim().toLowerCase() === `${liveContext.first.driverFirstName} ${liveContext.first.driverLastName}`.trim().toLowerCase()) throw new Error('CODRIVER_NAME_MUST_DIFFER');
   const age = ageAt(draft.birthdate, context.event.startsAt);
-  if (age < 6 || age > 100) throw new Error('BIRTHDATE_OUT_OF_RANGE');
-  if (age < 18 && (!draft.guardianFullName || !draft.guardianEmail || !draft.guardianPhone || !draft.guardianRelationship)) throw new Error('GUARDIAN_REQUIRED');
-  const [knownPerson] = await db
+  const [knownPerson] = draft.email ? await db
     .select({ id: person.id, publicationName: person.publicationName })
     .from(person)
     .where(sql`lower(${person.email}) = ${draft.email}`)
-    .limit(1);
+    .limit(1) : [null];
   if (context.operation === 'edit' && knownPerson && knownPerson.id !== context.participantPersonId) {
     throw new Error('EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
   }
   const [editedPerson] = context.operation === 'edit'
     ? await db.select({ publicationName: person.publicationName }).from(person).where(eq(person.id, context.participantPersonId)).limit(1)
     : [null];
-  const storedDraft = {
+  const storedDraft: ParticipantDraft & { publicationName?: string | null } = {
     ...draft,
-    guardianFullName: age < 18 ? draft.guardianFullName ?? null : null,
-    guardianEmail: age < 18 ? draft.guardianEmail?.trim().toLowerCase() ?? null : null,
-    guardianPhone: age < 18 ? draft.guardianPhone ?? null : null,
-    guardianRelationship: age < 18 ? draft.guardianRelationship ?? null : null,
     publicationName: editedPerson?.publicationName ?? knownPerson?.publicationName ?? null
-  };
+  } as ParticipantDraft & { publicationName?: string | null };
   const [updated] = await db.update(signingSession).set({
     draftPayload: storedDraft,
     sessionPayload: {
       ...context,
+      dataEntryMode: 'terminal',
       isMinor: age < 18,
       requiresMedicalCertificate: session.workflowType === 'regular_codriver_registration' && age >= 70
     },
@@ -393,9 +442,7 @@ export const approveParticipantTerminalSession = async (sessionId: string, prech
   const draft = session.draftPayload as ParticipantDraft;
   const context = session.sessionPayload as any;
   const entryIds = (context.entries as Array<{ id: string }>).map((item) => item.id);
-  const liveContext = await loadWorkflowContext(entryIds, {
-    allowAfterTechnicalInspection: session.workflowType === 'regular_codriver_registration' && context.operation === 'edit'
-  });
+  const liveContext = await loadWorkflowContext(entryIds, participantWorkflowContextOptions(session.workflowType as WorkflowType, context.operation));
   if (liveContext.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
   if (session.workflowType === 'regular_codriver_registration') {
     assertRegularCodriverOperation(liveContext.rows, context.operation ?? 'create', context.participantPersonId ?? undefined);
@@ -440,14 +487,25 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   const draft = session.draftPayload as ParticipantDraft;
   const context = session.sessionPayload as any;
   const entryIds = (context.entries as Array<{ id: string }>).map((item) => item.id);
-  const liveContext = await loadWorkflowContext(entryIds, {
-    allowAfterTechnicalInspection: session.workflowType === 'regular_codriver_registration' && context.operation === 'edit'
-  });
+  const isCharity = session.workflowType === 'charity_codriver_registration';
+  const liveContext = await loadWorkflowContext(entryIds, participantWorkflowContextOptions(session.workflowType as WorkflowType, context.operation));
   if (liveContext.rows.some((row) => !row.allowsCodriver)) throw new Error('CODRIVER_NOT_ALLOWED');
   if (session.workflowType === 'regular_codriver_registration') {
     assertRegularCodriverOperation(liveContext.rows, context.operation ?? 'create', context.participantPersonId ?? undefined);
   }
-  const existingPeople = await db.select().from(person).where(sql`lower(${person.email}) = ${draft.email}`).limit(1);
+  const existingPeople = draft.email
+    ? await db.select().from(person).where(sql`lower(${person.email}) = ${draft.email}`).limit(1)
+    : isCharity
+      ? await db.select().from(person).where(and(
+          sql`lower(${person.firstName}) = ${draft.firstName.toLowerCase()}`,
+          sql`lower(${person.lastName}) = ${draft.lastName.toLowerCase()}`,
+          eq(person.birthdate, draft.birthdate),
+          sql`lower(${person.country}) = ${draft.country.toLowerCase()}`,
+          sql`lower(${person.street}) = ${draft.street.toLowerCase()}`,
+          eq(person.zip, draft.zip),
+          sql`lower(${person.city}) = ${draft.city.toLowerCase()}`
+        )).limit(1)
+      : [];
   const emailPerson = existingPeople[0] ?? null;
   const [editedPerson] = context.operation === 'edit'
     ? await db.select().from(person).where(eq(person.id, context.participantPersonId)).limit(1)
@@ -458,7 +516,7 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
   if (!editedPerson && existingPerson && (`${existingPerson.firstName} ${existingPerson.lastName}`.trim().toLowerCase() !== `${draft.firstName} ${draft.lastName}`.trim().toLowerCase())) throw new Error('EMAIL_ALREADY_USED_BY_DIFFERENT_PERSON');
   const participantId = editedPerson?.id ?? emailPerson?.id ?? randomUUID();
   const editsAssignedCodriver = session.workflowType === 'regular_codriver_registration' && context.operation === 'edit' && Boolean(editedPerson);
-  if (existingPerson && !editsAssignedCodriver) {
+  if (existingPerson && !editsAssignedCodriver && !isCharity) {
     const [existingSignedDocument] = await db.select({ id: document.id }).from(document).where(and(
       eq(document.eventId, session.eventId),
       eq(document.driverPersonId, participantId),
@@ -493,7 +551,17 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
       phone: null,
       country: null
     },
-    signer: { id: participantId, firstName: draft.firstName, lastName: draft.lastName, birthdate: draft.birthdate, email: draft.email, phone: draft.phone, country: draft.country, role: 'codriver', label: session.workflowType === 'charity_codriver_registration' ? 'Charity-Beifahrer' : 'Beifahrer' },
+    signer: {
+      id: participantId,
+      firstName: draft.firstName,
+      lastName: draft.lastName,
+      birthdate: draft.birthdate,
+      email: draft.email ?? null,
+      phone: 'phone' in draft ? draft.phone : null,
+      country: draft.country,
+      role: 'codriver',
+      label: isCharity ? 'Charity-Beifahrer' : 'Beifahrer'
+    },
     entries: context.entries.map((item: any) => ({ ...item, orgaCode: null, codriver: null, vehicles: [] })),
     status: 'open',
     signedAt: null
@@ -568,7 +636,7 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
       eq(document.templateVersion, context.contract.version),
       eq(document.status, 'generated')
     ));
-    if (alreadySigned.length > 0 && !editsAssignedCodriver) throw new Error('WAIVER_ALREADY_SIGNED');
+    if (alreadySigned.length > 0 && !editsAssignedCodriver && !isCharity) throw new Error('WAIVER_ALREADY_SIGNED');
     if (alreadySigned.length > 0 && editsAssignedCodriver) {
       await tx.update(document)
         .set({ status: 'superseded' })
@@ -588,9 +656,27 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
     )).returning();
     if (!claimed) return null;
     if (existingPerson) {
-      await tx.update(person).set({ email: draft.email, firstName: draft.firstName, lastName: draft.lastName, birthdate: draft.birthdate, country: draft.country, street: draft.street, zip: draft.zip, city: draft.city, phone: draft.phone, emergencyContactFirstName: draft.emergencyContactFirstName, emergencyContactLastName: draft.emergencyContactLastName, emergencyContactPhone: draft.emergencyContactPhone, motorsportHistory: draft.motorsportHistory ?? null, updatedAt: now }).where(eq(person.id, participantId));
+      if (isCharity) {
+        await tx.update(person).set({
+          ...(draft.email ? { email: draft.email } : {}),
+          firstName: draft.firstName,
+          lastName: draft.lastName,
+          birthdate: draft.birthdate,
+          country: draft.country,
+          street: draft.street,
+          zip: draft.zip,
+          city: draft.city,
+          updatedAt: now
+        }).where(eq(person.id, participantId));
+      } else {
+        const regularDraft = draft as RegularParticipantDraft;
+        await tx.update(person).set({ email: regularDraft.email, firstName: regularDraft.firstName, lastName: regularDraft.lastName, birthdate: regularDraft.birthdate, country: regularDraft.country, street: regularDraft.street, zip: regularDraft.zip, city: regularDraft.city, phone: regularDraft.phone, emergencyContactFirstName: regularDraft.emergencyContactFirstName, emergencyContactLastName: regularDraft.emergencyContactLastName, emergencyContactPhone: regularDraft.emergencyContactPhone, motorsportHistory: regularDraft.motorsportHistory ?? null, updatedAt: now }).where(eq(person.id, participantId));
+      }
+    } else if (isCharity) {
+      await tx.insert(person).values({ id: participantId, email: draft.email ?? null, firstName: draft.firstName, lastName: draft.lastName, birthdate: draft.birthdate, country: draft.country, street: draft.street, zip: draft.zip, city: draft.city, createdAt: now, updatedAt: now });
     } else {
-      await tx.insert(person).values({ id: participantId, email: draft.email, firstName: draft.firstName, lastName: draft.lastName, birthdate: draft.birthdate, country: draft.country, street: draft.street, zip: draft.zip, city: draft.city, phone: draft.phone, emergencyContactFirstName: draft.emergencyContactFirstName, emergencyContactLastName: draft.emergencyContactLastName, emergencyContactPhone: draft.emergencyContactPhone, motorsportHistory: draft.motorsportHistory ?? null, createdAt: now, updatedAt: now });
+      const regularDraft = draft as RegularParticipantDraft;
+      await tx.insert(person).values({ id: participantId, email: regularDraft.email, firstName: regularDraft.firstName, lastName: regularDraft.lastName, birthdate: regularDraft.birthdate, country: regularDraft.country, street: regularDraft.street, zip: regularDraft.zip, city: regularDraft.city, phone: regularDraft.phone, emergencyContactFirstName: regularDraft.emergencyContactFirstName, emergencyContactLastName: regularDraft.emergencyContactLastName, emergencyContactPhone: regularDraft.emergencyContactPhone, motorsportHistory: regularDraft.motorsportHistory ?? null, createdAt: now, updatedAt: now });
     }
     if (session.workflowType === 'regular_codriver_registration') {
       if (context.operation !== 'edit') {
@@ -642,15 +728,16 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
 
   try {
     const terminalSigner = session.signerPayload as { type?: string; guardianName?: string | null };
+    const recipientEmail = terminalSigner.type === 'guardian'
+      ? draft.guardianEmail?.trim().toLowerCase() || null
+      : draft.email?.trim().toLowerCase() || null;
     const participantIdentity = standardPersonIdentity({
       firstName: draft.firstName,
       lastName: draft.lastName,
       publicationName: existingPerson?.publicationName
     });
-    await queueWaiverSignedMail(db, {
-      toEmail: terminalSigner.type === 'guardian' && draft.guardianEmail?.trim()
-        ? draft.guardianEmail.trim().toLowerCase()
-        : draft.email,
+    if (recipientEmail) await queueWaiverSignedMail(db, {
+      toEmail: recipientEmail,
       driverName: participantIdentity.displayName,
       signerName: terminalSigner.type === 'guardian' && terminalSigner.guardianName?.trim()
         ? terminalSigner.guardianName.trim()
@@ -690,6 +777,9 @@ export const completeParticipantTerminalSession = async (sessionId: string, inpu
 };
 
 export const validateCreateParticipantTerminalSession = (payload: unknown) => createSessionSchema.parse(payload);
-export const validateParticipantDraft = (payload: unknown) => draftSchema.parse(payload);
+export const validateParticipantDraft = (payload: unknown, workflowType: WorkflowType = 'regular_codriver_registration', eventStartsAt?: string) => {
+  if (eventStartsAt) return parseParticipantDraft(payload, workflowType, eventStartsAt);
+  return workflowType === 'charity_codriver_registration' ? charityDraftSchema.parse(payload) : regularDraftSchema.parse(payload);
+};
 export const validateParticipantApproval = (payload: unknown) => approveSchema.parse(payload);
 export const validateParticipantCompletion = (payload: unknown) => completeSchema.parse(payload);

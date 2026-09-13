@@ -10,7 +10,7 @@ declare
   target_entry_id constant uuid := '207c3af2-5c1d-4f93-a43f-b0642c891c03';
   target_driver_person_id constant uuid := 'f74a4444-f31e-45f6-8ca8-5849177d27f1';
   target_class_id constant uuid := 'ef54e210-7fd0-40a0-9f06-28415794c3af';
-  backup_vehicle_id constant uuid := 'fa6931cb-4992-4703-86bd-688ca0acc0de';
+  new_backup_vehicle_id constant uuid := 'fa6931cb-4992-4703-86bd-688ca0acc0de';
   affected_count integer;
 begin
   if not exists (select 1 from "event" where "id" = target_event_id) then
@@ -57,7 +57,7 @@ begin
     raise exception '0093 Nordmeyer entry fingerprint mismatch';
   end if;
 
-  if exists (select 1 from "vehicle" where "id" = backup_vehicle_id) then
+  if exists (select 1 from "vehicle" where "id" = new_backup_vehicle_id) then
     raise exception '0093 backup vehicle id already exists';
   end if;
 
@@ -66,12 +66,12 @@ begin
     "displacement_ccm", "engine_type", "cylinders", "start_number_raw",
     "created_at", "updated_at"
   ) values (
-    backup_vehicle_id, target_driver_person_id, 'moto', 'Honda', null, 1987,
+    new_backup_vehicle_id, target_driver_person_id, 'moto', 'Honda', null, 1987,
     750, 'V4', 4, '117', now(), now()
   );
 
   update "entry"
-  set "backup_vehicle_id" = backup_vehicle_id,
+  set "backup_vehicle_id" = new_backup_vehicle_id,
       "backup_class_id" = target_class_id,
       "backup_tech_status" = 'pending',
       "backup_tech_checked_at" = null,
@@ -98,7 +98,7 @@ begin
       'migrationKey', migration_key,
       'orgaCode', '4T9DC',
       'driverPersonId', target_driver_person_id,
-      'backupVehicleId', backup_vehicle_id,
+      'backupVehicleId', new_backup_vehicle_id,
       'backupClassId', target_class_id,
       'startNumber', '117',
       'make', 'Honda',

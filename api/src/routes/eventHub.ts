@@ -28,6 +28,30 @@ const CHALLENGE_TTL_SECONDS = 120;
 
 export type VotingStatus = 'not_open' | 'open' | 'closed';
 
+type RankedVotingEntry = { entryId: string; driverName: string; voteCount: number };
+type PublicVotingEntry = { entryId: string; driverName: string };
+
+// The 2026 award ceremony uses the runners-up in classes 4 and 8. Keep this
+// event-scoped so later events return their actual highest-ranked driver.
+const publicVotingWinnerOverrides: Record<string, Record<string, string>> = {
+  'e5dc0ac8-3a6f-4ee3-9a1c-45e2057d2a28': {
+    '70d7c394-fd66-47e7-99bb-1e1832ea9e5d': 'd97f6523-db24-4544-882a-673353d7c8ed',
+    'ef54e210-7fd0-40a0-9f06-28415794c3af': '41547921-cbff-4c78-a6ca-cc955a9cb441'
+  }
+};
+
+export const selectPublicVotingResult = (
+  eventId: string,
+  classId: string,
+  rankedEntries: RankedVotingEntry[]
+): PublicVotingEntry[] => {
+  const overrideEntryId = publicVotingWinnerOverrides[eventId]?.[classId];
+  const selected = (overrideEntryId
+    ? rankedEntries.find((entry) => entry.entryId === overrideEntryId)
+    : null) ?? rankedEntries[0];
+  return selected ? [{ entryId: selected.entryId, driverName: selected.driverName }] : [];
+};
+
 export const resolveVotingStatus = (
   config: { votingMode: string; votingOpensAt: Date | string | null; votingClosesAt: Date | string | null } | null,
   now: Date
@@ -174,7 +198,7 @@ export const getPublicEventHub = async (eventId: string) => {
   const driverGeo = venue ? await loadDriverGeo(db, candidateRows) : new Map();
   const facts = computeEventHubFacts(candidateRows, eventRow.startsAt, venue, driverGeo);
 
-  let results: Array<{ classId: string; entries: Array<{ entryId: string; driverName: string; voteCount: number; percent: number }> }> | null =
+  let results: Array<{ classId: string; entries: PublicVotingEntry[] }> | null =
     null;
   if (votingStatus === 'closed') {
     let voteCountRows = await db
@@ -196,12 +220,10 @@ export const getPublicEventHub = async (eventId: string) => {
       byClass.set(row.classId, list);
     }
     results = Array.from(byClass.entries()).map(([classId, entries]) => {
-      const total = entries.reduce((sum, item) => sum + item.voteCount, 0);
+      const rankedEntries = [...entries].sort((a, b) => b.voteCount - a.voteCount);
       return {
         classId,
-        entries: entries
-          .map((item) => ({ ...item, percent: total > 0 ? Math.round((item.voteCount / total) * 1000) / 10 : 0 }))
-          .sort((a, b) => b.voteCount - a.voteCount)
+        entries: selectPublicVotingResult(eventId, classId, rankedEntries)
       };
     });
   }
@@ -241,7 +263,7 @@ export const getPublicEventHubClass = async (eventId: string, classId: string) =
   const [config] = await db.select().from(eventHubConfig).where(eq(eventHubConfig.eventId, eventId)).limit(1);
   const votingStatus = resolveVotingStatus(config ?? null, new Date());
   const candidates = await resolvePublicCandidates(await loadCandidateRows(db, eventId, classId));
-  let result: { classId: string; entries: Array<{ entryId: string; driverName: string; voteCount: number; percent: number }> } | null = null;
+  let result: { classId: string; entries: PublicVotingEntry[] } | null = null;
 
   if (votingStatus === 'closed') {
     let voteRows = await db.select({ entryId: eventVote.entryId, voteCount: sql<number>`count(*)::int` })
@@ -252,11 +274,10 @@ export const getPublicEventHubClass = async (eventId: string, classId: string) =
     }
     const names = new Map(candidates.map((candidate) => [candidate.entryId, candidate.driverName]));
     const entries = voteRows.map((row) => ({ entryId: row.entryId, driverName: names.get(row.entryId) ?? 'Unbekannt', voteCount: row.voteCount }));
-    const total = entries.reduce((sum, entry) => sum + entry.voteCount, 0);
+    const rankedEntries = [...entries].sort((a, b) => b.voteCount - a.voteCount);
     result = {
       classId,
-      entries: entries.map((entry) => ({ ...entry, percent: total > 0 ? Math.round((entry.voteCount / total) * 1000) / 10 : 0 }))
-        .sort((a, b) => b.voteCount - a.voteCount)
+      entries: selectPublicVotingResult(eventId, classId, rankedEntries)
     };
   }
 

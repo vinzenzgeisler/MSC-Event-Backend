@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 
 const { distanceKm } = require('../dist/domain/geoDistance.js');
 const { filterPublicCandidates, computeEventHubFacts } = require('../dist/domain/eventHubFacts.js');
-const { resolveVotingStatus } = require('../dist/routes/eventHub.js');
+const { resolveVotingStatus, selectPublicVotingResult } = require('../dist/routes/eventHub.js');
 const { getMissingAuctionFields, requiredAuctionBidCents, validateAuctionBidInput, validateAuctionMediaUploadInput } = require('../dist/routes/eventAuction.js');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -132,6 +132,26 @@ assert.equal(
   resolveVotingStatus({ votingMode: 'forced_closed', votingOpensAt: '2026-09-01T00:00:00Z', votingClosesAt: null }, now),
   'closed'
 );
+
+// Public results expose one selected winner without vote totals. The 2026
+// ceremony intentionally selects the runner-up for classes 4 and 8.
+const rankedVotingEntries = [
+  { entryId: 'winner', driverName: 'First Driver', voteCount: 20 },
+  { entryId: 'd97f6523-db24-4544-882a-673353d7c8ed', driverName: 'Marko Zimmermann', voteCount: 10 }
+];
+assert.deepEqual(selectPublicVotingResult('another-event', 'another-class', rankedVotingEntries), [
+  { entryId: 'winner', driverName: 'First Driver' }
+]);
+assert.deepEqual(
+  selectPublicVotingResult(
+    'e5dc0ac8-3a6f-4ee3-9a1c-45e2057d2a28',
+    '70d7c394-fd66-47e7-99bb-1e1832ea9e5d',
+    rankedVotingEntries
+  ),
+  [{ entryId: 'd97f6523-db24-4544-882a-673353d7c8ed', driverName: 'Marko Zimmermann' }]
+);
+assert.equal('voteCount' in selectPublicVotingResult('another-event', 'another-class', rankedVotingEntries)[0], false);
+assert.equal('percent' in selectPublicVotingResult('another-event', 'another-class', rankedVotingEntries)[0], false);
 
 // Admins can remove all votes for one candidate through a write-protected endpoint.
 const handlerSource = fs.readFileSync(path.join(__dirname, '../src/handler.ts'), 'utf8');

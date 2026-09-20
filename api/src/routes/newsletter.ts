@@ -51,7 +51,7 @@ const queueActionMail = async (client: { query: (text: string, values?: unknown[
   const version = await client.query("select etv.version from email_template et join email_template_version etv on etv.template_id = et.id where et.template_key = 'free_form' and etv.status = 'published' order by etv.version desc limit 1");
   if (!version.rows[0]) throw new Error('NEWSLETTER_MAIL_TEMPLATE_MISSING');
   await client.query(`insert into email_outbox (to_email, subject, template_id, template_version, template_data, idempotency_key)
-    values ($1,$2,'free_form',$3,$4::jsonb,$5) on conflict (idempotency_key) do nothing`, [
+    values ($1,$2,'free_form',$3,$4::jsonb,$5) on conflict do nothing`, [
     input.email, isConfirm ? copy.confirmSubject : copy.unsubscribeSubject, version.rows[0].version,
     JSON.stringify({ locale: input.locale, eventName: 'MSC Newsletter', bodyTextOverride: isConfirm ? copy.confirmText : copy.unsubscribeText, ctaUrl: url, ctaText: isConfirm ? copy.confirmCta : copy.unsubscribeCta, nennungstoolUrl: 'https://www.msc-oberlausitz.de', senderProfile: 'newsletter', newsletterSubscriberId: input.subscriberId, renderOptions: { includeEntryContext: false, showBadge: false, mailLabel: 'Newsletter' } }),
     `newsletter:${input.action}:${input.subscriberId}:${hashNewsletterToken(input.token).slice(0, 16)}`

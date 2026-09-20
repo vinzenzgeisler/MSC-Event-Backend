@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   getNewsletterConfig,
   hashNewsletterToken,
@@ -24,5 +26,9 @@ assert.equal(validateNewsletterSignup({
 assert.throws(() => validateNewsletterSignup({ email: 'invalid', consentAccepted: true, consentVersion: config.consentVersion }));
 assert.throws(() => validateNewsletterSignup({ email: 'a@example.org', consentAccepted: false, consentVersion: config.consentVersion }));
 assert.throws(() => validateNewsletterToken({ token: 'short' }));
+
+const routeSource = fs.readFileSync(path.join(__dirname, '../src/routes/newsletter.ts'), 'utf8');
+assert.match(routeSource, /on conflict do nothing/);
+assert.doesNotMatch(routeSource, /on conflict \(idempotency_key\) do nothing/);
 
 console.log('newsletter contract tests passed');

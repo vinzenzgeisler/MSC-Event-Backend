@@ -356,6 +356,21 @@ import {
   validateSimThemeInput,
   validateUpsertSimulatorEntryInput
 } from './routes/adminSimulator';
+import {
+  adminResendNewsletterVerification,
+  adminUnsubscribeNewsletter,
+  confirmNewsletter,
+  getNewsletterConfig,
+  getNewsletterOverview,
+  listNewsletterSubscribers,
+  requestNewsletterSignup,
+  requestNewsletterUnsubscribe,
+  unsubscribeNewsletter,
+  validateNewsletterEmailRequest,
+  validateNewsletterListQuery,
+  validateNewsletterSignup,
+  validateNewsletterToken
+} from './routes/newsletter';
 
 const isInvalidJson = (error: unknown): boolean =>
   error instanceof Error && error.message === 'Invalid JSON body';
@@ -401,7 +416,11 @@ const publicRateLimitedScopes = {
   resendVerification: { scope: 'public_registration_resend_verification', limit: 6, windowSeconds: 3600 },
   eventHubVoteByDevice: { scope: 'event_hub_vote_by_device', limit: 30, windowSeconds: 900 },
   eventHubVoteByIp: { scope: 'event_hub_vote_by_ip', limit: 1000, windowSeconds: 600 },
-  auctionBidByIp: { scope: 'event_auction_bid_by_ip', limit: 20, windowSeconds: 600 }
+  auctionBidByIp: { scope: 'event_auction_bid_by_ip', limit: 20, windowSeconds: 600 },
+  newsletterSignup: { scope: 'newsletter_signup', limit: 8, windowSeconds: 900 },
+  newsletterConfirm: { scope: 'newsletter_confirm', limit: 30, windowSeconds: 600 },
+  newsletterUnsubscribeRequest: { scope: 'newsletter_unsubscribe_request', limit: 6, windowSeconds: 3600 },
+  newsletterUnsubscribe: { scope: 'newsletter_unsubscribe', limit: 30, windowSeconds: 600 }
 } as const;
 
 const VEHICLE_IMAGE_MAX_FILE_SIZE_MB = 15;
@@ -462,6 +481,40 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   if (method === 'GET' && path === '/health') {
     return json(200, { ok: true, stage });
+  }
+
+  if (method === 'GET' && path === '/public/newsletter/config') {
+    return json(200, getNewsletterConfig(event.queryStringParameters?.locale));
+  }
+
+  if (method === 'POST' && path === '/public/newsletter/subscriptions') {
+    const input = validateNewsletterSignup(parseJsonBody(event));
+    const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.newsletterSignup, [input.email.trim().toLowerCase()]);
+    if (rateLimited) return rateLimited;
+    await requestNewsletterSignup(input);
+    return json(202, { accepted: true });
+  }
+
+  if (method === 'POST' && path === '/public/newsletter/confirm') {
+    const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.newsletterConfirm);
+    if (rateLimited) return rateLimited;
+    const input = validateNewsletterToken(parseJsonBody(event));
+    return json(200, await confirmNewsletter(input.token));
+  }
+
+  if (method === 'POST' && path === '/public/newsletter/unsubscribe-request') {
+    const input = validateNewsletterEmailRequest(parseJsonBody(event));
+    const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.newsletterUnsubscribeRequest, [input.email.trim().toLowerCase()]);
+    if (rateLimited) return rateLimited;
+    await requestNewsletterUnsubscribe(input);
+    return json(202, { accepted: true });
+  }
+
+  if (method === 'POST' && path === '/public/newsletter/unsubscribe') {
+    const rateLimited = await enforcePublicRequestRateLimit(event, publicRateLimitedScopes.newsletterUnsubscribe);
+    if (rateLimited) return rateLimited;
+    const input = validateNewsletterToken(parseJsonBody(event));
+    return json(200, await unsubscribeNewsletter(input.token));
   }
 
   if (method === 'GET' && path === '/public/mail/logo') {
@@ -4979,6 +5032,36 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
       return errorJson(500, 'Set sim config failed');
     }
+  }
+
+  // --- Newsletter subscriber administration ---
+  if (method === 'GET' && path === '/admin/newsletter/overview') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'newsletter.read')) return errorJson(403, 'Forbidden');
+    return json(200, { ok: true, overview: await getNewsletterOverview() });
+  }
+
+  if (method === 'GET' && path === '/admin/newsletter/subscribers') {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'newsletter.read')) return errorJson(403, 'Forbidden');
+    const query = validateNewsletterListQuery(event.queryStringParameters ?? {});
+    return json(200, { ok: true, ...(await listNewsletterSubscribers(query)) });
+  }
+
+  const newsletterUnsubscribeMatch = path.match(/^\/admin\/newsletter\/subscribers\/([^/]+)\/unsubscribe$/);
+  if (method === 'POST' && newsletterUnsubscribeMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'newsletter.write')) return errorJson(403, 'Forbidden');
+    const changed = await adminUnsubscribeNewsletter(decodeURIComponent(newsletterUnsubscribeMatch[1]), auth.sub);
+    return changed ? json(200, { ok: true }) : errorJson(404, 'Subscriber not found');
+  }
+
+  const newsletterResendMatch = path.match(/^\/admin\/newsletter\/subscribers\/([^/]+)\/resend-verification$/);
+  if (method === 'POST' && newsletterResendMatch) {
+    const auth = getAuthContext(event);
+    if (!hasPermission(auth, 'newsletter.write')) return errorJson(403, 'Forbidden');
+    const changed = await adminResendNewsletterVerification(decodeURIComponent(newsletterResendMatch[1]), auth.sub);
+    return changed ? json(200, { ok: true }) : errorJson(404, 'Pending subscriber not found');
   }
 
   // --- Simulator Leaderboard (Public) ---

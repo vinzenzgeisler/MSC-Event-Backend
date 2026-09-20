@@ -65,6 +65,19 @@ export const processSesFeedback = async (feedback: SesFeedback) => {
   if (result.rowCount === 0) {
     throw new Error('SES_DELIVERY_NOT_FOUND');
   }
+  if (status === 'bounced' || status === 'complaint') {
+    await pool.query(
+      `update newsletter_subscriber n
+       set status = $2,
+           bounced_at = case when $2 = 'bounced' then now() else bounced_at end,
+           complained_at = case when $2 = 'complained' then now() else complained_at end,
+           updated_at = now()
+       from email_outbox o
+       where o.id = $1
+         and o.template_data->>'newsletterSubscriberId' = n.id::text`,
+      [result.rows[0].outbox_id, status === 'complaint' ? 'complained' : 'bounced']
+    );
+  }
   logOperationalEvent(status === 'sent' ? 'info' : 'error', `mail.feedback_${eventType.toLowerCase().replace(/\s+/g, '_')}`, {
     outboxId: result.rows[0].outbox_id,
     status

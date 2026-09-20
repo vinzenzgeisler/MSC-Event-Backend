@@ -13,7 +13,7 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider';
 import { z } from 'zod';
 
-const allowedRoles = ['admin', 'editor', 'viewer', 'technical_inspector', 'marshal_manager', 'simulator_manager'] as const;
+const allowedRoles = ['admin', 'editor', 'viewer', 'technical_inspector', 'marshal_manager', 'simulator_manager', 'newsletter_manager'] as const;
 
 const roleSchema = z.enum(allowedRoles);
 
@@ -195,6 +195,10 @@ export const listIamRoles = () => ({
     {
       key: 'simulator_manager',
       description: 'Event-scoped access to the driving simulator workspace only'
+    },
+    {
+      key: 'newsletter_manager',
+      description: 'Manage newsletter subscribers and verification status'
     }
   ]
 });

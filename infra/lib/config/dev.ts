@@ -19,6 +19,8 @@ const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrat
   cognitoLogoutUrls: ['http://localhost:5173/admin/login', ...(devAdminLoginUrl ? [devAdminLoginUrl] : [])],
   cognitoDomainPrefix: devCognitoDomainPrefix,
   sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
+  newsletterFromEmail: 'newsletter@msc-oberlausitz.de',
+  newsletterPublicBaseUrl: (process.env.DEV_NEWSLETTER_PUBLIC_BASE_URL ?? 'http://localhost:8080/newsletter').replace(/\/$/, ''),
   orgaNotificationRecipients,
   publicVerifyBaseUrl: devVerifyUrl,
   assetsCorsAllowedOrigins: [...(devPublicBaseUrl ? [devPublicBaseUrl] : []), 'http://localhost:5173', 'http://localhost:4173'],

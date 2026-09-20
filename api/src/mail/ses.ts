@@ -19,8 +19,8 @@ const encodeDisplayName = (value: string): string => {
   return `=?UTF-8?B?${base64}?=`;
 };
 
-const getSender = (): string => {
-  const sender = process.env.SES_FROM_EMAIL?.trim();
+const getSender = (fromEmail?: string): string => {
+  const sender = fromEmail?.trim() || process.env.SES_FROM_EMAIL?.trim();
   const senderEmail = sender && sender.length > 0 ? sender : DEFAULT_SES_FROM_EMAIL;
   if (senderEmail.includes('<') && senderEmail.includes('>')) {
     return senderEmail;
@@ -56,13 +56,14 @@ const buildRawMessage = (
   subject: string,
   bodyText: string,
   bodyHtml: string | undefined,
-  attachments: EmailAttachment[]
+  attachments: EmailAttachment[],
+  fromEmail?: string
 ): Buffer => {
   const mixedBoundary = `mixed_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   const altBoundary = `alt_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   const lines: string[] = [];
 
-  lines.push(`From: ${getSender()}`);
+  lines.push(`From: ${getSender(fromEmail)}`);
   lines.push(`To: ${to}`);
   lines.push(`Subject: ${encodeSubject(subject)}`);
   lines.push('MIME-Version: 1.0');
@@ -109,11 +110,12 @@ export const sendEmail = async (
   bodyText: string,
   bodyHtml?: string,
   attachments: EmailAttachment[] = [],
-  bccEmails: string[] = []
+  bccEmails: string[] = [],
+  options: { fromEmail?: string } = {}
 ) => {
   const client = getSesClient();
   if (attachments.length > 0) {
-    const raw = buildRawMessage(to, subject, bodyText, bodyHtml, attachments);
+    const raw = buildRawMessage(to, subject, bodyText, bodyHtml, attachments, options.fromEmail);
     const command = new SendRawEmailCommand({
       Destinations: [to, ...bccEmails],
       ConfigurationSetName: getConfigurationSetName(),
@@ -124,7 +126,7 @@ export const sendEmail = async (
     return client.send(command);
   }
   const command = new SendEmailCommand({
-    Source: getSender(),
+    Source: getSender(options.fromEmail),
     ConfigurationSetName: getConfigurationSetName(),
     Destination: {
       ToAddresses: [to],

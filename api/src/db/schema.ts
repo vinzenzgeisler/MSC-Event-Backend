@@ -1539,3 +1539,49 @@ export const simulatorEntry = pgTable(
     )
   })
 );
+
+export const newsletterSubscriber = pgTable(
+  'newsletter_subscriber',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    email: text('email').notNull(),
+    emailNorm: text('email_norm').notNull(),
+    locale: text('locale').notNull().default('de'),
+    status: text('status').notNull().default('pending'),
+    consentVersion: text('consent_version').notNull(),
+    consentTextHash: text('consent_text_hash').notNull(),
+    verificationTokenHash: text('verification_token_hash'),
+    verificationExpiresAt: timestamp('verification_expires_at', { withTimezone: true }),
+    verificationSentAt: timestamp('verification_sent_at', { withTimezone: true }),
+    verificationWindowStartedAt: timestamp('verification_window_started_at', { withTimezone: true }),
+    verificationSendCount: integer('verification_send_count').notNull().default(0),
+    unsubscribeTokenHash: text('unsubscribe_token_hash'),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    unsubscribedAt: timestamp('unsubscribed_at', { withTimezone: true }),
+    bouncedAt: timestamp('bounced_at', { withTimezone: true }),
+    complainedAt: timestamp('complained_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    emailUnique: uniqueIndex('newsletter_subscriber_email_norm_unique').on(table.emailNorm),
+    statusCreatedIndex: index('newsletter_subscriber_status_created_idx').on(table.status, table.createdAt),
+    localeCheck: check('newsletter_subscriber_locale_check', sql`${table.locale} in ('de','en','cs','pl')`),
+    statusCheck: check('newsletter_subscriber_status_check', sql`${table.status} in ('pending','active','unsubscribed','bounced','complained')`)
+  })
+);
+
+export const newsletterConsentEvent = pgTable(
+  'newsletter_consent_event',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    subscriberId: uuid('subscriber_id').references(() => newsletterSubscriber.id, { onDelete: 'cascade' }),
+    action: text('action').notNull(),
+    consentVersion: text('consent_version'),
+    consentTextHash: text('consent_text_hash'),
+    locale: text('locale').notNull(),
+    source: text('source').notNull().default('website'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({ subscriberCreatedIndex: index('newsletter_consent_event_subscriber_created_idx').on(table.subscriberId, table.createdAt) })
+);

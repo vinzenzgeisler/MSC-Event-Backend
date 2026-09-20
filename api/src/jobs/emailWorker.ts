@@ -610,7 +610,10 @@ export const handler = async () => {
         rendered.bodyTextRendered,
         rendered.htmlDocument,
         attachments,
-        bccEmails
+        bccEmails,
+        (row.template_data as { senderProfile?: string } | null)?.senderProfile === 'newsletter'
+          ? { fromEmail: process.env.NEWSLETTER_FROM_EMAIL }
+          : {}
       );
       await markSent(row.id, response.MessageId ?? null, response);
     } catch (error) {

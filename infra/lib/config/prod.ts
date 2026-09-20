@@ -29,6 +29,8 @@ export const resolveProdConfig = (): StageConfig => {
     cognitoDomainPrefix: prodCognitoDomainPrefix,
     cognitoRefreshTokenDays: 90,
     sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
+    newsletterFromEmail: 'newsletter@msc-oberlausitz.de',
+    newsletterPublicBaseUrl: 'https://www.msc-oberlausitz.de/newsletter',
     orgaNotificationRecipients,
     publicVerifyBaseUrl: `${prodPublicBaseUrl}/anmeldung/verify`,
     assetsCorsAllowedOrigins: [

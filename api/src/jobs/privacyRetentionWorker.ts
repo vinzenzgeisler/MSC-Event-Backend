@@ -13,6 +13,8 @@ type RetentionSettings = {
   eventOperationalDays: number;
   documentDays: number;
   invoiceDays: number;
+  newsletterPendingDays: number;
+  newsletterEvidenceDays: number;
   dryRun: boolean;
 };
 
@@ -37,6 +39,8 @@ const loadSettings = (): RetentionSettings => ({
   eventOperationalDays: parseRetention('RETENTION_EVENT_OPERATIONAL_DAYS', 365),
   documentDays: parseRetention('RETENTION_DOCUMENT_DAYS', 365 * 6),
   invoiceDays: parseRetention('RETENTION_INVOICE_DAYS', 365 * 10),
+  newsletterPendingDays: parseRetention('RETENTION_NEWSLETTER_PENDING_DAYS', 14),
+  newsletterEvidenceDays: parseRetention('RETENTION_NEWSLETTER_EVIDENCE_DAYS', 365 * 3),
   dryRun: process.env.RETENTION_DRY_RUN === 'true'
 });
 
@@ -94,6 +98,18 @@ export const handler = async () => {
     `delete from "public_rate_limit"
      where "updated_at" < now() - ($1 * interval '1 day')`,
     [settings.rateLimitDays]
+  );
+
+  await execute(
+    'newsletter_pending',
+    `delete from "newsletter_subscriber" where "status" = 'pending' and "created_at" < now() - ($1 * interval '1 day')`,
+    [settings.newsletterPendingDays]
+  );
+
+  await execute(
+    'newsletter_revocation_evidence',
+    `delete from "newsletter_subscriber" where "status" = 'unsubscribed' and "unsubscribed_at" < now() - ($1 * interval '1 day')`,
+    [settings.newsletterEvidenceDays]
   );
 
   await execute(

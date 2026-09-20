@@ -68,6 +68,7 @@ export class ApiStack extends Stack {
     const dbResourceId = props.dataStack.dbInstance.instanceResourceId;
     const dbConnectArn = `arn:aws:rds-db:${dbRegion}:${Stack.of(this).account}:dbuser:${dbResourceId}/${dbUser}`;
     const sesFromEmail = props.config.sesFromEmail;
+    const newsletterFromEmail = props.config.newsletterFromEmail;
     const orgaNotificationRecipients = props.config.orgaNotificationRecipients.join(',');
     const criticalAlertsTopic = new sns.Topic(this, 'CriticalAlertsTopic', {
       topicName: `${props.config.prefix}-critical-alerts`,
@@ -197,7 +198,10 @@ export class ApiStack extends Stack {
         MAIL_PUBLIC_BASE_URL: mailPublicBaseUrl,
         NENNUNGSTOOL_URL: mailPublicBaseUrl,
         EMAIL_VERIFICATION_TOKEN_TTL_DAYS: '30',
-        REQUIRE_ADMIN_MFA: 'false'
+        REQUIRE_ADMIN_MFA: 'false',
+        NEWSLETTER_ENABLED: 'true',
+        NEWSLETTER_PUBLIC_BASE_URL: props.config.newsletterPublicBaseUrl,
+        NEWSLETTER_FROM_EMAIL: newsletterFromEmail
       },
       bundling: {
         target: 'node24',
@@ -244,7 +248,8 @@ export class ApiStack extends Stack {
         REQUIRE_ADMIN_MFA: 'false',
         EMAIL_WORKER_BATCH_SIZE: '20',
         PAYMENT_REMINDER_FIRST_DAYS: '5',
-        PAYMENT_REMINDER_REPEAT_DAYS: '5'
+        PAYMENT_REMINDER_REPEAT_DAYS: '5',
+        NEWSLETTER_FROM_EMAIL: newsletterFromEmail
       },
       bundling: {
         target: 'node24',
@@ -617,6 +622,12 @@ export class ApiStack extends Stack {
       integration
     });
 
+    this.api.addRoutes({ path: '/public/newsletter/config', methods: [apigwv2.HttpMethod.GET], integration });
+    this.api.addRoutes({ path: '/public/newsletter/subscriptions', methods: [apigwv2.HttpMethod.POST], integration });
+    this.api.addRoutes({ path: '/public/newsletter/confirm', methods: [apigwv2.HttpMethod.POST], integration });
+    this.api.addRoutes({ path: '/public/newsletter/unsubscribe-request', methods: [apigwv2.HttpMethod.POST], integration });
+    this.api.addRoutes({ path: '/public/newsletter/unsubscribe', methods: [apigwv2.HttpMethod.POST], integration });
+
     this.api.addRoutes({
       path: '/public/events/{id}/entries/batch',
       methods: [apigwv2.HttpMethod.POST],
@@ -732,6 +743,11 @@ export class ApiStack extends Stack {
       integration,
       authorizer: jwtAuthorizer
     });
+
+    this.api.addRoutes({ path: '/admin/newsletter/overview', methods: [apigwv2.HttpMethod.GET], integration, authorizer: jwtAuthorizer });
+    this.api.addRoutes({ path: '/admin/newsletter/subscribers', methods: [apigwv2.HttpMethod.GET], integration, authorizer: jwtAuthorizer });
+    this.api.addRoutes({ path: '/admin/newsletter/subscribers/{id}/unsubscribe', methods: [apigwv2.HttpMethod.POST], integration, authorizer: jwtAuthorizer });
+    this.api.addRoutes({ path: '/admin/newsletter/subscribers/{id}/resend-verification', methods: [apigwv2.HttpMethod.POST], integration, authorizer: jwtAuthorizer });
 
     this.api.addRoutes({
       path: '/admin/auth/me',

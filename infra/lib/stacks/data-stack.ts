@@ -182,6 +182,10 @@ def handler(event, context):
       storageEncrypted: true
     });
 
+    // The API stack used to import the DB identifier for CloudWatch alarms.
+    // Keep that export while CI deploys the data stack before the updated API stack.
+    this.exportValue(this.dbInstance.instanceIdentifier);
+
     if (props.config.stage === 'dev') {
       Tags.of(this.dbInstance).add('AutoCleanup', 'true');
       if (props.config.ttlHours !== undefined) {

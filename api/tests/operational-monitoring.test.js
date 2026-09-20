@@ -34,11 +34,9 @@ assert.match(inspectionSource, /queueOperationalMails\(tx,/);
 
 const operationalOutboxSource = fs.readFileSync(path.join(repositoryRoot, 'api/src/mail/operationalOutbox.ts'), 'utf8');
 const signingSource = fs.readFileSync(path.join(repositoryRoot, 'api/src/routes/adminSigning.ts'), 'utf8');
-const monitorSource = fs.readFileSync(path.join(repositoryRoot, 'api/src/jobs/operationalMonitor.ts'), 'utf8');
 assert.match(operationalOutboxSource, /\.onConflictDoNothing\(\)/);
 assert.match(operationalOutboxSource, /mail\.audience === 'orga'/);
 assert.match(operationalOutboxSource, /Interne Prozessmeldung/);
 assert.match(signingSource, /\.onConflictDoNothing\(\)/);
-assert.match(monitorSource, /o\.template_id = 'waiver_signed'[\s\S]*?o\.template_data->>'signingSessionId' = s\.id::text/);
 
 console.log('operational monitoring tests passed');

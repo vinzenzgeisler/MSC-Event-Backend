@@ -522,13 +522,18 @@ export const handler = async () => {
   const reminderDelayDays = parsePositiveInt(process.env.EMAIL_CONFIRMATION_REMINDER_DAYS, 3);
   const paymentReminderFirstDelayDays = parsePositiveInt(process.env.PAYMENT_REMINDER_FIRST_DAYS, 30);
   const paymentReminderRepeatDays = parsePositiveInt(process.env.PAYMENT_REMINDER_REPEAT_DAYS, 14);
+  const automaticRemindersEnabled = process.env.AUTOMATIC_REMINDERS_ENABLED !== 'false';
 
-  const reminderQueued = await queueEmailConfirmationReminders(automationBatchSize, reminderDelayDays);
-  const paymentReminderQueued = await queueAutomaticPaymentReminders(
-    automationBatchSize,
-    paymentReminderFirstDelayDays,
-    paymentReminderRepeatDays
-  );
+  const reminderQueued = automaticRemindersEnabled
+    ? await queueEmailConfirmationReminders(automationBatchSize, reminderDelayDays)
+    : 0;
+  const paymentReminderQueued = automaticRemindersEnabled
+    ? await queueAutomaticPaymentReminders(
+        automationBatchSize,
+        paymentReminderFirstDelayDays,
+        paymentReminderRepeatDays
+      )
+    : 0;
   const acceptedPaidQueued = await queueAcceptedPaidCompletedMails(automationBatchSize);
 
   const rows = await claimOutbox(batchSize);

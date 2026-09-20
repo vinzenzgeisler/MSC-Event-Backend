@@ -1,5 +1,4 @@
 import type { SNSEvent } from 'aws-lambda';
-import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { getPool } from '../db/client';
 import { logOperationalEvent } from '../observability/logger';
 
@@ -19,13 +18,6 @@ export const statusFor = (eventType: string): 'sent' | 'failed' | 'bounced' | 'c
   return null;
 };
 
-const publishCriticalFeedback = async () => {
-  await new CloudWatchClient({}).send(new PutMetricDataCommand({
-    Namespace: `MSCEvent/${process.env.STAGE ?? 'dev'}`,
-    MetricData: [{ MetricName: 'MailFeedbackCritical', Value: 1, Unit: 'Count' }]
-  }));
-};
-
 export const processSesFeedback = async (feedback: SesFeedback) => {
   const eventType = feedback.eventType ?? feedback.notificationType ?? 'Unknown';
   const messageId = feedback.mail?.messageId;
@@ -33,7 +25,6 @@ export const processSesFeedback = async (feedback: SesFeedback) => {
   const isDeliveryDelay = eventType === 'DeliveryDelay' || eventType === 'Delivery Delay';
   if (messageId && isDeliveryDelay) {
     logOperationalEvent('warn', 'mail.feedback_delivery_delay', { status: 'delayed' });
-    await publishCriticalFeedback();
     return;
   }
   if (!messageId || !status) {
@@ -82,9 +73,6 @@ export const processSesFeedback = async (feedback: SesFeedback) => {
     outboxId: result.rows[0].outbox_id,
     status
   });
-  if (status !== 'sent') {
-    await publishCriticalFeedback();
-  }
 };
 
 export const handler = async (event: SNSEvent) => {

@@ -25,7 +25,7 @@ Die Workflow-Datei verwendet `environment: dev` ausschließlich bei einem manuel
 - Variable: `AWS_ACCOUNT_ID`
 - Variable: `AWS_REGION`
 - Variable: `DEV_PUBLIC_BASE_URL`
-- Variable: `ORGA_NOTIFICATION_RECIPIENTS` (kommagetrennte Alarm- und Orga-Empfänger)
+- Variable: `ORGA_NOTIFICATION_RECIPIENTS` (kommagetrennte Orga-Empfänger)
 - Optional Variable: `DEV_COGNITO_DOMAIN_PREFIX`
 
 ### Environment `prod`
@@ -34,7 +34,7 @@ Die Workflow-Datei verwendet `environment: dev` ausschließlich bei einem manuel
 - Variable: `AWS_ACCOUNT_ID`
 - Variable: `AWS_REGION`
 - Variable: `PROD_PUBLIC_BASE_URL`
-- Variable: `ORGA_NOTIFICATION_RECIPIENTS` (kommagetrennte Alarm- und Orga-Empfänger)
+- Variable: `ORGA_NOTIFICATION_RECIPIENTS` (kommagetrennte Orga-Empfänger)
 - Optional Variable: `PROD_COGNITO_DOMAIN_PREFIX`
 
 ## Woher kommen die Werte?
@@ -62,8 +62,7 @@ Die Workflow-Datei verwendet `environment: dev` ausschließlich bei einem manuel
   - Daraus werden Prod-Verify-Links, Callback-URLs und Redirect-Basen abgeleitet.
 - `ORGA_NOTIFICATION_RECIPIENTS`
   - Eine oder mehrere E-Mail-Adressen, durch Komma oder Semikolon getrennt.
-  - Die Liste gilt pro GitHub Environment getrennt für neue Nennungen, finale Abnahmeentscheidungen und kritische AWS-Alarme.
-  - Nach dem ersten Deploy muss jede Adresse die AWS-SNS-Bestätigungsmail einmal bestätigen; vorher kann SNS keine Alarme zustellen.
+  - Die Liste gilt pro GitHub Environment getrennt für fachliche Orga-Mails, etwa zu Nennungen und Abnahmeentscheidungen.
 - `PROD_COGNITO_DOMAIN_PREFIX`
   - Optionaler expliziter Cognito Hosted-UI-Domain-Präfix für Prod.
   - Standard ist automatisch `dreiecksrennen-prod-auth-<accountsuffix>`, damit auch Prod im neuen AWS-Konto nicht mit bereits belegten Präfixen kollidiert.

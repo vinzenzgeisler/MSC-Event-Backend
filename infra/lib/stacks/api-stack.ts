@@ -424,7 +424,9 @@ export class ApiStack extends Stack {
     });
 
     new events.Rule(this, 'EmailWorkerSchedule', {
-      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+      // Verification and password-style action mails are user-facing and must
+      // leave the transactional outbox promptly after the request.
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
       targets: [new targets.LambdaFunction(emailWorker)]
     });
 

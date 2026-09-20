@@ -30,5 +30,7 @@ assert.throws(() => validateNewsletterToken({ token: 'short' }));
 const routeSource = fs.readFileSync(path.join(__dirname, '../src/routes/newsletter.ts'), 'utf8');
 assert.match(routeSource, /on conflict do nothing/);
 assert.doesNotMatch(routeSource, /on conflict \(idempotency_key\) do nothing/);
+assert.match(routeSource, /contentText: isConfirm \? copy\.confirmText : copy\.unsubscribeText/);
+assert.doesNotMatch(routeSource, /bodyTextOverride: isConfirm/);
 
 console.log('newsletter contract tests passed');

@@ -23,6 +23,31 @@ const buildBasePayload = () => ({
   nennungstoolUrl: 'https://event.msc-oberlausitzer-dreilaendereck.de'
 });
 
+// Transactional newsletter actions use the canonical free-form content field.
+// The confirmation copy must be visible in both MIME variants, not just the CTA.
+{
+  const confirmationText = 'Bitte bestätige deine Anmeldung zum MSC-Newsletter. Erst nach dem Klick auf den Button ist deine Adresse aktiv.';
+  const rendered = renderMailContract({
+    templateKey: 'free_form',
+    subjectTemplate: 'Newsletter-Anmeldung bestätigen',
+    bodyTextTemplate: '{{fallbackGreeting}} {{driverName}},',
+    bodyHtmlTemplate: null,
+    data: {
+      locale: 'de',
+      eventName: 'MSC Newsletter',
+      contentText: confirmationText,
+      ctaUrl: 'https://www.msc-oberlausitz.de/newsletter/confirm#token=test-token',
+      ctaText: 'Anmeldung bestätigen'
+    },
+    renderOptions: { includeEntryContext: false, showBadge: false, mailLabel: 'Newsletter' },
+    hasContentOverride: false
+  });
+  assert.match(rendered.bodyTextRendered, /Bitte bestätige deine Anmeldung zum MSC-Newsletter/);
+  assert.match(rendered.bodyHtmlRendered, /Bitte bestätige deine Anmeldung zum MSC-Newsletter/);
+  assert.match(rendered.htmlDocument, /Bitte bestätige deine Anmeldung zum MSC-Newsletter/);
+  assert.match(rendered.htmlDocument, /Anmeldung bestätigen/);
+}
+
 // Deterministic parity: same payload -> same output (Preview/Send pipeline parity).
 {
   const payload = {

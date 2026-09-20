@@ -31,6 +31,7 @@ const routeSource = fs.readFileSync(path.join(__dirname, '../src/routes/newslett
 assert.match(routeSource, /on conflict do nothing/);
 assert.doesNotMatch(routeSource, /on conflict \(idempotency_key\) do nothing/);
 assert.match(routeSource, /contentText: isConfirm \? copy\.confirmText : copy\.unsubscribeText/);
+assert.match(routeSource, /greetingText: mailGreeting\[input\.locale\]/);
 assert.doesNotMatch(routeSource, /bodyTextOverride: isConfirm/);
 
 console.log('newsletter contract tests passed');

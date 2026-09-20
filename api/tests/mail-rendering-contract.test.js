@@ -35,6 +35,7 @@ const buildBasePayload = () => ({
     data: {
       locale: 'de',
       eventName: 'MSC Newsletter',
+      greetingText: 'Hallo,',
       contentText: confirmationText,
       ctaUrl: 'https://www.msc-oberlausitz.de/newsletter/confirm#token=test-token',
       ctaText: 'Anmeldung bestätigen'
@@ -43,7 +44,10 @@ const buildBasePayload = () => ({
     hasContentOverride: false
   });
   assert.match(rendered.bodyTextRendered, /Bitte bestätige deine Anmeldung zum MSC-Newsletter/);
+  assert.match(rendered.bodyTextRendered, /^Hallo,/);
+  assert.doesNotMatch(rendered.bodyTextRendered, /Hallo\s+,/);
   assert.match(rendered.bodyHtmlRendered, /Bitte bestätige deine Anmeldung zum MSC-Newsletter/);
+  assert.doesNotMatch(rendered.htmlDocument, /Hallo\s+,/);
   assert.match(rendered.htmlDocument, /Bitte bestätige deine Anmeldung zum MSC-Newsletter/);
   assert.match(rendered.htmlDocument, /Anmeldung bestätigen/);
 }

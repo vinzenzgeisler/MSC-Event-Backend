@@ -297,3 +297,31 @@ export const searchEntriesByEvent = async (eventId: string, query: string) => {
       vehicleModel: row.vehicleModel
     }));
 };
+
+/**
+ * "Teilnehmer ausblenden" (Paket 9), siehe docs/memory-bank/racepic-architecture.md Abschnitt
+ * "Datenschutz": "Bei Widerspruch gegen Bilder: Assignments auf REJECTED setzen und die Bilder
+ * verbergen." Lehnt alle aktiven Zuordnungen dieser Nennung ab (Bilder mit *nur* dieser Nennung
+ * verschwinden dadurch automatisch aus dem naechsten Manifest-Rebuild - andere, weiterhin gueltige
+ * Zuordnungen desselben Bildes zu anderen Fahrern bleiben unberuehrt).
+ */
+export const hideParticipant = async (entryId: string, actorId: string): Promise<{ eventIds: string[]; rejectedCount: number }> => {
+  const db = await getDb();
+  const [entryRow] = await db.select({ eventId: entry.eventId }).from(entry).where(eq(entry.id, entryId)).limit(1);
+  if (!entryRow) throw new RacePicError('RACEPIC_ENTRY_NOT_FOUND');
+
+  const activeAssignments = await db
+    .select()
+    .from(racepicAssignment)
+    .where(and(eq(racepicAssignment.entryId, entryId), ne(racepicAssignment.status, 'REJECTED')));
+
+  for (const assignment of activeAssignments) {
+    await db
+      .update(racepicAssignment)
+      .set({ status: 'REJECTED', source: 'MANUAL', decidedByType: 'admin', decidedById: actorId, decidedAt: new Date() })
+      .where(eq(racepicAssignment.id, assignment.id));
+    await writeAssignmentEvent(db, assignment.id, assignment.status, 'REJECTED', actorId, 'participant_hidden');
+  }
+
+  return { eventIds: [entryRow.eventId], rejectedCount: activeAssignments.length };
+};

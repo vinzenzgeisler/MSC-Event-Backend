@@ -1,5 +1,21 @@
+import { DeleteObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getDb, getPool } from '../db/client';
 import { writeAuditLog } from '../audit/log';
+
+// Fahrzeugbilder werden ohne Dateiendung gespeichert (siehe api/src/docs/storage.ts), deshalb
+// werden beim Loeschen dieselben Kandidaten-Endungen probiert wie beim Lesen.
+const VEHICLE_IMAGE_EXTENSIONS = ['', '.jpg', '.jpeg', '.png', '.webp'];
+
+const deleteVehicleImageObjects = async (s3Key: string): Promise<void> => {
+  const bucket = process.env.ASSETS_BUCKET;
+  if (!bucket) return;
+  const client = new S3Client({});
+  await Promise.all(
+    VEHICLE_IMAGE_EXTENSIONS.map((extension) =>
+      client.send(new DeleteObjectCommand({ Bucket: bucket, Key: `${s3Key}${extension}` })).catch(() => undefined)
+    )
+  );
+};
 
 type RetentionSettings = {
   verificationDays: number;
@@ -233,6 +249,35 @@ export const handler = async () => {
     [settings.eventOperationalDays]
   );
 
+  // Vor dem Nullen erfassen, welche Fahrzeuge betroffen sind - danach ist der S3-Key weg (Paket 9:
+  // schliesst die dokumentierte Luecke, dass das Fahrzeugbild in S3 nie geloescht wurde).
+  const vehicleImageWhereClause = `
+     exists (
+       select 1
+       from "entry"
+       inner join "event" on "entry"."event_id" = "event"."id"
+       where ("entry"."vehicle_id" = "vehicle"."id" or "entry"."backup_vehicle_id" = "vehicle"."id")
+         and "event"."ends_at" < current_date - ($1 * interval '1 day')
+     )
+       and not exists (
+         select 1
+         from "entry"
+         inner join "event" on "entry"."event_id" = "event"."id"
+         where ("entry"."vehicle_id" = "vehicle"."id" or "entry"."backup_vehicle_id" = "vehicle"."id")
+           and "event"."ends_at" >= current_date - ($1 * interval '1 day')
+     )
+       and "image_s3_key" is not null`;
+  let vehiclesWithImages: { id: string; image_s3_key: string }[] = [];
+  try {
+    const selected = await pool.query<{ id: string; image_s3_key: string }>(
+      `select "id", "image_s3_key" from "vehicle" where ${vehicleImageWhereClause}`,
+      [settings.eventOperationalDays]
+    );
+    vehiclesWithImages = selected.rows;
+  } catch (error) {
+    errors.push(`vehicle_image_lookup:${error instanceof Error ? error.message : String(error)}`);
+  }
+
   await execute(
     'vehicle_operational_anonymized',
     `update "vehicle"
@@ -266,6 +311,20 @@ export const handler = async () => {
     [settings.eventOperationalDays]
   );
 
+  if (!settings.dryRun && vehiclesWithImages.length > 0) {
+    for (const row of vehiclesWithImages) {
+      try {
+        await deleteVehicleImageObjects(row.image_s3_key);
+        // RacePic (falls die Migrationen existieren, unabhaengig von config.enableRacePic): die
+        // Referenz-Embeddings basieren auf genau diesem Foto und sind jetzt verwaist.
+        await pool.query('delete from "racepic_vehicle_reference" where "vehicle_id" = $1', [row.id]).catch(() => undefined);
+        increment(deletedRows, 'vehicle_image_s3_deleted', 1);
+      } catch (error) {
+        errors.push(`vehicle_image_s3_delete:${row.id}:${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
   await execute(
     'document_generation_job',
     `delete from "document_generation_job"
@@ -295,6 +354,34 @@ export const handler = async () => {
        and "event"."ends_at" < current_date - ($1 * interval '1 day')`,
     [settings.invoiceDays]
   );
+
+  // RacePic: die Person-/Fahrzeug-Anonymisierung oben aendert die im Manifest angezeigten Namen
+  // ("Anonymisiert Teilnehmer"), siehe docs/memory-bank/racepic-architecture.md Abschnitt
+  // "Datenschutz". Trigger fuer alle veroeffentlichten RacePic-Events, deren Personen diese
+  // konkrete Laufzeit tatsaechlich anonymisiert hat (erkannt am frischen `updated_at`, statt jedes
+  // alte Event bei jedem Lauf neu zu bauen). Dynamischer Import + Try/Catch, damit dieser Kern-Job
+  // auch funktioniert, wenn RacePic nicht konfiguriert ist (config.enableRacePic=false).
+  if (!settings.dryRun) {
+    try {
+      const affected = await pool.query<{ event_id: string }>(
+        `select distinct re.event_id
+         from racepic_event re
+         inner join entry en on en.event_id = re.event_id
+         inner join person p on p.id in (en.driver_person_id, en.codriver_person_id)
+         where re.published = true and p.updated_at >= $1`,
+        [windowStart]
+      );
+      if (affected.rows.length > 0) {
+        const { regenerateManifestsForEvent } = await import('../racepic/publish');
+        for (const row of affected.rows) {
+          await regenerateManifestsForEvent(row.event_id);
+          increment(deletedRows, 'racepic_manifests_regenerated', 1);
+        }
+      }
+    } catch (error) {
+      errors.push(`racepic_manifest_regeneration:${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   const db = await getDb();
   const windowEnd = new Date().toISOString();

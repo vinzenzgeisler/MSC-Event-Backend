@@ -255,7 +255,17 @@ export class ApiStack extends Stack {
         RETENTION_AUDIT_DAYS: '730',
         RETENTION_EVENT_OPERATIONAL_DAYS: '365',
         RETENTION_DOCUMENT_DAYS: '2190',
-        RETENTION_INVOICE_DAYS: '3650'
+        RETENTION_INVOICE_DAYS: '3650',
+        ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
+        // Paket 9 (RacePic-Datenschutz): erlaubt racepic/publish.ts's regenerateManifestsForEvent
+        // aufzurufen, falls RacePic aktiviert ist. Ohne racePicStack bleiben diese Variablen unset -
+        // der dynamische Import in privacyRetentionWorker.ts faengt das ab (siehe dortiger Kommentar).
+        ...(props.racePicStack
+          ? {
+              RACEPIC_MEDIA_BUCKET: props.racePicStack.mediaBucket.bucketName,
+              RACEPIC_CDN_DISTRIBUTION_ID: props.racePicStack.distribution.distributionId
+            }
+          : {})
       },
       bundling: {
         target: 'node24',
@@ -268,6 +278,23 @@ export class ApiStack extends Stack {
       systemLogLevelV2: lambda.SystemLogLevel.WARN,
       ...lambdaVpcConfig
     });
+    privacyRetentionWorker.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ['s3:DeleteObject'], resources: [`${props.storageStack.assetsBucket.bucketArn}/*`] })
+    );
+    if (props.racePicStack) {
+      privacyRetentionWorker.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+          resources: [`${props.racePicStack.mediaBucket.bucketArn}/*`]
+        })
+      );
+      privacyRetentionWorker.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['cloudfront:CreateInvalidation'],
+          resources: [`arn:aws:cloudfront::${this.account}:distribution/${props.racePicStack.distribution.distributionId}`]
+        })
+      );
+    }
 
     const eventHubMaintenanceWorker = new NodejsFunction(this, 'EventHubMaintenanceWorker', {
       runtime: lambda.Runtime.NODEJS_24_X,
@@ -1961,6 +1988,13 @@ export class ApiStack extends Stack {
       this.api.addRoutes({
         path: '/admin/racepic/participants/{entryId}/images',
         methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      // Paket 9 (Datenschutz): Teilnehmer ausblenden.
+      this.api.addRoutes({
+        path: '/admin/racepic/participants/{entryId}/hide',
+        methods: [apigwv2.HttpMethod.POST],
         integration: racePicIntegration,
         authorizer: jwtAuthorizer
       });

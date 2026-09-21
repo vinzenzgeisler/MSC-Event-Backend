@@ -51,7 +51,8 @@ const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrat
   racepicMediaCorsAllowedOrigins: [...(devPublicBaseUrl ? [devPublicBaseUrl] : []), 'http://localhost:5173', 'http://localhost:4173'],
   racepicPhotographerRelyingPartyId: (process.env.DEV_RACEPIC_RELYING_PARTY_ID ?? 'localhost').trim(),
   racepicSigningPublicKeyPem: devRacePicSigningPublicKeyPem,
-  racepicWebsiteBaseUrl: (process.env.DEV_RACEPIC_WEBSITE_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '')
+  racepicWebsiteBaseUrl: (process.env.DEV_RACEPIC_WEBSITE_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, ''),
+  racepicMonthlyBudgetUsd: Number(process.env.DEV_RACEPIC_MONTHLY_BUDGET_USD ?? '20')
 };
 
 const devIdleConfig: StageConfig = {

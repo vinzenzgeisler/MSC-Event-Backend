@@ -1,4 +1,5 @@
 import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
+import * as budgets from 'aws-cdk-lib/aws-budgets';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
@@ -213,6 +214,34 @@ export class RacePicStack extends Stack {
     });
     this.photographerUserPoolClientId = photographerClient.ref;
     this.photographerUserPoolIssuerUrl = `https://cognito-idp.${this.region}.amazonaws.com/${this.photographerUserPool.userPoolId}`;
+
+    // --- Budget (Paket 9: Betrieb) -----------------------------------------------------------
+    // Abschnitt M des Architekturplans nennt Rekognition/Bedrock/CloudFront als groesste
+    // Kostentreiber - dieses Budget filtert gezielt auf diese Services statt auf das gesamte
+    // AWS-Konto, damit ein Kostenschub in RacePic nicht in anderen Budgets untergeht. Keine
+    // Cost-Anomaly-Detection (aws-ce) hier: brauchte eine SNS-Topic-Abo-Bestaetigung, die in dieser
+    // Umgebung nicht verifizierbar war - siehe offener Punkt in der Progress-Datei.
+    if (props.config.orgaNotificationRecipients.length > 0) {
+      new budgets.CfnBudget(this, 'RacePicMonthlyBudget', {
+        budget: {
+          budgetName: `${props.config.prefix}-racepic-monthly`,
+          budgetType: 'COST',
+          timeUnit: 'MONTHLY',
+          budgetLimit: { amount: props.config.racepicMonthlyBudgetUsd, unit: 'USD' },
+          costFilters: { Service: ['Amazon Rekognition', 'Amazon Bedrock', 'Amazon CloudFront'] }
+        },
+        notificationsWithSubscribers: [
+          {
+            notification: { notificationType: 'ACTUAL', comparisonOperator: 'GREATER_THAN', threshold: 80 },
+            subscribers: props.config.orgaNotificationRecipients.map((email) => ({ subscriptionType: 'EMAIL', address: email }))
+          },
+          {
+            notification: { notificationType: 'FORECASTED', comparisonOperator: 'GREATER_THAN', threshold: 100 },
+            subscribers: props.config.orgaNotificationRecipients.map((email) => ({ subscriptionType: 'EMAIL', address: email }))
+          }
+        ]
+      });
+    }
 
     new CfnOutput(this, 'MediaBucketName', { value: this.mediaBucket.bucketName });
     new CfnOutput(this, 'DistributionDomainName', { value: this.distribution.distributionDomainName });

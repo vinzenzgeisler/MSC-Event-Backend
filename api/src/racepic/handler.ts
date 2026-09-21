@@ -37,7 +37,7 @@ import { sendAnalyzeMessage, sendIngestMessage, sendMatchMessage } from './queue
 import { getImageEventId, hideImage, publishImage, regenerateManifestsForEvent, removeImage } from './publish';
 import { getEventStats, listEventsWithRacepicConfig, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
 import { createMatchingConfig, listMatchingConfigs } from './matchingConfig';
-import { addAssignment, confirmAssignment, correctAssignment, listImagesForEntry, listReviewQueue, rejectAssignment, searchEntriesByEvent } from './reviewQueue';
+import { addAssignment, confirmAssignment, correctAssignment, hideParticipant, listImagesForEntry, listReviewQueue, rejectAssignment, searchEntriesByEvent } from './reviewQueue';
 import { requestImageDownload } from './download';
 import { racepicImage } from '../db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -114,6 +114,8 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 402, message: 'This image is not available for free download' };
     case 'RACEPIC_DOWNLOAD_VARIANT_UNAVAILABLE':
       return { status: 404, message: 'Requested variant is not available for this image' };
+    case 'RACEPIC_ENTRY_NOT_FOUND':
+      return { status: 404, message: 'Entry not found' };
     default:
       return { status: 500, message: 'RacePic operation failed' };
   }
@@ -998,6 +1000,38 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
       const images = await listImagesForEntry(decodeURIComponent(entryImagesMatch[1]));
       return json(200, { ok: true, images });
+    }
+
+    // --- Admin: Teilnehmer ausblenden (Paket 9: Datenschutz) -----------------------------------
+    const hideParticipantMatch = path.match(/^\/admin\/racepic\/participants\/([^/]+)\/hide$/);
+    if (method === 'POST' && hideParticipantMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
+      try {
+        const entryId = decodeURIComponent(hideParticipantMatch[1]);
+        const result = await hideParticipant(entryId, auth.sub);
+        for (const eventId of result.eventIds) {
+          await regenerateManifestsForEvent(eventId).catch((error) =>
+            logOperationalEvent('error', 'racepic_publish.manifest_regen_failed', { errorCode: errorCodeOf(error) })
+          );
+        }
+        const db = await getDb();
+        await writeAuditLog(db, {
+          actorUserId: auth.sub,
+          action: 'racepic_participant_hidden',
+          entityType: 'entry',
+          entityId: entryId,
+          payload: { rejectedCount: result.rejectedCount }
+        });
+        return json(200, { ok: true, rejectedCount: result.rejectedCount });
+      } catch (error) {
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
     }
 
     return errorJson(404, 'Not Found');

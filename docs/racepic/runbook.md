@@ -1,0 +1,96 @@
+# RacePic – Betriebs-Runbook
+
+Stand: 2026-09-21 (Paket 9). Bezieht sich auf den Code-Stand in `feature/racepic-planning`,
+**noch nicht deployed**. Ergänzt `docs/memory-bank/racepic-architecture.md` (Konzept) und
+`docs/memory-bank/racepic-progress.md` (Umsetzungsstand) um konkrete Betriebs-Handgriffe.
+
+## RacePic für ein Event aktivieren
+
+1. Admin-Oberfläche im Nennungstool öffnen: `/admin/racepic`.
+2. Event in der Tabelle aufklappen ("Konfigurieren"), Slug (lesbar, kleingeschrieben,
+   Bindestriche), Titel, Upload-Fenster setzen. `Aktiviert` einschalten.
+3. Fotograf:innen unten auf derselben Seite einladen (E-Mail, Anzeigename, Event-Zugriff
+   auswählen) – sie erhalten einen Einladungslink zu `/racepic/studio/einladung/{token}` auf
+   der Website.
+4. Nach dem Upload/Ingest/Analyze/Match-Durchlauf: Review-Queue unter
+   `/admin/racepic/review/{eventId}` abarbeiten.
+5. Wenn genug Zuordnungen bestätigt sind: `Veröffentlicht` im Event-Formular einschalten und
+   speichern – das löst sofort `regenerateManifestsForEvent` aus (Manifeste + CloudFront-
+   Invalidation).
+
+## Ein einzelnes Bild veröffentlichen/verbergen/entfernen
+
+`PATCH /admin/racepic/images/{imageId}` mit `{"visibility": "PUBLISHED" | "HIDDEN" | "REMOVED"}`.
+`HIDDEN` braucht nur `racepic.review`, `PUBLISHED`/`REMOVED` brauchen `racepic.manage`. Löst
+automatisch eine Manifest-Regenerierung für das zugehörige Event aus.
+
+## Ein-/Widerspruch eines Teilnehmers ("Teilnehmer ausblenden")
+
+`POST /admin/racepic/participants/{entryId}/hide` (braucht `racepic.manage`). Lehnt alle aktiven
+Zuordnungen dieser Nennung ab (`REJECTED`) und regeneriert die Manifeste des betroffenen Events.
+Bilder, die *auch* anderen Fahrern zugeordnet sind, bleiben für diese sichtbar.
+
+## Matching neu laufen lassen
+
+- **Ein Bild neu analysieren** (z. B. nach einem Rekognition-Fehler): `POST
+  /admin/racepic/images/{imageId}/reanalyze`.
+- **Ein ganzes Event neu zuordnen** (z. B. nach Anpassung der Matching-Config): `POST
+  /admin/racepic/events/{eventId}/rematch`. Nutzt die bereits vorhandenen KI-Rohantworten
+  (`analysis/{imageId}/*.json`), **kein** erneuter Rekognition-/Bedrock-Aufruf.
+- Matching-Config ansehen/anlegen: `GET`/`POST /admin/racepic/matching-configs`. Eine neue
+  Version deaktiviert die alte im selben Scope (Event-spezifisch oder global), alte Zeilen
+  bleiben für die Nachvollziehbarkeit erhalten.
+
+## Datenschutz-Anfrage (Auskunft/Löschung) zu einem Teilnehmer
+
+1. Nennung im Nennungstool suchen (Startnummer/Name).
+2. Falls Bilder entfernt werden sollen: `POST /admin/racepic/participants/{entryId}/hide`
+   (siehe oben).
+3. Für eine vollständige Bild-Löschung eines konkreten Fotos: `PATCH
+   /admin/racepic/images/{imageId}` mit `visibility: REMOVED` – löscht S3-Objekte und
+   `racepic_image_variant`-Zeilen, das Audit (`racepic_assignment_event`) bleibt ohne
+   Bilddaten erhalten (Architekturplan Abschnitt G "Löschung").
+4. Die reguläre Anonymisierung nach 365 Tagen (Name verschwindet, Startnummer/Klasse/Fahrzeug
+   bleiben) läuft automatisch über den bestehenden `PrivacyRetentionWorker` (täglich) – siehe
+   `docs/privacy/racepic-retention-addendum.md`.
+
+## Fahrzeugbild-Löschung prüfen (Paket 9 – behobene Lücke)
+
+Der `PrivacyRetentionWorker` löscht seit Paket 9 zusätzlich zum Nullen von
+`vehicle.image_s3_key` auch die S3-Objekte im Assets-Bucket und die zugehörige
+`racepic_vehicle_reference`-Zeile. Prüfen über CloudWatch Logs Insights
+(`{prefix}/operational-errors`) oder den `privacy_retention_run`-Audit-Log-Eintrag
+(`deletedRows.vehicle_image_s3_deleted`).
+
+## Kostenüberwachung
+
+- **Budget:** `{prefix}-racepic-monthly` (nur wenn `enableRacePic=true` und
+  `ORGA_NOTIFICATION_RECIPIENTS` gesetzt ist), gefiltert auf Rekognition/Bedrock/CloudFront.
+  Alarmiert per E-Mail bei 80 % des tatsächlichen und 100 % des prognostizierten Betrags.
+  Höhe über `DEV_RACEPIC_MONTHLY_BUDGET_USD`/`PROD_RACEPIC_MONTHLY_BUDGET_USD` konfigurierbar.
+- **Keine Cost Anomaly Detection** eingerichtet (bräuchte eine SNS-Themen-Abo-Bestätigung, in
+  dieser Umgebung nicht einrichtbar/verifizierbar) – offener Punkt, siehe Progress-Datei.
+- CloudWatch-Alarme auf den drei DLQs (`racepic-ingest-dlq`, `racepic-analyze-dlq`,
+  `racepic-match-dlq`, Paket 1) zeigen hängengebliebene Nachrichten.
+
+## Warteschlangen / hängengebliebene Verarbeitung
+
+- Ein Bild bleibt in `UPLOADED`/`DERIVED`/`ANALYZED`: die jeweilige DLQ prüfen
+  (`{prefix}-racepic-{ingest|analyze|match}-dlq`), Nachricht ansehen, Ursache beheben, dann
+  `POST /admin/racepic/images/{imageId}/reanalyze` bzw. für Uploads erneut hochladen.
+- Hängengebliebene Uploads (Presign-Fenster ohne `complete`-Aufruf) räumt der
+  `RacePicUploadReconciler` automatisch alle 15 Minuten auf (Paket 3).
+
+## Vor dem ersten echten Deploy
+
+1. CloudFront-Signing-Schlüsselpaar erzeugen und `racepicSigningPublicKeyPem` setzen (Paket 1
+   – bis dahin laufen Downloads über S3-Presigned-URLs statt CloudFront, siehe Paket 8).
+2. `cdk deploy` einmal in der GitHub-Actions-CI beobachten und bestätigen, dass `sharp` dort
+   mit Linux-x64-Binaries bündelt (Paket 4 – lokal auf Windows nicht abschließend
+   verifizierbar).
+3. Rechtstexte (`docs/privacy/racepic-legal-texts-v1.md`, `docs/racepic/licenses.md`) durch
+   Datenschutzbeauftragten/Vorstand freigeben lassen (Paket 0).
+4. Bedrock-Aufruf gegen `cohere.embed-v4:0` in eu-west-1 einmal live testen (Paket 6 – Format
+   ist gegen die aktuelle Doku verifiziert, aber nicht live getestet).
+5. Rate-Limiting für `POST /public/racepic/images/{id}/download` ergänzen (Paket 8, offener
+   Punkt).

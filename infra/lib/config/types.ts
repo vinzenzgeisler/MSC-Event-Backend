@@ -54,4 +54,7 @@ export interface StageConfig {
   // https://www.msc-oberlausitz.de - dort liegt das Fotografen-Studio (Abschnitt E), nicht im
   // Nennungstool-Frontend.
   racepicWebsiteBaseUrl: string;
+  // Paket 9 (Betrieb): monatliches Budget in USD, gefiltert auf Rekognition/Bedrock/CloudFront
+  // (Abschnitt M: groesste Kostentreiber). Benachrichtigt `orgaNotificationRecipients`.
+  racepicMonthlyBudgetUsd: number;
 }

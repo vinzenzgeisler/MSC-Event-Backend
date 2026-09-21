@@ -50,7 +50,8 @@ const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrat
   enableRacePic: (process.env.DEV_ENABLE_RACEPIC ?? '').trim().toLowerCase() === 'true',
   racepicMediaCorsAllowedOrigins: [...(devPublicBaseUrl ? [devPublicBaseUrl] : []), 'http://localhost:5173', 'http://localhost:4173'],
   racepicPhotographerRelyingPartyId: (process.env.DEV_RACEPIC_RELYING_PARTY_ID ?? 'localhost').trim(),
-  racepicSigningPublicKeyPem: devRacePicSigningPublicKeyPem
+  racepicSigningPublicKeyPem: devRacePicSigningPublicKeyPem,
+  racepicWebsiteBaseUrl: (process.env.DEV_RACEPIC_WEBSITE_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '')
 };
 
 const devIdleConfig: StageConfig = {

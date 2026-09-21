@@ -1739,7 +1739,8 @@ export class ApiStack extends Stack {
           RACEPIC_MATCH_QUEUE_URL: racePicStack.matchQueue.queueUrl,
           RACEPIC_PHOTOGRAPHER_POOL_ID: racePicStack.photographerUserPool.userPoolId,
           RACEPIC_PHOTOGRAPHER_POOL_CLIENT_ID: racePicStack.photographerUserPoolClientId,
-          RACEPIC_PHOTOGRAPHER_POOL_ISSUER: racePicStack.photographerUserPoolIssuerUrl
+          RACEPIC_PHOTOGRAPHER_POOL_ISSUER: racePicStack.photographerUserPoolIssuerUrl,
+          RACEPIC_WEBSITE_BASE_URL: props.config.racepicWebsiteBaseUrl
         },
         ...(props.config.apiInVpc ? lambdaVpcConfig : {})
       });
@@ -1770,6 +1771,15 @@ export class ApiStack extends Stack {
       );
       [racePicStack.ingestQueue, racePicStack.analyzeQueue, racePicStack.matchQueue].forEach((queue) => queue.grantSendMessages(racePicApiHandler));
 
+      // Paket 2 (Identitaet): AdminCreateUser/AdminGetUser fuer den Claim-Flow, siehe
+      // api/src/racepic/cognito.ts. Nur der Photographer-Pool, nicht der Staff-Pool.
+      racePicApiHandler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminGetUser'],
+          resources: [racePicStack.photographerUserPool.userPoolArn]
+        })
+      );
+
       const racePicIntegration = new SharedPermissionHttpLambdaIntegration('RacePicApiIntegration', racePicApiHandler);
 
       racePicApiHandler.addPermission('RacePicHttpApiInvokePermission', {
@@ -1797,17 +1807,40 @@ export class ApiStack extends Stack {
         integration: racePicIntegration
       });
 
-      // Stub-Routen (Paket 1): belegen den Pfad-Namespace und die Authorizer-Verdrahtung; die
-      // eigentliche Fachlogik kommt in Paket 2 (Identitaet), 3 (Upload), 6 (KI), 7/Admin (Review).
+      // Paket 2 (Identitaet): Einladung/Claim/Profil, siehe api/src/racepic/handler.ts.
       this.api.addRoutes({
         path: '/photographer/me',
-        methods: [apigwv2.HttpMethod.GET],
+        methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PATCH],
         integration: racePicIntegration,
         authorizer: photographerJwtAuthorizer
       });
       this.api.addRoutes({
+        path: '/photographer/claim',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      // Oeffentlich, kein Authorizer: Einladungslink gewaehrt keinen Zugriff, nur den Start des
+      // Email-OTP-Flows fuer die eingeladene Adresse (siehe Architekturplan Abschnitt I "Einladung").
+      this.api.addRoutes({
+        path: '/public/racepic/invitations/{token}',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration
+      });
+      this.api.addRoutes({
+        path: '/public/racepic/invitations/{token}/start',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration
+      });
+      this.api.addRoutes({
         path: '/admin/racepic/ping',
         methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/photographers',
+        methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
         integration: racePicIntegration,
         authorizer: jwtAuthorizer
       });

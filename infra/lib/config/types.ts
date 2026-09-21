@@ -50,4 +50,8 @@ export interface StageConfig {
   // PEM-kodierter oeffentlicher Schluessel fuer CloudFront Signed URLs/Cookies (Downloads).
   // Undefined bis das Schluesselpaar einmalig erzeugt wurde, siehe TODO in racepic-stack.ts.
   racepicSigningPublicKeyPem?: string;
+  // Basis-URL der Website fuer Links in RacePic-Systemmails (Einladung/Claim), z. B.
+  // https://www.msc-oberlausitz.de - dort liegt das Fotografen-Studio (Abschnitt E), nicht im
+  // Nennungstool-Frontend.
+  racepicWebsiteBaseUrl: string;
 }

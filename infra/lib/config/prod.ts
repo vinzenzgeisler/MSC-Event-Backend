@@ -71,6 +71,7 @@ export const resolveProdConfig = (): StageConfig => {
     enableRacePic: (process.env.PROD_ENABLE_RACEPIC ?? '').trim().toLowerCase() === 'true',
     racepicMediaCorsAllowedOrigins: [prodPublicBaseUrl, 'https://www.msc-oberlausitz.de', 'https://msc-oberlausitz.de'],
     racepicPhotographerRelyingPartyId: (process.env.PROD_RACEPIC_RELYING_PARTY_ID ?? 'msc-oberlausitz.de').trim(),
-    racepicSigningPublicKeyPem: (process.env.PROD_RACEPIC_SIGNING_PUBLIC_KEY_PEM ?? '').trim() || undefined
+    racepicSigningPublicKeyPem: (process.env.PROD_RACEPIC_SIGNING_PUBLIC_KEY_PEM ?? '').trim() || undefined,
+    racepicWebsiteBaseUrl: (process.env.PROD_RACEPIC_WEBSITE_BASE_URL ?? 'https://www.msc-oberlausitz.de').replace(/\/$/, '')
   };
 };

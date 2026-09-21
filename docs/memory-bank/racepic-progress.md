@@ -11,7 +11,7 @@ Alle Arbeit läuft im Branch `feature/racepic-planning` (noch nicht nach `main` 
 |---|---|---|---|
 | 0 | Entscheidungen (Datenschutztexte, Lizenztexte, Bedrock-Region) | **erledigt (Entwurf)** | Texte liegen in `docs/racepic/licenses.md` und `docs/privacy/racepic-*.md`; Freigabe durch Datenschutzbeauftragten/Rechtsberatung steht noch aus |
 | 1 | Fundament: Migrationen `racepic_*`, `RacePicStack` (Bucket, CloudFront, SQS, Photographer-Pool), `RacePicApiHandler`, Permissions | **erledigt (ungedeployed)** | siehe „Paket 1 – Ergebnis“ unten |
-| 2a | Identität (Backend-Teil): Photographer-Pool, Einladung/Claim-API, Profil-API, `requireStepUp` | offen | Website-Teil (Studio-UI) siehe msc-website |
+| 2a | Identität (Backend-Teil): Photographer-Pool, Einladung/Claim-API, Profil-API, `requireStepUp` | **erledigt (ungedeployed)** | siehe „Paket 2 – Ergebnis“ unten; Website-Teil (Studio-UI) siehe msc-website |
 | 3a | Upload (Backend-Teil): Batch- und Multipart-Endpoints, Reconciler | offen | Website-Teil (Uppy-UI) siehe msc-website |
 | 4 | Ingest- und Publish-Worker: Varianten, EXIF, Manifeste | offen | |
 | 6 | KI-Pipeline: Referenz-Job, Analyze-Worker, Matcher, Config, Audit | offen | |
@@ -31,6 +31,22 @@ Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implem
 - `api/src/racepic/handler.ts`, `api/src/racepic/auth.ts` (neu): Handler-Skelett im Stil von `api/src/handler.ts`; `getPhotographerAuthContext`/`satisfiesStepUp` als Grundlage für die Step-up-Policies aus Abschnitt E (nur `session`/`recent` bereits nutzbar, `strong` liefert bewusst immer `false`, bis der Passkey-Grant-Store existiert).
 - `api/src/http/auth.ts`, `infra/lib/stacks/auth-stack.ts`: Permissions `racepic.read`/`racepic.review`/`racepic.manage`, neue Rolle/Cognito-Gruppe `racepic_moderator` (read+review, kein manage).
 - **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei; `cdk synth` für `RacePicStack` allein und für `ApiStack` mit `enableRacePic=true` (dev-Testprofil) erfolgreich. **Nicht deployed** (lokales Deployen ist laut `AGENTS.md` untersagt; Aktivierung nur bewusst über die CI-Pipeline mit `*_ENABLE_RACEPIC=true`).
+
+## Paket 2 – Ergebnis (2026-09-21)
+
+- `api/migrations/0096_racepic_photographer_invitation_mail.sql`: Systemmail-Template `racepic_photographer_invitation` (gleiches Muster wie `0055_doublestarter_migration_notice.sql`), läuft über den bestehenden `email_outbox`/`EmailWorker`-Pfad, nicht über die Admin-Compose-Route.
+- `api/src/racepic/repository.ts` (neu): `createPhotographerInvitation` (legt Profil + `racepic_photographer_event`-Zeilen + Einladungstoken transaktional an, reinvite-faehig), `getInvitationPreviewByToken`, `getConsumableInvitationByToken`, `claimInvitation` (race-sicher über die WHERE-Bedingungen des Updates), `getPhotographerByCognitoSub`, `updatePhotographerProfile`, `listPhotographers`.
+- `api/src/racepic/cognito.ts` (neu): `ensurePhotographerCognitoUser` (AdminCreateUser mit `MessageAction: SUPPRESS`, kein Passwort, `email_verified: true` weil nur über den geprüften Einladungslink erreichbar), idempotent gegenüber bereits existierenden Nutzern.
+- `api/src/racepic/mail.ts` (neu): Queued die Einladungsmail direkt in `email_outbox` (Template-Daten `photographerName`, `eventNames`, `invitationUrl`).
+- `api/src/racepic/handler.ts`: volle Routen-Implementierung für
+  - `POST /admin/racepic/photographers` (einladen, `racepic.manage`), `GET /admin/racepic/photographers` (`racepic.read`)
+  - `GET /public/racepic/invitations/{token}` (Vorschau: nur Eventnamen + maskierte E-Mail), `POST /public/racepic/invitations/{token}/start` (legt Cognito-Nutzer an, gibt die volle E-Mail zurück – siehe Begründung im Code – als Cognito-`USERNAME` für den nachfolgenden Email-OTP-Login)
+  - `POST /photographer/claim` (prüft `email_verified` + E-Mail-Übereinstimmung mit der Einladung, bindet `cognito_sub`)
+  - `GET`/`PATCH /photographer/me` (E-Mail-Änderung bewusst ausgeklammert, braucht Stufe `recent` + Cognito-Attributänderung, folgt später)
+- `infra/lib/stacks/api-stack.ts`: Routen für alle oben genannten Endpunkte registriert; `cognito-idp:AdminCreateUser`/`AdminGetUser` auf den Photographer-Pool granted (nicht auf den Staff-Pool).
+- `infra/lib/config/{types,dev,prod}.ts`: neues Feld `racepicWebsiteBaseUrl` (Basis-URL für den Einladungslink, zeigt auf die Website, nicht das Nennungstool-Frontend).
+- `api/src/audit/log.ts`: neue Audit-Actions `racepic_photographer_invited`/`_claimed`/`_profile_updated`.
+- **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei; `cdk synth` für `ApiStack` mit `enableRacePic=true` erneut erfolgreich (neue Routen + IAM-Policy). **Nicht deployed.**
 
 ## Entscheidungen aus diesem Repo
 

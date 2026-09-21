@@ -73,7 +73,11 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   terminal_participant_session_completed: ['entryIds', 'workflowType', 'operation', 'participantId', 'charityRegistrationId', 'documentIds'],
   waiver_signed_mail_queued: ['signingSessionId', 'outboxId', 'recipient'],
   waiver_signed_mail_resent: ['signingSessionId', 'outboxId', 'recipient'],
-  waiver_paper_export_created: ['driverCount', 'version']
+  waiver_paper_export_created: ['driverCount', 'version'],
+  // RacePic (Paket 2: Identitaet), siehe api/src/racepic/handler.ts.
+  racepic_photographer_invited: ['photographerId', 'eventIds', 'reinvited'],
+  racepic_photographer_claimed: ['photographerId'],
+  racepic_photographer_profile_updated: ['photographerId', 'fieldMask']
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

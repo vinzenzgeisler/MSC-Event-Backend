@@ -85,7 +85,9 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   // RacePic (Paket 6: KI-Pipeline), siehe api/src/racepic/matchingConfig.ts und handler.ts.
   racepic_matching_config_created: ['version'],
   racepic_rematch_triggered: ['queued'],
-  racepic_reanalyze_triggered: []
+  racepic_reanalyze_triggered: [],
+  // RacePic (Paket 7: Review-Queue), siehe api/src/racepic/reviewQueue.ts.
+  racepic_assignment_reviewed: ['decision']
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

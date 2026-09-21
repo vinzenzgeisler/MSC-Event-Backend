@@ -37,6 +37,8 @@ import { sendAnalyzeMessage, sendIngestMessage, sendMatchMessage } from './queue
 import { getImageEventId, hideImage, publishImage, regenerateManifestsForEvent, removeImage } from './publish';
 import { getEventStats, listEventsWithRacepicConfig, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
 import { createMatchingConfig, listMatchingConfigs } from './matchingConfig';
+import { addAssignment, confirmAssignment, correctAssignment, listImagesForEntry, listReviewQueue, rejectAssignment, searchEntriesByEvent } from './reviewQueue';
+import { requestImageDownload } from './download';
 import { racepicImage } from '../db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 
@@ -100,6 +102,18 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 404, message: 'Image not found' };
     case 'RACEPIC_IMAGE_NOT_READY_TO_PUBLISH':
       return { status: 409, message: 'Image has not finished processing yet' };
+    case 'RACEPIC_ASSIGNMENT_NOT_FOUND':
+      return { status: 404, message: 'Assignment not found' };
+    case 'RACEPIC_ASSIGNMENT_ALREADY_EXISTS':
+      return { status: 409, message: 'This entry is already assigned to this image' };
+    case 'RACEPIC_MATCHING_CONFIG_THRESHOLDS_INVALID':
+      return { status: 400, message: 'reviewThreshold must not exceed autoThreshold' };
+    case 'RACEPIC_IMAGE_NOT_PUBLISHED':
+      return { status: 404, message: 'Image not found' };
+    case 'RACEPIC_IMAGE_NOT_FREE':
+      return { status: 402, message: 'This image is not available for free download' };
+    case 'RACEPIC_DOWNLOAD_VARIANT_UNAVAILABLE':
+      return { status: 404, message: 'Requested variant is not available for this image' };
     default:
       return { status: 500, message: 'RacePic operation failed' };
   }
@@ -191,6 +205,15 @@ const createMatchingConfigSchema = z.object({
   reviewThreshold: z.number().min(0).max(1),
   minMargin: z.number().min(0).max(1)
 });
+
+// --- Paket 7: Review-Queue -----------------------------------------------------------------------
+
+const correctAssignmentSchema = z.object({ entryId: z.string().uuid() });
+const addAssignmentSchema = z.object({ entryId: z.string().uuid(), detectionId: z.string().uuid().nullable().optional() });
+
+// --- Paket 8: Oeffentlicher Download -------------------------------------------------------------
+
+const requestDownloadSchema = z.object({ variant: z.enum(['small', 'medium', 'large', 'original']) });
 
 const uploadDto = (upload: { id: string; status: string; fileName: string | null; declaredSizeBytes: number; expiresAt: Date }) => ({
   id: upload.id,
@@ -440,6 +463,24 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         // GET-Vorschau oben zeigt bewusst nur die maskierte Adresse.
         return json(200, { ok: true, email: invitation.email });
       } catch (error) {
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    // --- Oeffentlich: Download (Paket 8) --------------------------------------------------------
+    const publicDownloadMatch = path.match(/^\/public\/racepic\/images\/([^/]+)\/download$/);
+    if (method === 'POST' && publicDownloadMatch) {
+      try {
+        const input = requestDownloadSchema.parse(parseJsonBody(event));
+        const result = await requestImageDownload(decodeURIComponent(publicDownloadMatch[1]), input.variant);
+        return json(200, { ok: true, ...result });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
         if (error instanceof RacePicError) {
           const { status, message } = racePicErrorStatus(error);
           return errorJson(status, message, undefined, error.code);
@@ -820,6 +861,143 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         payload: {}
       });
       return json(200, { ok: true });
+    }
+
+    // --- Admin: Review-Queue (Paket 7) ---------------------------------------------------------
+    const reviewQueueMatch = path.match(/^\/admin\/racepic\/events\/([^/]+)\/review-queue$/);
+    if (method === 'GET' && reviewQueueMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.review')) return errorJson(403, 'Forbidden');
+      const query = event.queryStringParameters ?? {};
+      const limit = Math.min(Math.max(Number(query.limit ?? '20') || 20, 1), 100);
+      const offset = Math.max(Number(query.offset ?? '0') || 0, 0);
+      const result = await listReviewQueue(decodeURIComponent(reviewQueueMatch[1]), offset, limit);
+      return json(200, { ok: true, ...result });
+    }
+
+    const entrySearchMatch = path.match(/^\/admin\/racepic\/events\/([^/]+)\/entries\/search$/);
+    if (method === 'GET' && entrySearchMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.review')) return errorJson(403, 'Forbidden');
+      const results = await searchEntriesByEvent(decodeURIComponent(entrySearchMatch[1]), event.queryStringParameters?.q ?? '');
+      return json(200, { ok: true, entries: results });
+    }
+
+    const confirmAssignmentMatch = path.match(/^\/admin\/racepic\/assignments\/([^/]+)\/confirm$/);
+    if (method === 'POST' && confirmAssignmentMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.review')) return errorJson(403, 'Forbidden');
+      try {
+        const assignment = await confirmAssignment(decodeURIComponent(confirmAssignmentMatch[1]), auth.sub);
+        const db = await getDb();
+        await writeAuditLog(db, {
+          actorUserId: auth.sub,
+          action: 'racepic_assignment_reviewed',
+          entityType: 'racepic_assignment',
+          entityId: assignment.id,
+          payload: { decision: 'confirmed' }
+        });
+        return json(200, { ok: true });
+      } catch (error) {
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    const rejectAssignmentMatch = path.match(/^\/admin\/racepic\/assignments\/([^/]+)\/reject$/);
+    if (method === 'POST' && rejectAssignmentMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.review')) return errorJson(403, 'Forbidden');
+      try {
+        const assignment = await rejectAssignment(decodeURIComponent(rejectAssignmentMatch[1]), auth.sub);
+        const db = await getDb();
+        await writeAuditLog(db, {
+          actorUserId: auth.sub,
+          action: 'racepic_assignment_reviewed',
+          entityType: 'racepic_assignment',
+          entityId: assignment.id,
+          payload: { decision: 'rejected' }
+        });
+        return json(200, { ok: true });
+      } catch (error) {
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    const correctAssignmentMatch = path.match(/^\/admin\/racepic\/assignments\/([^/]+)\/correct$/);
+    if (method === 'POST' && correctAssignmentMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.review')) return errorJson(403, 'Forbidden');
+      try {
+        const input = correctAssignmentSchema.parse(parseJsonBody(event));
+        const assignmentId = await correctAssignment(decodeURIComponent(correctAssignmentMatch[1]), input.entryId, auth.sub);
+        const db = await getDb();
+        await writeAuditLog(db, {
+          actorUserId: auth.sub,
+          action: 'racepic_assignment_reviewed',
+          entityType: 'racepic_assignment',
+          entityId: assignmentId,
+          payload: { decision: 'corrected' }
+        });
+        return json(200, { ok: true });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    const addAssignmentMatch = path.match(/^\/admin\/racepic\/images\/([^/]+)\/assignments$/);
+    if (method === 'POST' && addAssignmentMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.review')) return errorJson(403, 'Forbidden');
+      try {
+        const input = addAssignmentSchema.parse(parseJsonBody(event));
+        const created = await addAssignment(decodeURIComponent(addAssignmentMatch[1]), input.entryId, input.detectionId ?? null, auth.sub);
+        const db = await getDb();
+        await writeAuditLog(db, {
+          actorUserId: auth.sub,
+          action: 'racepic_assignment_reviewed',
+          entityType: 'racepic_assignment',
+          entityId: created.id,
+          payload: { decision: 'added' }
+        });
+        return json(201, { ok: true });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    const entryImagesMatch = path.match(/^\/admin\/racepic\/participants\/([^/]+)\/images$/);
+    if (method === 'GET' && entryImagesMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
+      const images = await listImagesForEntry(decodeURIComponent(entryImagesMatch[1]));
+      return json(200, { ok: true, images });
     }
 
     return errorJson(404, 'Not Found');

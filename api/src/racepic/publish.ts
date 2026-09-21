@@ -1,7 +1,18 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { getDb } from '../db/client';
-import { eventClass, entry, person, racepicAssignment, racepicEvent, racepicImage, racepicImageVariant, vehicle } from '../db/schema';
+import {
+  eventClass,
+  entry,
+  person,
+  racepicAssignment,
+  racepicEvent,
+  racepicImage,
+  racepicImageVariant,
+  racepicLicense,
+  racepicPhotographer,
+  vehicle
+} from '../db/schema';
 import { RacePicError } from './repository';
 import { copyObject, deleteObject, putObject } from './s3';
 
@@ -15,6 +26,13 @@ import { copyObject, deleteObject, putObject } from './s3';
  * nach `public/{imageId}/{kind}.webp` (CDN-oeffentlich). Es gibt dafuer bewusst keine eigene
  * DB-Zeile: die `racepic_image_variant`-Zeile bleibt der kanonische private Pfad, `visibility` auf
  * `racepic_image` entscheidet, ob die oeffentliche Kopie existieren soll.
+ *
+ * URL-Konvention (Abweichung von den Kurzformen `/m/*`/`/p/*` aus dem Architekturplan Abschnitt H):
+ * `infra/lib/stacks/racepic-stack.ts` hat CloudFront-Behaviors direkt auf die S3-Praefixe
+ * `manifests/*` und `public/*` gelegt, keine zusaetzlichen Pfad-Aliase (haette eine CloudFront
+ * Function oder weitere Behaviors gebraucht, ohne funktionalen Mehrwert). Oeffentliche URLs sehen
+ * deshalb so aus: `https://{RACEPIC_CDN_DOMAIN}/manifests/{slug}/index.json` und
+ * `.../public/{imageId}/thumb.webp`.
  */
 
 const publicVariantKey = (imageId: string, kind: 'thumb' | 'preview'): string => `public/${imageId}/${kind}.webp`;
@@ -117,13 +135,26 @@ export type ManifestParticipant = {
   coverThumbUrl: string;
 };
 
+export type ManifestImage = {
+  imageId: string;
+  thumbUrl: string;
+  previewUrl: string;
+  width: number | null;
+  height: number | null;
+  photographer: { displayName: string; website: string | null };
+  license: { code: string; title: unknown; attributionRequired: boolean; attributionTemplate: string | null };
+};
+
+type ManifestData = { participants: ManifestParticipant[]; imagesByParticipantKey: Map<string, ManifestImage[]> };
+
 /**
- * Baut das Teilnehmer-Manifest fuer ein Event (Abschnitt H: `/m/{eventSlug}/index.json`).
- * Ohne Paket 6 (KI-Matching) gibt es noch keine `racepic_assignment`-Zeilen - das Ergebnis ist
- * dann bewusst eine leere Teilnehmerliste, kein Fehler. Der Mechanismus (Query, S3-Schreiben,
- * Invalidation) ist damit trotzdem vollstaendig und getestet.
+ * Baut Teilnehmerliste UND Bilder je Teilnehmer in einem Durchlauf (Abschnitt H:
+ * `/manifests/{eventSlug}/index.json` und `/manifests/{eventSlug}/p/{participantKey}.json`, siehe
+ * URL-Konvention oben). Ohne Paket 6-Zuordnungen bzw. vor der ersten Veroeffentlichung ist das
+ * Ergebnis bewusst leer, kein Fehler - der Mechanismus (Query, S3-Schreiben, Invalidation) ist
+ * trotzdem vollstaendig.
  */
-export const buildParticipantManifest = async (eventId: string): Promise<ManifestParticipant[]> => {
+const buildManifestData = async (eventId: string): Promise<ManifestData> => {
   const db = await getDb();
   const rows = await db
     .select({
@@ -138,7 +169,15 @@ export const buildParticipantManifest = async (eventId: string): Promise<Manifes
       objectionFlag: person.objectionFlag,
       make: vehicle.make,
       model: vehicle.model,
-      imageId: racepicAssignment.imageId
+      imageId: racepicImage.id,
+      imageWidth: racepicImage.width,
+      imageHeight: racepicImage.height,
+      photographerDisplayName: racepicPhotographer.displayName,
+      photographerWebsite: racepicPhotographer.website,
+      licenseCode: racepicLicense.code,
+      licenseTitle: racepicLicense.title,
+      licenseAttributionRequired: racepicLicense.attributionRequired,
+      licenseAttributionTemplate: racepicLicense.attributionTemplate
     })
     .from(racepicAssignment)
     .innerJoin(entry, eq(entry.id, racepicAssignment.entryId))
@@ -146,6 +185,8 @@ export const buildParticipantManifest = async (eventId: string): Promise<Manifes
     .innerJoin(person, eq(person.id, entry.driverPersonId))
     .innerJoin(vehicle, eq(vehicle.id, entry.vehicleId))
     .innerJoin(racepicImage, eq(racepicImage.id, racepicAssignment.imageId))
+    .innerJoin(racepicPhotographer, eq(racepicPhotographer.id, racepicImage.photographerId))
+    .innerJoin(racepicLicense, eq(racepicLicense.id, racepicImage.licenseId))
     .where(
       and(
         eq(entry.eventId, eventId),
@@ -157,6 +198,8 @@ export const buildParticipantManifest = async (eventId: string): Promise<Manifes
     );
 
   const byEntry = new Map<string, ManifestParticipant & { _imageIds: Set<string> }>();
+  const imagesByParticipantKey = new Map<string, ManifestImage[]>();
+
   for (const row of rows) {
     // Datenschutz: Teilnehmer mit Widerspruch/Verarbeitungseinschraenkung erscheinen nicht in der
     // Namenssuche (siehe racepic-architecture.md Abschnitt "Datenschutz"); ein hinterlegter
@@ -165,6 +208,7 @@ export const buildParticipantManifest = async (eventId: string): Promise<Manifes
     if (!row.startNumberNorm) continue;
     const displayName = row.publicationName?.trim() || `${row.firstName} ${row.lastName}`.trim();
     const participantKey = `${row.startNumberNorm}-${slugify(row.className)}`;
+
     const existing = byEntry.get(row.entryId);
     if (existing) {
       existing._imageIds.add(row.imageId);
@@ -179,15 +223,36 @@ export const buildParticipantManifest = async (eventId: string): Promise<Manifes
         make: row.make,
         model: row.model,
         imageCount: 1,
-        coverThumbUrl: `/p/${row.imageId}/thumb.webp`,
+        coverThumbUrl: `/public/${row.imageId}/thumb.webp`,
         _imageIds: new Set([row.imageId])
       });
     }
+
+    const images = imagesByParticipantKey.get(participantKey) ?? [];
+    if (!images.some((image) => image.imageId === row.imageId)) {
+      images.push({
+        imageId: row.imageId,
+        thumbUrl: `/public/${row.imageId}/thumb.webp`,
+        previewUrl: `/public/${row.imageId}/preview.webp`,
+        width: row.imageWidth,
+        height: row.imageHeight,
+        photographer: { displayName: row.photographerDisplayName, website: row.photographerWebsite },
+        license: {
+          code: row.licenseCode,
+          title: row.licenseTitle,
+          attributionRequired: row.licenseAttributionRequired,
+          attributionTemplate: row.licenseAttributionTemplate
+        }
+      });
+      imagesByParticipantKey.set(participantKey, images);
+    }
   }
 
-  return Array.from(byEntry.values())
+  const participants = Array.from(byEntry.values())
     .map(({ _imageIds, ...rest }) => rest)
     .sort((a, b) => a.startNumber.localeCompare(b.startNumber, undefined, { numeric: true }));
+
+  return { participants, imagesByParticipantKey };
 };
 
 export const regenerateManifestsForEvent = async (eventId: string): Promise<void> => {
@@ -196,9 +261,23 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
   if (!racepicEventRow || !racepicEventRow.published) {
     return;
   }
-  const participants = await buildParticipantManifest(eventId);
-  const manifestKey = `manifests/${racepicEventRow.slug}/index.json`;
-  await putObject(manifestKey, Buffer.from(JSON.stringify({ eventId, slug: racepicEventRow.slug, title: racepicEventRow.title, participants })), 'application/json');
+
+  const { participants, imagesByParticipantKey } = await buildManifestData(eventId);
+  const slug = racepicEventRow.slug;
+
+  await putObject(
+    `manifests/${slug}/index.json`,
+    Buffer.from(JSON.stringify({ eventId, slug, title: racepicEventRow.title, participants })),
+    'application/json'
+  );
+
+  for (const participant of participants) {
+    await putObject(
+      `manifests/${slug}/p/${participant.participantKey}.json`,
+      Buffer.from(JSON.stringify({ participant, images: imagesByParticipantKey.get(participant.participantKey) ?? [] })),
+      'application/json'
+    );
+  }
 
   const publishedEvents = await db.select().from(racepicEvent).where(and(eq(racepicEvent.enabled, true), eq(racepicEvent.published, true)));
   await putObject(
@@ -207,5 +286,5 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
     'application/json'
   );
 
-  await invalidateCloudFront([`/m/${racepicEventRow.slug}/*`, '/m/events.json']);
+  await invalidateCloudFront([`/manifests/${slug}/*`, '/manifests/events.json']);
 };

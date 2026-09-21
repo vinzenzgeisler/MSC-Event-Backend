@@ -1853,6 +1853,15 @@ export class ApiStack extends Stack {
         methods: [apigwv2.HttpMethod.POST],
         integration: racePicIntegration
       });
+      // Paket 8: oeffentlicher Download. Kein Authorizer (bewusst oeffentlich, siehe Abschnitt J
+      // MVP-Scope: "Login nur fuer administrative/fotografenspezifische Funktionen"). TODO vor
+      // Go-Live: Rate-Limiting analog `http/publicRateLimit.ts` des Haupt-Handlers ergaenzen -
+      // hier noch nicht verdrahtet (siehe Progress-Notiz).
+      this.api.addRoutes({
+        path: '/public/racepic/images/{imageId}/download',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration
+      });
       this.api.addRoutes({
         path: '/admin/racepic/ping',
         methods: [apigwv2.HttpMethod.GET],
@@ -1908,6 +1917,50 @@ export class ApiStack extends Stack {
       this.api.addRoutes({
         path: '/admin/racepic/images/{imageId}/reanalyze',
         methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+
+      // Paket 7 (Review-Queue), siehe api/src/racepic/reviewQueue.ts.
+      this.api.addRoutes({
+        path: '/admin/racepic/events/{eventId}/review-queue',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/events/{eventId}/entries/search',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/assignments/{assignmentId}/confirm',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/assignments/{assignmentId}/reject',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/assignments/{assignmentId}/correct',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/images/{imageId}/assignments',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/participants/{entryId}/images',
+        methods: [apigwv2.HttpMethod.GET],
         integration: racePicIntegration,
         authorizer: jwtAuthorizer
       });

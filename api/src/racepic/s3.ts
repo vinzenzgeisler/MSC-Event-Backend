@@ -39,6 +39,19 @@ export const presignPutObject = async (key: string, contentType: string, expires
   return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 };
 
+/**
+ * Presigned GET fuer private Objekte (Review-Vorschau in Paket 7, Downloads in Paket 8).
+ * Interimsloesung bis das CloudFront-Signing-Keypair existiert (siehe offener Punkt aus Paket 1):
+ * S3-Presign statt CloudFront Signed URL - funktional gleichwertig geschuetzt, aber ohne CDN-Cache.
+ * Sobald `racepicSigningPublicKeyPem` gesetzt ist, sollte Abschnitt G's CloudFront-Signing genutzt
+ * werden statt dieser Funktion fuer oeffentliche Downloads.
+ */
+export const presignGetObject = async (key: string, expiresInSeconds = 300): Promise<string> => {
+  const client = getS3Client();
+  const command = new GetObjectCommand({ Bucket: getMediaBucket(), Key: key });
+  return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+};
+
 export const createMultipartUpload = async (key: string, contentType: string): Promise<string> => {
   const client = getS3Client();
   const result = await client.send(new CreateMultipartUploadCommand({ Bucket: getMediaBucket(), Key: key, ContentType: contentType }));

@@ -16,6 +16,8 @@ Alle Arbeit läuft im Branch `feature/racepic-planning` (noch nicht nach `main` 
 | 4 | Ingest- und Publish-Worker: Varianten, EXIF, Manifeste | **erledigt (ungedeployed)** | siehe „Paket 4 – Ergebnis" unten |
 | 5b | Admin-Basis (Backend-Teil): Event-Konfiguration, Statistik, Lizenzliste für Admin-UI | **erledigt (ungedeployed)** | siehe „Paket 5 – Ergebnis" unten; UI siehe MSC-Event-Frontend |
 | 6 | KI-Pipeline: Referenz-Job, Analyze-Worker, Matcher, Config, Audit | **erledigt (ungedeployed)** | siehe „Paket 6 – Ergebnis" unten |
+| 7b | Review-Queue (Backend-Teil): Endpunkte für Queue, Entry-Suche, confirm/reject/correct/add | **erledigt (ungedeployed)** | siehe „Paket 7 – Ergebnis" unten; UI siehe MSC-Event-Frontend |
+| 8b | Öffentliches RacePic (Backend-Teil): Teilnehmer-Bild-Manifeste, öffentlicher Download-Endpunkt | **erledigt (ungedeployed)** | siehe „Paket 8 – Ergebnis" unten; UI siehe msc-website |
 | 9 | Datenschutz & Betrieb: Retention-Erweiterung (inkl. S3-Löschung Fahrzeugbild), Ausblenden-Funktion, Budgets, Runbook | offen | Siehe `racepic-retention-addendum.md` |
 | 10a | Pilot 12. OLD 2026 (Backend-Teil): Seed-Daten, Kalibrierung Matching-Schwellen | offen | |
 
@@ -106,6 +108,26 @@ Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implem
 - `api/package.json`: `@aws-sdk/client-bedrock-runtime`, `@aws-sdk/client-rekognition` als neue Abhängigkeiten.
 - **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei; `cdk synth` für `ApiStack` mit `enableRacePic=true` **im ersten Versuch erfolgreich** (inkl. Bundling beider neuer Lambdas). **Nicht deployed** – die verifizierten Bedrock-Request-/Response-Formate sind nicht live gegen die echte API getestet.
 
+## Paket 7 – Ergebnis (2026-09-21)
+
+Diese Endpunkte hatte Abschnitt H des Architekturplans bereits vorgesehen, sie waren aber noch nicht gebaut (analog zur Situation bei Paket 5).
+
+- `api/src/racepic/reviewQueue.ts` (neu): `listReviewQueue` (Bilder/Zuordnungen mit Status `REVIEW_REQUIRED`, inkl. presigned Vorschau-URL und Kandidatenliste mit Namen/Fahrzeug), `confirmAssignment`/`rejectAssignment`/`correctAssignment`/`addAssignment` (alle schreiben `racepic_assignment_event` als Audit-Trail), `listImagesForEntry` (Fahreransicht zur Korrektur), `searchEntriesByEvent` (für den "anderen Fahrer wählen"-Dialog).
+  - **Bewusste Vereinfachungen:** Offset- statt Keyset-Pagination (bei den hier erwarteten Datenmengen ausreichend), kein Soft-Lock pro Item (siehe Progress-Notiz bei MSC-Event-Frontend).
+- `api/src/racepic/s3.ts`: `presignGetObject` (Presigned GET für die private `derived/`-Vorschau) ergänzt.
+- `api/src/racepic/handler.ts`: `GET /admin/racepic/events/{id}/review-queue`, `GET .../entries/search`, `POST /admin/racepic/assignments/{id}/{confirm,reject,correct}`, `POST /admin/racepic/images/{id}/assignments`, `GET /admin/racepic/participants/{id}/images`.
+- `api/src/audit/log.ts`: neue Audit-Action `racepic_assignment_reviewed`.
+- **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei.
+
+## Paket 8 – Ergebnis (2026-09-21)
+
+- **Korrektur an Paket 4:** Die Kurzform-URLs `/m/*`/`/p/*` aus Abschnitt H waren nie als CloudFront-Pfad-Aliase konfiguriert (`racepic-stack.ts` hat Behaviors direkt auf die S3-Präfixe `manifests/*`/`public/*` gelegt). Öffentliche URLs verwenden jetzt konsequent die tatsächlichen Präfixe (`/manifests/...`, `/public/...`) – dokumentiert direkt in `publish.ts`.
+- `api/src/racepic/publish.ts`: `regenerateManifestsForEvent` erzeugt jetzt zusätzlich **ein Manifest pro Teilnehmer** (`manifests/{slug}/p/{participantKey}.json`) mit den zugeordneten, veröffentlichten Bildern inkl. Fotograf und Lizenz – vorher gab es nur das Teilnehmer-Übersichtsmanifest ohne Bilddetails.
+- `api/src/racepic/download.ts` (neu): `requestImageDownload` – prüft `visibility=PUBLISHED` und `offerMode=FREE` (bezahlte Bilder sind bewusst noch nicht unterstützt, der Codepfad ist aber schon auf die spätere Erweiterung vorbereitet), liefert eine kurzlebige Presigned-GET-URL (S3, siehe Interims-Hinweis in `s3.ts`) plus Attribution (Fotograf, Copyright, Lizenz).
+- `api/src/racepic/handler.ts`: `POST /public/racepic/images/{id}/download` (öffentlich, kein Authorizer).
+- **Offener Sicherheitspunkt:** Der Download-Endpunkt ist **nicht** an den bestehenden `publicRateLimit`-Mechanismus des Haupt-Handlers angebunden – vor Go-Live nachziehen.
+- **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei. `cdk synth`-Versuche (3×) trafen jedes Mal die aus Paket 4 bekannte Windows-Bundling-Flakiness an RacePic-fremden, vorbestehenden Lambdas (`SesFeedbackWorker`, `EventHubMaintenanceWorker`) – keiner der Versuche kam bis zu neuem RacePic-Code; nicht weiter wiederholt (siehe Methodik-Hinweis in Paket 4).
+
 ## Entscheidungen aus diesem Repo
 
 - 2026-09-21: Bedrock-Region-Check abgeschlossen. Titan/Nova Multimodal Embeddings sind nur in us-east-1/us-west-2 verfügbar. Gewählt: **Cohere Embed v4 (multimodal) über Bedrock in eu-west-1 (Irland)**, Cross-Region-Aufruf aus der eu-central-1-Lambda, damit Fahrzeugbilder innerhalb der EU bleiben.
@@ -116,6 +138,9 @@ Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implem
 
 - **Vor dem ersten echten Deploy:** einen `cdk deploy`/`synth` in der GitHub-Actions-CI (Linux) beobachten und bestätigen, dass `sharp` dort mit Linux-x64-Binaries bündelt und der `RacePicIngestWorker` tatsächlich ein Bild verarbeiten kann – lokal auf Windows nicht abschließend verifizierbar (siehe Paket 4 – Ergebnis).
 - Vereinfachtes Copyright-Handling (nur EXIF-Tag statt vollem IPTC/XMP) – bei Bedarf später nachziehen, falls Fotoportale/Marktplätze vollständige IPTC-Metadaten erwarten.
+- Kein Soft-Lock in der Review-Queue (Paket 7) – bei einem kleinen Orga-Team akzeptables MVP-Risiko, vor größerem Reviewer-Team nachziehen.
+- Öffentlicher Download-Endpunkt (Paket 8) hat noch kein Rate-Limiting.
+- Downloads laufen über S3-Presigned-URLs statt CloudFront Signed URLs (Interimslösung, siehe `s3.ts`) – auf CloudFront-Signing umstellen, sobald das Schlüsselpaar aus Paket 1 existiert.
 - Bedrock-Aufrufe sind **nicht live getestet** (kein AWS-Zugriff in dieser Umgebung) – vor dem Piloten (Paket 10) einen echten `InvokeModel`-Aufruf gegen `cohere.embed-v4:0` in eu-west-1 verifizieren.
 - Matching-Score ist eine einfache gewichtete Linearkombination, keine trainierte Logistic Regression – Kalibrierung der Gewichte/Schwellen anhand der Review-Entscheidungen aus dem Piloten steht noch aus (Paket 10).
 - Qualitätsreport (Precision/Recall je Schwelle, Abschnitt H) ist noch nicht gebaut – bewusst zurückgestellt, da ohne echte Review-Daten aus Paket 7/10 nicht sinnvoll auswertbar.

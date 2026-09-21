@@ -19,7 +19,7 @@ Alle Arbeit läuft im Branch `feature/racepic-planning` (noch nicht nach `main` 
 | 7b | Review-Queue (Backend-Teil): Endpunkte für Queue, Entry-Suche, confirm/reject/correct/add | **erledigt (ungedeployed)** | siehe „Paket 7 – Ergebnis" unten; UI siehe MSC-Event-Frontend |
 | 8b | Öffentliches RacePic (Backend-Teil): Teilnehmer-Bild-Manifeste, öffentlicher Download-Endpunkt | **erledigt (ungedeployed)** | siehe „Paket 8 – Ergebnis" unten; UI siehe msc-website |
 | 9 | Datenschutz & Betrieb: Retention-Erweiterung (inkl. S3-Löschung Fahrzeugbild), Ausblenden-Funktion, Budgets, Runbook | **erledigt (ungedeployed)** | siehe „Paket 9 – Ergebnis" unten |
-| 10a | Pilot 12. OLD 2026 (Backend-Teil): Seed-Daten, Kalibrierung Matching-Schwellen | offen | |
+| 10a | Pilot 12. OLD 2026 (Backend-Teil): Kalibrierungs-Tooling | **Tooling erledigt (ungedeployed)** | siehe „Paket 10 – Ergebnis" unten; tatsächliche Piloten-Durchführung ist ein operativer Schritt, kein Code |
 
 Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implementiert, auch wenn die UI dazu in MSC-Event-Frontend liegt (Paket 5/7 dort).
 
@@ -140,6 +140,49 @@ Diese Endpunkte hatte Abschnitt H des Architekturplans bereits vorgesehen, sie w
 - `docs/racepic/runbook.md` (neu): operatives Runbook – RacePic für ein Event aktivieren, Bild veröffentlichen/verbergen/entfernen, Teilnehmer ausblenden, Matching neu laufen lassen, Datenschutz-Anfrage abarbeiten, Fahrzeugbild-Löschung prüfen, Kostenüberwachung (nennt das neue Budget), Warteschlangen-/DLQ-Troubleshooting, Checkliste vor dem ersten echten Deploy.
 - **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei. `cdk synth` (3 Versuche, `infra/synth9.log`) traf jedes Mal die aus Paket 4/5/8 bekannte Windows-Bundling-Flakiness (`EPERM: operation not permitted, rename …bundling-temp-…`) an RacePic-fremden, vorbestehenden Lambdas (`ApiHandler`, `RacePicApiHandler` – Letzterer selbst schon in Paket 6 sauber verifiziert –, `SesFeedbackWorker`); `PrivacyRetentionWorker` (die eigentlich für Paket 9 relevante Lambda) wurde in zwei der drei Versuche tatsächlich gebündelt, ohne dass dort ein Fehler protokolliert wurde. Keiner der drei Versuche endete mit einem inhaltlichen Fehler am neuen RacePic-Code – konsistent mit dem bekannten, rein umgebungsbedingten Muster (siehe Methodik-Hinweis in Paket 4). Nicht weiter wiederholt. **Nicht deployed.**
 
+## Paket 10 – Ergebnis (2026-09-21)
+
+**Wichtige Einschränkung zuerst:** Paket 10 ist laut Umsetzungsplan (Abschnitt N) primär eine
+**operative Durchführung** (echte Fotografen einladen, echte Fotos vom bereits vergangenen
+12. OLD 2026 hochladen, Schwellen an echten Review-Entscheidungen kalibrieren, veröffentlichen)
+und kein reines Code-Paket. Diese Sandbox hat keinen AWS-Zugriff, keinen Deploy-Weg und keine
+echten Fotografen-Kontakte – das eigentliche Durchführen des Piloten kann hier nicht stattfinden
+und wurde **nicht** simuliert oder mit Fake-Daten vorgetäuscht. Gebaut wurde das für die
+Kalibrierung nötige **Tooling**, das während des echten Piloten gebraucht wird:
+
+- `api/src/racepic/matchQuality.ts` (neu): `computeMatchQualityReport(eventId)` – Precision/
+  Recall je Schwelle (0,05–1,00, Schrittweite 0,05), berechnet ausschließlich aus Detections mit
+  mindestens einer **von einem Menschen** getroffenen Review-Entscheidung (`racepic_assignment.source
+  = 'MANUAL'`, also über confirm/reject/correct/add aus der Review-Queue, Paket 7). Ein reines
+  `AUTO_MATCHED` ohne jede menschliche Prüfung fließt bewusst nicht als Ground Truth ein, sonst
+  würde der Report die Entscheidung des Matchers gegen sich selbst bewerten (siehe ausführliche
+  Begründung im Modul-Kommentar). Bewusste Vereinfachung: berücksichtigt nur den Rang-1-
+  Kandidatenscore gegen die Schwelle, nicht die zusätzliche `minMargin`-Bedingung des echten
+  Matchers (`matchWorker.ts`).
+- `api/src/racepic/handler.ts`: `GET /admin/racepic/events/{id}/matching-quality-report`
+  (`racepic.read`).
+- `infra/lib/stacks/api-stack.ts`: Route registriert (kein neuer Lambda, wie Paket 5/7).
+- `docs/racepic/runbook.md`: neuer Abschnitt „Schwellen kalibrieren (Paket 10)" – konkrete
+  Schritte für den echten Piloten (Review-Stichprobe abarbeiten → Report abrufen → Schwelle mit
+  Precision ≥ 98 % als `autoThreshold` wählen, Ziel aus Abschnitt „Verifikation" des
+  Architekturplans → neue Matching-Config anlegen → Rematch auslösen → iterieren, bevor das
+  Event veröffentlicht wird).
+- **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei. Ein `cdk synth`-Versuch traf
+  erneut die aus Paket 4/5/8/9 bekannte Windows-Bundling-Flakiness (EPERM) an `RacePicApiHandler`
+  selbst (derselbe Lambda, der die neue Route bedient) – bei einer rein additiven Route auf einem
+  bereits mehrfach erfolgreich verifizierten Handler nicht weiter wiederholt (siehe Methodik-
+  Hinweis Paket 4). **Nicht deployed.**
+
+**Noch offen für den echten Piloten (operativ, nicht Code):**
+1. `enableRacePic` für die Zielumgebung aktivieren (Deploy über die CI-Pipeline).
+2. CloudFront-Signing-Keypair erzeugen (offen seit Paket 1) – ohne dieses Interims-Downloads über
+   S3-Presigned-URLs (Paket 8), das ist für einen kleinen Piloten tragbar.
+3. Rechtstexte final freigeben lassen (offen seit Paket 0).
+4. `racepic_event` für `old-2026` anlegen (`PUT /admin/racepic/events/{id}`), echte Fotografen im
+   Nennungstool-Admin einladen (`/admin/racepic`).
+5. Echte Fotos hochladen (Studio), Pipeline laufen lassen, Review-Queue abarbeiten.
+6. Mit `matching-quality-report` kalibrieren (siehe Runbook-Abschnitt), Event veröffentlichen.
+
 ## Entscheidungen aus diesem Repo
 
 - 2026-09-21: Bedrock-Region-Check abgeschlossen. Titan/Nova Multimodal Embeddings sind nur in us-east-1/us-west-2 verfügbar. Gewählt: **Cohere Embed v4 (multimodal) über Bedrock in eu-west-1 (Irland)**, Cross-Region-Aufruf aus der eu-central-1-Lambda, damit Fahrzeugbilder innerhalb der EU bleiben.
@@ -155,7 +198,7 @@ Diese Endpunkte hatte Abschnitt H des Architekturplans bereits vorgesehen, sie w
 - Downloads laufen über S3-Presigned-URLs statt CloudFront Signed URLs (Interimslösung, siehe `s3.ts`) – auf CloudFront-Signing umstellen, sobald das Schlüsselpaar aus Paket 1 existiert.
 - Bedrock-Aufrufe sind **nicht live getestet** (kein AWS-Zugriff in dieser Umgebung) – vor dem Piloten (Paket 10) einen echten `InvokeModel`-Aufruf gegen `cohere.embed-v4:0` in eu-west-1 verifizieren.
 - Matching-Score ist eine einfache gewichtete Linearkombination, keine trainierte Logistic Regression – Kalibrierung der Gewichte/Schwellen anhand der Review-Entscheidungen aus dem Piloten steht noch aus (Paket 10).
-- Qualitätsreport (Precision/Recall je Schwelle, Abschnitt H) ist noch nicht gebaut – bewusst zurückgestellt, da ohne echte Review-Daten aus Paket 7/10 nicht sinnvoll auswertbar.
+- Qualitätsreport (Precision/Recall je Schwelle, Abschnitt H) ist seit Paket 10 gebaut (`matchQuality.ts`), aber noch nie gegen echte Review-Daten gelaufen – erst im echten Piloten aussagekräftig.
 - `RACEPIC_EMBEDDING_MODEL_ID` ist als Override vorgesehen (siehe `bedrock.ts`), aber noch nicht als CDK-Env-Var gesetzt – nutzt aktuell immer den Default `cohere.embed-v4:0`.
 - Freigabe der Rechtstexte (Datenschutzhinweis, Fotografen-Bedingungen) durch Datenschutzbeauftragten/Vorstand.
 - Namenssuche nach 365 Tagen: aktueller Stand (Name verschwindet, Bildzuordnung über Startnummer/Klasse/Fahrzeug bleibt) ist technisch umgesetzt vorgesehen; dauerhafte Namenssuche erfordert eine zusätzliche Rechtsgrundlage – Entscheidung bei Vorstand/Datenschutz.

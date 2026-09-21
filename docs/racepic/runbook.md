@@ -81,6 +81,29 @@ Der `PrivacyRetentionWorker` löscht seit Paket 9 zusätzlich zum Nullen von
 - Hängengebliebene Uploads (Presign-Fenster ohne `complete`-Aufruf) räumt der
   `RacePicUploadReconciler` automatisch alle 15 Minuten auf (Paket 3).
 
+## Schwellen kalibrieren (Paket 10)
+
+`GET /admin/racepic/events/{eventId}/matching-quality-report` (`racepic.read`) liefert für
+Schwellen von 0,05 bis 1,00 in 0,05-Schritten jeweils Precision/Recall, berechnet **nur** aus
+Detections mit mindestens einer von einem Menschen getroffenen Review-Entscheidung
+(`source=MANUAL`: bestätigt/korrigiert/abgelehnt über die Review-Queue). Ein reines
+`AUTO_MATCHED` ohne Prüfung zählt nicht als Ground Truth. Vorgehen:
+
+1. Für das Pilot-Event ausreichend Bilder durch die Pipeline laufen lassen und in der
+   Review-Queue (`/admin/racepic/review/{eventId}`) eine repräsentative Stichprobe abarbeiten
+   (bestätigen/korrigieren/ablehnen) – je mehr geprüfte Detections, desto belastbarer der Report.
+2. Report abrufen, die Schwelle mit Precision ≥ 98 % als neuen `autoThreshold` wählen (Ziel aus
+   dem Architekturplan, Abschnitt "Verifikation"), eine niedrigere Schwelle mit brauchbarem
+   Recall als `reviewThreshold`.
+3. Neue `racepic_matching_config`-Version anlegen (`POST /admin/racepic/matching-configs`) und
+   per `POST /admin/racepic/events/{id}/rematch` auf die bereits analysierten Bilder anwenden
+   (kein erneuter Rekognition-/Bedrock-Aufruf, siehe oben).
+4. Schritte 1–3 iterieren, bis die Schwellen stabil sind, bevor das Event veröffentlicht wird.
+
+**Einschränkung:** Der Report ignoriert die Marge zum Zweitplatzierten (`minMargin`), die der
+echte Matcher zusätzlich zur Schwelle verwendet (siehe `matchQuality.ts`). Für eine Marge-
+Kalibrierung müssen die Rohdaten aus `racepic_match_candidate` separat ausgewertet werden.
+
 ## Vor dem ersten echten Deploy
 
 1. CloudFront-Signing-Schlüsselpaar erzeugen und `racepicSigningPublicKeyPem` setzen (Paket 1

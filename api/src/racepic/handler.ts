@@ -37,6 +37,7 @@ import { sendAnalyzeMessage, sendIngestMessage, sendMatchMessage } from './queue
 import { getImageEventId, hideImage, publishImage, regenerateManifestsForEvent, removeImage } from './publish';
 import { getEventStats, listEventsWithRacepicConfig, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
 import { createMatchingConfig, listMatchingConfigs } from './matchingConfig';
+import { computeMatchQualityReport } from './matchQuality';
 import { addAssignment, confirmAssignment, correctAssignment, hideParticipant, listImagesForEntry, listReviewQueue, rejectAssignment, searchEntriesByEvent } from './reviewQueue';
 import { requestImageDownload } from './download';
 import { racepicImage } from '../db/schema';
@@ -863,6 +864,16 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         payload: {}
       });
       return json(200, { ok: true });
+    }
+
+    // Qualitaetsreport (Paket 10), siehe matchQuality.ts fuer die Methodik/Einschraenkungen.
+    const matchQualityMatch = path.match(/^\/admin\/racepic\/events\/([^/]+)\/matching-quality-report$/);
+    if (method === 'GET' && matchQualityMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
+      const report = await computeMatchQualityReport(decodeURIComponent(matchQualityMatch[1]));
+      return json(200, { ok: true, report });
     }
 
     // --- Admin: Review-Queue (Paket 7) ---------------------------------------------------------

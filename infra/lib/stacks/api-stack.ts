@@ -1948,6 +1948,14 @@ export class ApiStack extends Stack {
         authorizer: jwtAuthorizer
       });
 
+      // Paket 10 (Pilot-Kalibrierung): Qualitaetsreport, siehe api/src/racepic/matchQuality.ts.
+      this.api.addRoutes({
+        path: '/admin/racepic/events/{eventId}/matching-quality-report',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+
       // Paket 7 (Review-Queue), siehe api/src/racepic/reviewQueue.ts.
       this.api.addRoutes({
         path: '/admin/racepic/events/{eventId}/review-queue',

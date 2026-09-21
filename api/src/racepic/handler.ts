@@ -33,9 +33,12 @@ import {
   listPartsForResume,
   presignRemainingParts
 } from './uploads';
-import { sendIngestMessage } from './queues';
+import { sendAnalyzeMessage, sendIngestMessage, sendMatchMessage } from './queues';
 import { getImageEventId, hideImage, publishImage, regenerateManifestsForEvent, removeImage } from './publish';
 import { getEventStats, listEventsWithRacepicConfig, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
+import { createMatchingConfig, listMatchingConfigs } from './matchingConfig';
+import { racepicImage } from '../db/schema';
+import { and, eq, inArray } from 'drizzle-orm';
 
 /**
  * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet, Paket 3: Upload). Eigenstaendiger
@@ -168,6 +171,25 @@ const putRacepicEventConfigSchema = z.object({
   uploadOpensAt: z.string().datetime().nullable().optional(),
   uploadClosesAt: z.string().datetime().nullable().optional(),
   defaultLicenseId: z.string().uuid().nullable().optional()
+});
+
+// --- Paket 6: KI-Pipeline ------------------------------------------------------------------------
+
+const matchingWeightsSchema = z.object({
+  ocrExact: z.number().min(0).max(1),
+  ocrConfidence: z.number().min(0).max(1),
+  vehicleTypeMatch: z.number().min(0).max(1),
+  embeddingSimilarity: z.number().min(0).max(1),
+  colorSimilarity: z.number().min(0).max(1),
+  ambiguityPenalty: z.number().min(0).max(1)
+});
+
+const createMatchingConfigSchema = z.object({
+  eventId: z.string().uuid().nullable(),
+  weights: matchingWeightsSchema,
+  autoThreshold: z.number().min(0).max(1),
+  reviewThreshold: z.number().min(0).max(1),
+  minMargin: z.number().min(0).max(1)
 });
 
 const uploadDto = (upload: { id: string; status: string; fileName: string | null; declaredSizeBytes: number; expiresAt: Date }) => ({
@@ -713,6 +735,91 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         }
         throw error;
       }
+    }
+
+    // --- Admin: Matching-Config und Re-Runs (Paket 6) ------------------------------------------
+    if (method === 'GET' && path === '/admin/racepic/matching-configs') {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
+      const configs = await listMatchingConfigs(event.queryStringParameters?.eventId);
+      return json(200, { ok: true, configs });
+    }
+
+    if (method === 'POST' && path === '/admin/racepic/matching-configs') {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
+      try {
+        const input = createMatchingConfigSchema.parse(parseJsonBody(event));
+        const config = await createMatchingConfig(input);
+        const db = await getDb();
+        await writeAuditLog(db, {
+          eventId: input.eventId,
+          actorUserId: auth.sub,
+          action: 'racepic_matching_config_created',
+          entityType: 'racepic_matching_config',
+          entityId: config?.id ?? null,
+          payload: { version: config?.version }
+        });
+        return json(201, { ok: true, config });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    // Re-Match nur ab MATCHED/ANALYZED (Abschnitt F: "Ein Re-Match mit neuer Config braucht keinen
+    // neuen KI-Aufruf") - setzt processingStatus zurueck auf ANALYZED und reiht erneut in die
+    // Match-Queue ein; die KI-Rohantworten in S3 bleiben unangetastet.
+    const rematchEventMatch = path.match(/^\/admin\/racepic\/events\/([^/]+)\/rematch$/);
+    if (method === 'POST' && rematchEventMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
+      const eventId = decodeURIComponent(rematchEventMatch[1]);
+      const db = await getDb();
+      const images = await db
+        .select({ id: racepicImage.id })
+        .from(racepicImage)
+        .where(and(eq(racepicImage.eventId, eventId), inArray(racepicImage.processingStatus, ['ANALYZED', 'MATCHED'])));
+      let queued = 0;
+      for (const image of images) {
+        await sendMatchMessage(image.id).catch(() => undefined);
+        queued += 1;
+      }
+      await writeAuditLog(db, {
+        eventId,
+        actorUserId: auth.sub,
+        action: 'racepic_rematch_triggered',
+        entityType: 'racepic_event',
+        entityId: eventId,
+        payload: { queued }
+      });
+      return json(200, { ok: true, queued });
+    }
+
+    const reanalyzeImageMatch = path.match(/^\/admin\/racepic\/images\/([^/]+)\/reanalyze$/);
+    if (method === 'POST' && reanalyzeImageMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
+      const imageId = decodeURIComponent(reanalyzeImageMatch[1]);
+      await sendAnalyzeMessage(imageId);
+      const db = await getDb();
+      await writeAuditLog(db, {
+        actorUserId: auth.sub,
+        action: 'racepic_reanalyze_triggered',
+        entityType: 'racepic_image',
+        entityId: imageId,
+        payload: {}
+      });
+      return json(200, { ok: true });
     }
 
     return errorJson(404, 'Not Found');

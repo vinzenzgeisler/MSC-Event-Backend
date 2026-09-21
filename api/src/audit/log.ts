@@ -81,7 +81,11 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   // RacePic (Paket 4: Publish-Worker), siehe api/src/racepic/publish.ts.
   racepic_image_visibility_changed: ['visibility'],
   // RacePic (Paket 5: Admin-Basis), siehe api/src/racepic/adminEvents.ts.
-  racepic_event_config_updated: ['slug', 'enabled', 'published']
+  racepic_event_config_updated: ['slug', 'enabled', 'published'],
+  // RacePic (Paket 6: KI-Pipeline), siehe api/src/racepic/matchingConfig.ts und handler.ts.
+  racepic_matching_config_created: ['version'],
+  racepic_rematch_triggered: ['queued'],
+  racepic_reanalyze_triggered: []
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

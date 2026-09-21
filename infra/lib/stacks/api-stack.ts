@@ -1892,6 +1892,26 @@ export class ApiStack extends Stack {
         authorizer: jwtAuthorizer
       });
 
+      // Paket 6 (KI-Pipeline): Matching-Config und Re-Runs, siehe api/src/racepic/{matchingConfig,handler}.ts.
+      this.api.addRoutes({
+        path: '/admin/racepic/matching-configs',
+        methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/events/{eventId}/rematch',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/images/{imageId}/reanalyze',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+
       // Paket 3b: Event-/Lizenzauswahl fuer den Studio-Uploader.
       this.api.addRoutes({
         path: '/photographer/events',
@@ -2055,6 +2075,112 @@ export class ApiStack extends Stack {
 
       new CfnOutput(this, 'RacePicApiHandlerName', { value: racePicApiHandler.functionName });
       new CfnOutput(this, 'RacePicIngestWorkerName', { value: racePicIngestWorker.functionName });
+
+      // Paket 6: Analyze-Worker (Rekognition DetectText/DetectLabels + Bedrock-Embedding je
+      // Fahrzeug-Crop), konsumiert die Analyze-Queue.
+      const racePicAnalyzeWorker = new NodejsFunction(this, 'RacePicAnalyzeWorker', {
+        runtime: lambda.Runtime.NODEJS_24_X,
+        architecture: lambda.Architecture.X86_64, // gleiche Begruendung wie RacePicIngestWorker (sharp).
+        entry: path.join(__dirname, '../../../api/src/racepic/analyzeWorker.ts'),
+        handler: 'handler',
+        functionName: `${props.config.prefix}-racepic-analyze-worker`,
+        memorySize: 1536,
+        timeout: cdk.Duration.seconds(90),
+        depsLockFilePath,
+        bundling: { nodeModules: ['sharp'] },
+        environment: {
+          STAGE: props.config.stage,
+          DB_SECRET_ARN: dbSecretArn,
+          DB_HOST: dbHost,
+          DB_PORT: dbPort,
+          DB_NAME: props.config.dbName,
+          DB_USER: dbUser,
+          DB_REGION: dbRegion,
+          DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+          DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+          DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+          DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+          RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
+          RACEPIC_MATCH_QUEUE_URL: racePicStack.matchQueue.queueUrl,
+          // Cross-Region-Aufruf (Abschnitt F/Region-Check Paket 1): Cohere Embed v4 laeuft nur in
+          // eu-west-1 (Irland), nicht in eu-central-1.
+          RACEPIC_EMBEDDING_REGION: 'eu-west-1'
+        },
+        ...(props.config.apiInVpc ? lambdaVpcConfig : {})
+      });
+      racePicAnalyzeWorker.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [dbSecretArn] })
+      );
+      racePicAnalyzeWorker.addToRolePolicy(new iam.PolicyStatement({ actions: ['rds-db:connect'], resources: [dbConnectArn] }));
+      racePicAnalyzeWorker.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['s3:GetObject', 's3:PutObject'], resources: [`${racePicStack.mediaBucket.bucketArn}/*`] })
+      );
+      racePicAnalyzeWorker.addToRolePolicy(
+        // Rekognition unterstuetzt keine ressourcenbasierte Einschraenkung fuer DetectText/DetectLabels.
+        // Bewusst KEIN DetectFaces/IndexFaces/... (Abschnitt "Datenschutz": keine Gesichtserkennung).
+        new iam.PolicyStatement({ actions: ['rekognition:DetectText', 'rekognition:DetectLabels'], resources: ['*'] })
+      );
+      racePicAnalyzeWorker.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['bedrock:InvokeModel'],
+          resources: ['arn:aws:bedrock:eu-west-1::foundation-model/cohere.*']
+        })
+      );
+      racePicStack.matchQueue.grantSendMessages(racePicAnalyzeWorker);
+      racePicAnalyzeWorker.addEventSource(
+        new lambdaEventSources.SqsEventSource(racePicStack.analyzeQueue, { batchSize: 1, reportBatchItemFailures: true })
+      );
+
+      // Paket 6: Match-Worker (Kandidaten-Scoring, Assignment-Erzeugung), konsumiert die Match-Queue.
+      // Braucht zusaetzlich Lesezugriff auf den bestehenden Assets-Bucket des Nennungstools
+      // (Fahrzeug-Referenzfotos, siehe api/src/racepic/vehicleReference.ts) - nur lesend, kein
+      // Schreibzugriff auf Nennungstool-Daten.
+      const racePicMatchWorker = new NodejsFunction(this, 'RacePicMatchWorker', {
+        runtime: lambda.Runtime.NODEJS_24_X,
+        architecture: lambda.Architecture.X86_64,
+        entry: path.join(__dirname, '../../../api/src/racepic/matchWorker.ts'),
+        handler: 'handler',
+        functionName: `${props.config.prefix}-racepic-match-worker`,
+        memorySize: 1024,
+        timeout: cdk.Duration.seconds(90),
+        depsLockFilePath,
+        bundling: { nodeModules: ['sharp'] },
+        environment: {
+          STAGE: props.config.stage,
+          DB_SECRET_ARN: dbSecretArn,
+          DB_HOST: dbHost,
+          DB_PORT: dbPort,
+          DB_NAME: props.config.dbName,
+          DB_USER: dbUser,
+          DB_REGION: dbRegion,
+          DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+          DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+          DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+          DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+          ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
+          RACEPIC_EMBEDDING_REGION: 'eu-west-1'
+        },
+        ...(props.config.apiInVpc ? lambdaVpcConfig : {})
+      });
+      racePicMatchWorker.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [dbSecretArn] })
+      );
+      racePicMatchWorker.addToRolePolicy(new iam.PolicyStatement({ actions: ['rds-db:connect'], resources: [dbConnectArn] }));
+      racePicMatchWorker.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['s3:GetObject'], resources: [`${props.storageStack.assetsBucket.bucketArn}/*`] })
+      );
+      racePicMatchWorker.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['bedrock:InvokeModel'],
+          resources: ['arn:aws:bedrock:eu-west-1::foundation-model/cohere.*']
+        })
+      );
+      racePicMatchWorker.addEventSource(
+        new lambdaEventSources.SqsEventSource(racePicStack.matchQueue, { batchSize: 1, reportBatchItemFailures: true })
+      );
+
+      new CfnOutput(this, 'RacePicAnalyzeWorkerName', { value: racePicAnalyzeWorker.functionName });
+      new CfnOutput(this, 'RacePicMatchWorkerName', { value: racePicMatchWorker.functionName });
     }
 
     new CfnOutput(this, 'ApiUrl', {

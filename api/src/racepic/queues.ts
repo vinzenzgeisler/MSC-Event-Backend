@@ -18,6 +18,8 @@ const sendMessage = async (envVar: string, body: Record<string, unknown>): Promi
 /** Stoesst die Ingest-Stufe (Paket 4) fuer ein frisch hochgeladenes Bild an. */
 export const sendIngestMessage = (imageId: string) => sendMessage('RACEPIC_INGEST_QUEUE_URL', { imageId });
 
-/** Stoesst die Analyse-Stufe (Paket 6: KI-Pipeline) an. Bis Paket 6 existiert, bleibt die
- * Nachricht einfach in der Queue liegen (Retention 4 Tage), siehe ingestWorker.ts. */
+/** Stoesst die Analyse-Stufe (Paket 6: KI-Pipeline) an. */
 export const sendAnalyzeMessage = (imageId: string) => sendMessage('RACEPIC_ANALYZE_QUEUE_URL', { imageId });
+
+/** Stoesst die Matching-Stufe (Paket 6: KI-Pipeline) an. */
+export const sendMatchMessage = (imageId: string) => sendMessage('RACEPIC_MATCH_QUEUE_URL', { imageId });

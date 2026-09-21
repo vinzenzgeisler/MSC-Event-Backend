@@ -1734,6 +1734,7 @@ export class ApiStack extends Stack {
           DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
           RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
           RACEPIC_CDN_DOMAIN: racePicStack.distribution.distributionDomainName,
+          RACEPIC_CDN_DISTRIBUTION_ID: racePicStack.distribution.distributionId,
           RACEPIC_INGEST_QUEUE_URL: racePicStack.ingestQueue.queueUrl,
           RACEPIC_ANALYZE_QUEUE_URL: racePicStack.analyzeQueue.queueUrl,
           RACEPIC_MATCH_QUEUE_URL: racePicStack.matchQueue.queueUrl,
@@ -1788,6 +1789,15 @@ export class ApiStack extends Stack {
         new iam.PolicyStatement({
           actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminGetUser'],
           resources: [racePicStack.photographerUserPool.userPoolArn]
+        })
+      );
+      // Paket 4 (Publish-Worker, api/src/racepic/publish.ts): Invalidation nach Veroeffentlichen/
+      // Verbergen/Entfernen eines Bildes oder Manifests. Best-effort im Code, aber die Permission
+      // muss trotzdem existieren, sonst schlaegt jeder Aufruf hart fehl.
+      racePicApiHandler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['cloudfront:CreateInvalidation'],
+          resources: [`arn:aws:cloudfront::${this.account}:distribution/${racePicStack.distribution.distributionId}`]
         })
       );
 
@@ -1908,6 +1918,14 @@ export class ApiStack extends Stack {
         authorizer: photographerJwtAuthorizer
       });
 
+      // Paket 4 (Publish-Worker): Veroeffentlichen/Verbergen/Entfernen, siehe api/src/racepic/publish.ts.
+      this.api.addRoutes({
+        path: '/admin/racepic/images/{imageId}',
+        methods: [apigwv2.HttpMethod.PATCH],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+
       // Paket 3: Upload-Reconciler (haengengebliebene Presign-Fenster), siehe
       // api/src/racepic/reconcileUploads.ts. Laeuft alle 15 Minuten - lang genug, um den
       // 15-Minuten-Presign-Ablauf sicher hinter sich zu haben, kurz genug, um S3-Reste zeitnah
@@ -1951,7 +1969,66 @@ export class ApiStack extends Stack {
         targets: [new targets.LambdaFunction(racePicUploadReconciler)]
       });
 
+      // Paket 4: Ingest-Worker (sharp/EXIF/sha256/Varianten), konsumiert die Ingest-Queue.
+      // Architecture.X86_64 bewusst statt ARM_64 (siehe Architekturplan Abschnitt M, wo ARM64 als
+      // Kostenoptimierung genannt wird): `sharp` ist ein natives Modul, das beim Bundling via
+      // `bundling.nodeModules` mit der npm-Version des Buildrechners installiert wird. Die
+      // GitHub-Actions-Runner in der CI/CD-Pipeline sind x86_64-Linux; bei ARM64 muesste npm
+      // gezielt fuer eine andere CPU-Architektur installieren (Cross-Install), was fehleranfaelliger
+      // ist als einfach dieselbe Architektur wie der Build-Runner zu nutzen. Kann nachtraeglich auf
+      // ARM64 umgestellt werden, sobald der CI-Bundlingschritt entsprechend abgesichert ist.
+      const racePicIngestWorker = new NodejsFunction(this, 'RacePicIngestWorker', {
+        runtime: lambda.Runtime.NODEJS_24_X,
+        architecture: lambda.Architecture.X86_64,
+        entry: path.join(__dirname, '../../../api/src/racepic/ingestWorker.ts'),
+        handler: 'handler',
+        functionName: `${props.config.prefix}-racepic-ingest-worker`,
+        memorySize: 1536,
+        timeout: cdk.Duration.seconds(60),
+        depsLockFilePath,
+        bundling: {
+          // sharp enthaelt native Bindings, die esbuild nicht inlinen kann - stattdessen wird das
+          // Modul unveraendert aus node_modules in das Bundle kopiert (per npm install waehrend
+          // des Bundlings, siehe Kommentar oben zur Architekturwahl).
+          nodeModules: ['sharp']
+        },
+        environment: {
+          STAGE: props.config.stage,
+          DB_SECRET_ARN: dbSecretArn,
+          DB_HOST: dbHost,
+          DB_PORT: dbPort,
+          DB_NAME: props.config.dbName,
+          DB_USER: dbUser,
+          DB_REGION: dbRegion,
+          DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+          DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+          DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+          DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+          RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
+          RACEPIC_ANALYZE_QUEUE_URL: racePicStack.analyzeQueue.queueUrl
+        },
+        ...(props.config.apiInVpc ? lambdaVpcConfig : {})
+      });
+      racePicIngestWorker.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [dbSecretArn] })
+      );
+      racePicIngestWorker.addToRolePolicy(new iam.PolicyStatement({ actions: ['rds-db:connect'], resources: [dbConnectArn] }));
+      racePicIngestWorker.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+          resources: [`${racePicStack.mediaBucket.bucketArn}/*`]
+        })
+      );
+      racePicStack.analyzeQueue.grantSendMessages(racePicIngestWorker);
+      racePicIngestWorker.addEventSource(
+        new lambdaEventSources.SqsEventSource(racePicStack.ingestQueue, {
+          batchSize: 1,
+          reportBatchItemFailures: true
+        })
+      );
+
       new CfnOutput(this, 'RacePicApiHandlerName', { value: racePicApiHandler.functionName });
+      new CfnOutput(this, 'RacePicIngestWorkerName', { value: racePicIngestWorker.functionName });
     }
 
     new CfnOutput(this, 'ApiUrl', {

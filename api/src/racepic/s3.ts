@@ -1,8 +1,10 @@
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
+  CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
   HeadObjectCommand,
   ListPartsCommand,
   PutObjectCommand,
@@ -107,4 +109,40 @@ export const headObject = async (key: string): Promise<{ sizeBytes: number; cont
 export const deleteObject = async (key: string): Promise<void> => {
   const client = getS3Client();
   await client.send(new DeleteObjectCommand({ Bucket: getMediaBucket(), Key: key })).catch(() => undefined);
+};
+
+/** Direkter serverseitiger Download (Ingest-Worker) - kein Presign, laeuft in der Lambda selbst. */
+export const getObject = async (key: string): Promise<Buffer | null> => {
+  const client = getS3Client();
+  try {
+    const result = await client.send(new GetObjectCommand({ Bucket: getMediaBucket(), Key: key }));
+    if (!result.Body) return null;
+    return Buffer.from(await result.Body.transformToByteArray());
+  } catch {
+    return null;
+  }
+};
+
+/** Direkter serverseitiger Upload (Ingest-/Publish-Worker), z. B. fuer abgeleitete Varianten. */
+export const putObject = async (key: string, body: Buffer, contentType: string, contentDisposition?: string): Promise<void> => {
+  const client = getS3Client();
+  await client.send(
+    new PutObjectCommand({
+      Bucket: getMediaBucket(),
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      ...(contentDisposition ? { ContentDisposition: contentDisposition } : {})
+    })
+  );
+};
+
+/** Serverseitiges Kopieren innerhalb desselben Buckets (Publish-Worker: derived/ -> public/), ohne
+ * Umweg ueber die Lambda (S3-interner Copy, kein Download/Upload durch den Worker). */
+export const copyObject = async (sourceKey: string, destinationKey: string): Promise<void> => {
+  const client = getS3Client();
+  const bucket = getMediaBucket();
+  await client.send(
+    new CopyObjectCommand({ Bucket: bucket, Key: destinationKey, CopySource: `${bucket}/${encodeURIComponent(sourceKey)}` })
+  );
 };

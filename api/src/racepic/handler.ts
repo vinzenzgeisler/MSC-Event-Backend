@@ -34,6 +34,7 @@ import {
   presignRemainingParts
 } from './uploads';
 import { sendIngestMessage } from './queues';
+import { getImageEventId, hideImage, publishImage, regenerateManifestsForEvent, removeImage } from './publish';
 
 /**
  * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet, Paket 3: Upload). Eigenstaendiger
@@ -91,6 +92,10 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 409, message: 'The uploaded object could not be found in storage' };
     case 'RACEPIC_UPLOAD_ALREADY_COMPLETED':
       return { status: 409, message: 'This upload was already completed and cannot be aborted' };
+    case 'RACEPIC_IMAGE_NOT_FOUND':
+      return { status: 404, message: 'Image not found' };
+    case 'RACEPIC_IMAGE_NOT_READY_TO_PUBLISH':
+      return { status: 409, message: 'Image has not finished processing yet' };
     default:
       return { status: 500, message: 'RacePic operation failed' };
   }
@@ -142,6 +147,12 @@ const completeUploadSchema = z.object({
     .array(z.object({ partNumber: z.number().int().min(1).max(10_000), eTag: z.string().trim().min(1).max(200) }))
     .max(10_000)
     .optional()
+});
+
+// --- Paket 4: Publish -------------------------------------------------------------------------
+
+const patchImageVisibilitySchema = z.object({
+  visibility: z.enum(['PUBLISHED', 'HIDDEN', 'REMOVED'])
 });
 
 const uploadDto = (upload: { id: string; status: string; fileName: string | null; declaredSizeBytes: number; expiresAt: Date }) => ({
@@ -574,6 +585,52 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 200) : 50;
       const images = await listMyImages({ photographerId: result.photographer.id, eventId: query.eventId, status: query.status, limit });
       return json(200, { ok: true, images: images.map(imageDto) });
+    }
+
+    // --- Admin: Veroeffentlichen/Verbergen/Entfernen (Paket 4: Publish-Worker) -----------------
+    const imageVisibilityMatch = path.match(/^\/admin\/racepic\/images\/([^/]+)$/);
+    if (method === 'PATCH' && imageVisibilityMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      const imageId = decodeURIComponent(imageVisibilityMatch[1]);
+      try {
+        const input = patchImageVisibilitySchema.parse(parseJsonBody(event));
+        // Verbergen darf ein Moderator (racepic.review); Veroeffentlichen/Entfernen bleibt
+        // Admins mit racepic.manage vorbehalten (Abschnitt H: Moderation).
+        const requiredPermission = input.visibility === 'HIDDEN' ? 'racepic.review' : 'racepic.manage';
+        if (!hasPermission(auth, requiredPermission)) return errorJson(403, 'Forbidden');
+
+        if (input.visibility === 'PUBLISHED') await publishImage(imageId);
+        else if (input.visibility === 'HIDDEN') await hideImage(imageId);
+        else await removeImage(imageId);
+
+        const eventId = await getImageEventId(imageId);
+        if (eventId) {
+          await regenerateManifestsForEvent(eventId).catch((error) =>
+            logOperationalEvent('error', 'racepic_publish.manifest_regen_failed', { errorCode: errorCodeOf(error) })
+          );
+        }
+
+        const db = await getDb();
+        await writeAuditLog(db, {
+          eventId,
+          actorUserId: auth.sub,
+          action: 'racepic_image_visibility_changed',
+          entityType: 'racepic_image',
+          entityId: imageId,
+          payload: { visibility: input.visibility }
+        });
+
+        return json(200, { ok: true });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
     }
 
     return errorJson(404, 'Not Found');

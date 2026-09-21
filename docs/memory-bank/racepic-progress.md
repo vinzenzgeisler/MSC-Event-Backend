@@ -13,7 +13,7 @@ Alle Arbeit läuft im Branch `feature/racepic-planning` (noch nicht nach `main` 
 | 1 | Fundament: Migrationen `racepic_*`, `RacePicStack` (Bucket, CloudFront, SQS, Photographer-Pool), `RacePicApiHandler`, Permissions | **erledigt (ungedeployed)** | siehe „Paket 1 – Ergebnis“ unten |
 | 2a | Identität (Backend-Teil): Photographer-Pool, Einladung/Claim-API, Profil-API, `requireStepUp` | **erledigt (ungedeployed)** | siehe „Paket 2 – Ergebnis“ unten; Website-Teil (Studio-UI) siehe msc-website |
 | 3a | Upload (Backend-Teil): Batch- und Multipart-Endpoints, Reconciler | **erledigt (ungedeployed)** | siehe „Paket 3 – Ergebnis“ unten; Website-Teil siehe msc-website |
-| 4 | Ingest- und Publish-Worker: Varianten, EXIF, Manifeste | offen | |
+| 4 | Ingest- und Publish-Worker: Varianten, EXIF, Manifeste | **erledigt (ungedeployed)** | siehe „Paket 4 – Ergebnis" unten |
 | 6 | KI-Pipeline: Referenz-Job, Analyze-Worker, Matcher, Config, Audit | offen | |
 | 9 | Datenschutz & Betrieb: Retention-Erweiterung (inkl. S3-Löschung Fahrzeugbild), Ausblenden-Funktion, Budgets, Runbook | offen | Siehe `racepic-retention-addendum.md` |
 | 10a | Pilot 12. OLD 2026 (Backend-Teil): Seed-Daten, Kalibrierung Matching-Schwellen | offen | |
@@ -60,6 +60,28 @@ Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implem
 - `api/package.json`: `@aws-sdk/client-sqs` als neue Abhängigkeit.
 - **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei; `cdk synth` für `ApiStack` mit `enableRacePic=true` erneut erfolgreich (neue Routen, IAM-Policies, Reconciler-Lambda + Schedule). **Nicht deployed.**
 
+## Paket 4 – Ergebnis (2026-09-21)
+
+- `api/src/racepic/imageProcessing.ts` (neu): reine Bildverarbeitung ohne AWS-/DB-Aufrufe – Magic-Bytes-Check, sha256, EXIF-Auszug (nur `DateTimeOriginal`/`Make`/`Model` via `exifr`, kein GPS), Rendern der 4 Downloadvarianten mit `sharp` (thumb/preview als WebP, medium/large als JPEG). `sharp.limitInputPixels` schützt gegen Dekompressions-Bomben.
+  - **Vereinfachung ggü. Architekturplan:** Copyright wird nur als EXIF-`Copyright`/`Artist`-Tag in medium/large eingebettet, kein vollständiges IPTC/XMP (deutlich aufwendiger, ohne Mehrwert für den MVP-Anwendungsfall).
+  - Ohne `withMetadata()` entfernt `sharp` standardmäßig **alle** Metadaten (inkl. GPS/Seriennummern) – das erfüllt die Vorgabe aus Abschnitt G für thumb/preview automatisch, ohne Sonderlogik.
+- `api/src/racepic/ingestWorker.ts` (neu): SQS-Consumer der Ingest-Queue (`batchSize: 1`, `reportBatchItemFailures`). Lädt das Original aus `incoming/`, validiert, dedupliziert per sha256 innerhalb des Events, verschiebt das Original nach `originals/{eventId}/{imageId}.jpg`, schreibt alle 4 Varianten nach `derived/{imageId}/{kind}` (**immer privat** – `public/` wird erst beim Veröffentlichen befüllt, siehe Paket 4 Abschnitt G), aktualisiert `racepic_image` (Status `DERIVED`) und stößt die Analyse-Queue an (Paket 6 konsumiert sie später; bis dahin bleibt die Nachricht einfach liegen).
+  - Idempotent über `racepic_processing_step` (image_id, step='ingest', pipeline_version) – ein erneut zugestelltes SQS-Event führt zu keiner doppelten Verarbeitung.
+- `api/src/racepic/publish.ts` (neu): `publishImage`/`hideImage`/`removeImage` (kopiert/löscht nur die öffentlichen thumb/preview-Kopien, `racepic_image_variant` bleibt kanonisch auf `derived/`), `regenerateManifestsForEvent` (schreibt `manifests/{slug}/index.json` und `manifests/events.json`), CloudFront-Invalidation (best effort). `removeImage` behält den Audit-Trail (`racepic_assignment_event`), löscht nur Bilddaten.
+  - Teilnehmer-Manifest ohne Paket 6 (Matching) zwangsläufig leer, da `racepic_assignment` noch keine Zeilen hat – der Mechanismus (Query, S3-Schreiben, Invalidation) ist trotzdem vollständig.
+  - Datenschutz: Teilnehmer mit `processing_restricted`/`objection_flag` werden ausgeschlossen; ein hinterlegter `publication_name` wird als Pseudonym angezeigt statt den echten Namen zu unterdrücken (konsistenter mit der RacePic-Datenschutz-Vorgabe als die bestehende `isPubliclyEligible`-Logik im Event-Hub, die publication-name-Fälle ganz ausschließt).
+- `api/src/racepic/handler.ts`: `PATCH /admin/racepic/images/{id}` (`{visibility: PUBLISHED|HIDDEN|REMOVED}`) – `HIDDEN` braucht nur `racepic.review`, `PUBLISHED`/`REMOVED` brauchen `racepic.manage`; löst nach jeder Änderung automatisch `regenerateManifestsForEvent` aus.
+- `api/src/racepic/s3.ts`, `queues.ts`: ergänzt um `getObject`/`putObject`/`copyObject` (serverseitig, kein Presign) und `sendAnalyzeMessage`.
+- `infra/lib/stacks/api-stack.ts`: neue `RacePicIngestWorker`-Lambda (SQS-Event-Source auf die Ingest-Queue, 1536 MB, 60 s Timeout), `PATCH`-Route registriert, `cloudfront:CreateInvalidation`-Permission für `RacePicApiHandler`, `RACEPIC_CDN_DISTRIBUTION_ID`-Env-Var.
+  - **Architekturentscheidung:** `RacePicIngestWorker` läuft auf **`Architecture.X86_64`**, nicht `ARM_64` wie im Kostenkapitel des Architekturplans angedacht. Begründung: `sharp` ist ein natives Modul; beim CDK-Bundling (`bundling.nodeModules: ['sharp']`) installiert `npm` die zur **Build-Maschine** passenden Binaries. Die GitHub-Actions-Runner der CI/CD-Pipeline sind x86_64-Linux; x86_64 zu wählen vermeidet eine fehleranfällige npm-Cross-Architektur-Installation für ARM64. Kann später umgestellt werden, sobald der CI-Bundlingschritt das gezielt absichert.
+- `api/package.json`: `sharp`, `exifr`, `@aws-sdk/client-cloudfront` als neue Abhängigkeiten.
+- **Verifiziert, mit wichtiger Einschränkung:**
+  - `tsc --noEmit` für `api/` und `infra/` fehlerfrei.
+  - `cdk synth` für `ApiStack` mit `enableRacePic=true`: **strukturell erfolgreich** (Routen, IAM-Policies, Ressourcen, `RacePicIngestWorker`-Bundling inkl. `sharp` selbst laufen durch), aber lokal auf diesem Windows-Rechner sehr instabil – wiederholtes `EPERM: operation not permitted, rename …bundling-temp-…` beim esbuild-Bundling, das **zufällig verschiedene, RacePic-fremde, seit Langem bestehende Lambdas** trifft (`EmailWorker`, `ApiHandler`, `PrivacyRetentionWorker`, `EventHubMaintenanceWorker`). Über mehrere Versuche hinweg lief der Synth einmal vollständig durch (inkl. `RacePicIngestWorker`); das ist eine Windows-Sandbox-Eigenart (Dateisystem-Locking, evtl. Virenscanner), keine inhaltliche Regression – die reale Pipeline läuft auf Linux-GitHub-Actions-Runnern, wo dieses Problem nicht auftritt.
+  - Das lokal gebündelte `sharp` enthält **Windows-x64-Binaries** (`@img/sharp-win32-x64`), nicht die für Lambda nötigen Linux-Binaries – erwartbar, weil `npm install` während des Bundlings die zur lokalen Maschine passende Variante installiert. Beim echten `cdk deploy`/`synth` in der Linux-CI installiert derselbe Mechanismus automatisch `@img/sharp-linux-x64`, passend zur gewählten `X86_64`-Architektur. Das ist **nicht live/deploy-verifizierbar** in dieser Sandbox.
+  - **Nicht deployed.**
+  - **Hinweis zur eigenen Methodik:** Frühere `cdk synth`-Prüfungen in diesem Branch liefen über `... | tail -N`, was den echten Exit-Code der Pipe maskiert (Bash gibt bei `cmd | tail` standardmäßig den Exit-Code von `tail`, nicht von `cmd`, zurück). Die Befunde zu Paket 1–3 wurden nachträglich nicht erneut geprüft, sind aber durch `tsc --noEmit` weiterhin auf TypeScript-Ebene abgesichert; künftige Synth-Checks in diesem Projekt sollten den Exit-Code ohne `| tail` (oder mit `set -o pipefail`) auswerten.
+
 ## Entscheidungen aus diesem Repo
 
 - 2026-09-21: Bedrock-Region-Check abgeschlossen. Titan/Nova Multimodal Embeddings sind nur in us-east-1/us-west-2 verfügbar. Gewählt: **Cohere Embed v4 (multimodal) über Bedrock in eu-west-1 (Irland)**, Cross-Region-Aufruf aus der eu-central-1-Lambda, damit Fahrzeugbilder innerhalb der EU bleiben.
@@ -68,6 +90,8 @@ Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implem
 
 ## Offene Punkte
 
+- **Vor dem ersten echten Deploy:** einen `cdk deploy`/`synth` in der GitHub-Actions-CI (Linux) beobachten und bestätigen, dass `sharp` dort mit Linux-x64-Binaries bündelt und der `RacePicIngestWorker` tatsächlich ein Bild verarbeiten kann – lokal auf Windows nicht abschließend verifizierbar (siehe Paket 4 – Ergebnis).
+- Vereinfachtes Copyright-Handling (nur EXIF-Tag statt vollem IPTC/XMP) – bei Bedarf später nachziehen, falls Fotoportale/Marktplätze vollständige IPTC-Metadaten erwarten.
 - Freigabe der Rechtstexte (Datenschutzhinweis, Fotografen-Bedingungen) durch Datenschutzbeauftragten/Vorstand.
 - Namenssuche nach 365 Tagen: aktueller Stand (Name verschwindet, Bildzuordnung über Startnummer/Klasse/Fahrzeug bleibt) ist technisch umgesetzt vorgesehen; dauerhafte Namenssuche erfordert eine zusätzliche Rechtsgrundlage – Entscheidung bei Vorstand/Datenschutz.
 - Rechtliches Seller-Modell (A/B) vor Marketplace-Implementierung klären.

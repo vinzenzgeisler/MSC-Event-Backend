@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   AnyPgColumn,
+  bigint,
   boolean,
   check,
   date,
@@ -8,12 +9,14 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   text,
   timestamp,
   unique,
   uniqueIndex,
-  uuid
+  uuid,
+  vector
 } from 'drizzle-orm/pg-core';
 import type { EntryConfirmationConfig } from '../domain/entryConfirmationConfig';
 
@@ -1585,3 +1588,377 @@ export const newsletterConsentEvent = pgTable(
   },
   (table) => ({ subscriberCreatedIndex: index('newsletter_consent_event_subscriber_created_idx').on(table.subscriberId, table.createdAt) })
 );
+
+// --- RacePic (Paket 1: Fundament) --------------------------------------------------------------
+// Siehe docs/memory-bank/racepic-architecture.md Abschnitt C und api/migrations/0095_racepic_core.sql.
+// Referenziert event/entry/vehicle statt sie zu duplizieren.
+
+export const racepicEvent = pgTable('racepic_event', {
+  eventId: uuid('event_id')
+    .primaryKey()
+    .references(() => event.id, { onDelete: 'cascade' }),
+  slug: text('slug').notNull(),
+  title: text('title').notNull(),
+  enabled: boolean('enabled').notNull().default(false),
+  uploadOpensAt: timestamp('upload_opens_at', { withTimezone: true }),
+  uploadClosesAt: timestamp('upload_closes_at', { withTimezone: true }),
+  published: boolean('published').notNull().default(false),
+  defaultLicenseId: uuid('default_license_id').references((): AnyPgColumn => racepicLicense.id),
+  matchingConfigId: uuid('matching_config_id').references((): AnyPgColumn => racepicMatchingConfig.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  slugUnique: unique('racepic_event_slug_unique').on(table.slug)
+}));
+
+export const racepicPhotographer = pgTable('racepic_photographer', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  cognitoSub: text('cognito_sub'),
+  email: text('email').notNull(),
+  emailNorm: text('email_norm').notNull(),
+  displayName: text('display_name').notNull(),
+  legalName: text('legal_name'),
+  copyrightLine: text('copyright_line'),
+  website: text('website'),
+  social: jsonb('social').notNull().default(sql`'{}'::jsonb`),
+  avatarKey: text('avatar_key'),
+  defaultLicenseId: uuid('default_license_id').references((): AnyPgColumn => racepicLicense.id),
+  status: text('status').notNull().default('INVITED'),
+  termsAcceptedVersion: text('terms_accepted_version'),
+  termsAcceptedAt: timestamp('terms_accepted_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true })
+}, (table) => ({
+  statusCheck: check(
+    'racepic_photographer_status_check',
+    sql`${table.status} in ('INVITED','ACTIVE_FREE','PAYMENT_ONBOARDING_REQUIRED','PAYMENT_ONBOARDING_PENDING','PAYMENT_ENABLED','PAYMENT_RESTRICTED','PAYMENT_DISABLED','DISABLED')`
+  )
+}));
+
+export const racepicPhotographerEvent = pgTable('racepic_photographer_event', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  photographerId: uuid('photographer_id')
+    .notNull()
+    .references(() => racepicPhotographer.id, { onDelete: 'cascade' }),
+  eventId: uuid('event_id')
+    .notNull()
+    .references(() => event.id, { onDelete: 'cascade' }),
+  uploadOpensAt: timestamp('upload_opens_at', { withTimezone: true }),
+  uploadClosesAt: timestamp('upload_closes_at', { withTimezone: true }),
+  quotaImages: integer('quota_images'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  photographerEventUnique: unique('racepic_photographer_event_unique').on(table.photographerId, table.eventId)
+}));
+
+export const racepicInvitation = pgTable('racepic_invitation', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  photographerId: uuid('photographer_id')
+    .notNull()
+    .references(() => racepicPhotographer.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull(),
+  email: text('email').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  tokenHashUnique: unique('racepic_invitation_token_hash_unique').on(table.tokenHash),
+  photographerIndex: index('racepic_invitation_photographer_idx').on(table.photographerId)
+}));
+
+export const racepicLicense = pgTable('racepic_license', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  code: text('code').notNull(),
+  version: integer('version').notNull().default(1),
+  title: jsonb('title').notNull(),
+  summary: jsonb('summary').notNull(),
+  terms: jsonb('terms').notNull(),
+  privateUse: boolean('private_use').notNull().default(false),
+  socialMedia: boolean('social_media').notNull().default(false),
+  editorial: boolean('editorial').notNull().default(false),
+  commercial: boolean('commercial').notNull().default(false),
+  attributionRequired: boolean('attribution_required').notNull().default(false),
+  attributionTemplate: text('attribution_template'),
+  pricingKind: text('pricing_kind').notNull().default('FREE'),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  pricingKindCheck: check('racepic_license_pricing_kind_check', sql`${table.pricingKind} in ('FREE','PAID')`),
+  codeVersionUnique: unique('racepic_license_code_version_unique').on(table.code, table.version)
+}));
+
+export const racepicMatchingConfig = pgTable('racepic_matching_config', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  eventId: uuid('event_id').references(() => event.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull().default(1),
+  weights: jsonb('weights').notNull(),
+  autoThreshold: numeric('auto_threshold', { precision: 5, scale: 4 }).notNull(),
+  reviewThreshold: numeric('review_threshold', { precision: 5, scale: 4 }).notNull(),
+  minMargin: numeric('min_margin', { precision: 5, scale: 4 }).notNull().default('0'),
+  featureFlags: jsonb('feature_flags').notNull().default(sql`'{}'::jsonb`),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  eventIndex: index('racepic_matching_config_event_idx').on(table.eventId),
+  thresholdsCheck: check('racepic_matching_config_thresholds_check', sql`${table.reviewThreshold} <= ${table.autoThreshold}`)
+}));
+
+export const racepicUploadBatch = pgTable('racepic_upload_batch', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  photographerId: uuid('photographer_id')
+    .notNull()
+    .references(() => racepicPhotographer.id, { onDelete: 'cascade' }),
+  eventId: uuid('event_id')
+    .notNull()
+    .references(() => event.id, { onDelete: 'cascade' }),
+  licenseId: uuid('license_id')
+    .notNull()
+    .references(() => racepicLicense.id),
+  fileCount: integer('file_count').notNull().default(0),
+  completedCount: integer('completed_count').notNull().default(0),
+  failedCount: integer('failed_count').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  photographerEventIndex: index('racepic_upload_batch_photographer_event_idx').on(table.photographerId, table.eventId)
+}));
+
+export const racepicUpload = pgTable('racepic_upload', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  batchId: uuid('batch_id')
+    .notNull()
+    .references(() => racepicUploadBatch.id, { onDelete: 'cascade' }),
+  s3Key: text('s3_key').notNull(),
+  s3UploadId: text('s3_upload_id'),
+  fileName: text('file_name'),
+  contentType: text('content_type').notNull(),
+  declaredSizeBytes: bigint('declared_size_bytes', { mode: 'number' }).notNull(),
+  clientFingerprint: text('client_fingerprint'),
+  status: text('status').notNull().default('INITIATED'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  s3KeyUnique: uniqueIndex('racepic_upload_s3_key_unique').on(table.s3Key),
+  batchFingerprintIndex: index('racepic_upload_batch_fingerprint_idx').on(table.batchId, table.clientFingerprint),
+  statusCheck: check(
+    'racepic_upload_status_check',
+    sql`${table.status} in ('INITIATED','MULTIPART_OPEN','COMPLETED','FAILED','ABORTED','EXPIRED')`
+  ),
+  contentTypeCheck: check('racepic_upload_content_type_check', sql`${table.contentType} in ('image/jpeg')`)
+}));
+
+export const racepicImage = pgTable('racepic_image', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  eventId: uuid('event_id')
+    .notNull()
+    .references(() => event.id, { onDelete: 'cascade' }),
+  photographerId: uuid('photographer_id')
+    .notNull()
+    .references(() => racepicPhotographer.id, { onDelete: 'cascade' }),
+  batchId: uuid('batch_id').references(() => racepicUploadBatch.id, { onDelete: 'set null' }),
+  uploadId: uuid('upload_id').references(() => racepicUpload.id, { onDelete: 'set null' }),
+  licenseId: uuid('license_id')
+    .notNull()
+    .references(() => racepicLicense.id),
+  originalKey: text('original_key'),
+  sha256: text('sha256').notNull(),
+  bytes: bigint('bytes', { mode: 'number' }),
+  width: integer('width'),
+  height: integer('height'),
+  capturedAt: timestamp('captured_at', { withTimezone: true }),
+  camera: jsonb('camera'),
+  processingStatus: text('processing_status').notNull().default('UPLOADED'),
+  processingError: text('processing_error'),
+  visibility: text('visibility').notNull().default('DRAFT'),
+  offerMode: text('offer_mode').notNull().default('FREE'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  eventSha256Unique: uniqueIndex('racepic_image_event_sha256_unique')
+    .on(table.eventId, table.sha256)
+    .where(sql`${table.processingStatus} <> 'DUPLICATE'`),
+  eventStatusIndex: index('racepic_image_event_status_idx').on(table.eventId, table.processingStatus),
+  photographerIndex: index('racepic_image_photographer_idx').on(table.photographerId),
+  visibilityIndex: index('racepic_image_visibility_idx').on(table.eventId, table.visibility),
+  processingStatusCheck: check(
+    'racepic_image_processing_status_check',
+    sql`${table.processingStatus} in ('UPLOADED','VALIDATED','DERIVED','ANALYZED','MATCHED','FAILED','DUPLICATE')`
+  ),
+  visibilityCheck: check('racepic_image_visibility_check', sql`${table.visibility} in ('DRAFT','PUBLISHED','HIDDEN','REMOVED')`),
+  offerModeCheck: check('racepic_image_offer_mode_check', sql`${table.offerMode} in ('FREE','PAID')`)
+}));
+
+export const racepicImageVariant = pgTable('racepic_image_variant', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  imageId: uuid('image_id')
+    .notNull()
+    .references(() => racepicImage.id, { onDelete: 'cascade' }),
+  kind: text('kind').notNull(),
+  s3Key: text('s3_key').notNull(),
+  width: integer('width'),
+  height: integer('height'),
+  bytes: bigint('bytes', { mode: 'number' }),
+  access: text('access').notNull().default('signed'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  kindCheck: check(
+    'racepic_image_variant_kind_check',
+    sql`${table.kind} in ('thumb','preview','medium','large','original','watermarked_preview')`
+  ),
+  accessCheck: check('racepic_image_variant_access_check', sql`${table.access} in ('public','signed')`),
+  imageKindUnique: unique('racepic_image_variant_unique').on(table.imageId, table.kind)
+}));
+
+export const racepicVehicleReference = pgTable('racepic_vehicle_reference', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  vehicleId: uuid('vehicle_id')
+    .notNull()
+    .references(() => vehicle.id, { onDelete: 'cascade' }),
+  sourceKeyHash: text('source_key_hash').notNull(),
+  // Dimension 1024: Bedrock Cohere Embed v4 (eu-west-1), siehe racepic-architecture.md Abschnitt F.
+  embedding: vector('embedding', { dimensions: 1024 }),
+  dominantColors: jsonb('dominant_colors'),
+  vehicleType: text('vehicle_type'),
+  computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  vehicleUnique: unique('racepic_vehicle_reference_vehicle_unique').on(table.vehicleId)
+}));
+
+export const racepicAiAnalysis = pgTable('racepic_ai_analysis', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  imageId: uuid('image_id')
+    .notNull()
+    .references(() => racepicImage.id, { onDelete: 'cascade' }),
+  service: text('service').notNull(),
+  operation: text('operation').notNull(),
+  modelVersion: text('model_version'),
+  pipelineVersion: text('pipeline_version').notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+  rawResultKey: text('raw_result_key'),
+  summary: jsonb('summary'),
+  error: text('error')
+}, (table) => ({
+  imageIndex: index('racepic_ai_analysis_image_idx').on(table.imageId),
+  serviceCheck: check('racepic_ai_analysis_service_check', sql`${table.service} in ('rekognition','bedrock')`)
+}));
+
+export const racepicDetection = pgTable('racepic_detection', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  imageId: uuid('image_id')
+    .notNull()
+    .references(() => racepicImage.id, { onDelete: 'cascade' }),
+  analysisId: uuid('analysis_id').references(() => racepicAiAnalysis.id, { onDelete: 'set null' }),
+  label: text('label').notNull(),
+  bbox: jsonb('bbox').notNull(),
+  confidence: numeric('confidence', { precision: 5, scale: 4 }),
+  dominantColors: jsonb('dominant_colors'),
+  embedding: vector('embedding', { dimensions: 1024 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  imageIndex: index('racepic_detection_image_idx').on(table.imageId),
+  labelCheck: check('racepic_detection_label_check', sql`${table.label} in ('Car','Motorcycle')`)
+}));
+
+export const racepicTextDetection = pgTable('racepic_text_detection', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  detectionId: uuid('detection_id').references(() => racepicDetection.id, { onDelete: 'cascade' }),
+  imageId: uuid('image_id')
+    .notNull()
+    .references(() => racepicImage.id, { onDelete: 'cascade' }),
+  text: text('text').notNull(),
+  normalized: text('normalized').notNull(),
+  confidence: numeric('confidence', { precision: 5, scale: 4 }),
+  bbox: jsonb('bbox').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  imageIndex: index('racepic_text_detection_image_idx').on(table.imageId),
+  normalizedIndex: index('racepic_text_detection_normalized_idx').on(table.normalized)
+}));
+
+export const racepicMatchCandidate = pgTable('racepic_match_candidate', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  imageId: uuid('image_id')
+    .notNull()
+    .references(() => racepicImage.id, { onDelete: 'cascade' }),
+  detectionId: uuid('detection_id').references(() => racepicDetection.id, { onDelete: 'cascade' }),
+  entryId: uuid('entry_id')
+    .notNull()
+    .references(() => entry.id, { onDelete: 'cascade' }),
+  features: jsonb('features').notNull(),
+  score: numeric('score', { precision: 6, scale: 5 }).notNull(),
+  rank: integer('rank').notNull(),
+  matcherVersion: text('matcher_version').notNull(),
+  configVersion: integer('config_version').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  imageIndex: index('racepic_match_candidate_image_idx').on(table.imageId),
+  entryIndex: index('racepic_match_candidate_entry_idx').on(table.entryId)
+}));
+
+export const racepicAssignment = pgTable('racepic_assignment', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  imageId: uuid('image_id')
+    .notNull()
+    .references(() => racepicImage.id, { onDelete: 'cascade' }),
+  entryId: uuid('entry_id')
+    .notNull()
+    .references(() => entry.id, { onDelete: 'cascade' }),
+  detectionId: uuid('detection_id').references(() => racepicDetection.id, { onDelete: 'set null' }),
+  candidateId: uuid('candidate_id').references(() => racepicMatchCandidate.id, { onDelete: 'set null' }),
+  status: text('status').notNull(),
+  source: text('source').notNull(),
+  confidence: numeric('confidence', { precision: 6, scale: 5 }),
+  decidedByType: text('decided_by_type'),
+  decidedById: text('decided_by_id'),
+  decidedAt: timestamp('decided_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  entryIndex: index('racepic_assignment_entry_idx').on(table.entryId),
+  statusIndex: index('racepic_assignment_status_idx').on(table.imageId, table.status),
+  imageEntryUnique: unique('racepic_assignment_image_entry_unique').on(table.imageId, table.entryId),
+  statusCheck: check(
+    'racepic_assignment_status_check',
+    sql`${table.status} in ('AUTO_MATCHED','REVIEW_REQUIRED','MANUALLY_CONFIRMED','MANUALLY_CORRECTED','REJECTED')`
+  ),
+  sourceCheck: check('racepic_assignment_source_check', sql`${table.source} in ('AI','MANUAL')`),
+  decidedByTypeCheck: check(
+    'racepic_assignment_decided_by_type_check',
+    sql`${table.decidedByType} is null or ${table.decidedByType} in ('system','admin','photographer')`
+  )
+}));
+
+export const racepicAssignmentEvent = pgTable('racepic_assignment_event', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  assignmentId: uuid('assignment_id')
+    .notNull()
+    .references(() => racepicAssignment.id, { onDelete: 'cascade' }),
+  fromStatus: text('from_status'),
+  toStatus: text('to_status').notNull(),
+  actorType: text('actor_type').notNull(),
+  actorId: text('actor_id'),
+  reason: text('reason'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  assignmentIndex: index('racepic_assignment_event_assignment_idx').on(table.assignmentId),
+  actorTypeCheck: check('racepic_assignment_event_actor_type_check', sql`${table.actorType} in ('system','admin','photographer')`)
+}));
+
+export const racepicProcessingStep = pgTable('racepic_processing_step', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  imageId: uuid('image_id')
+    .notNull()
+    .references(() => racepicImage.id, { onDelete: 'cascade' }),
+  step: text('step').notNull(),
+  pipelineVersion: text('pipeline_version').notNull(),
+  status: text('status').notNull().default('DONE'),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+  error: text('error')
+}, (table) => ({
+  stepCheck: check('racepic_processing_step_step_check', sql`${table.step} in ('ingest','analyze','match','publish')`),
+  uniqueStep: unique('racepic_processing_step_unique').on(table.imageId, table.step, table.pipelineVersion)
+}));

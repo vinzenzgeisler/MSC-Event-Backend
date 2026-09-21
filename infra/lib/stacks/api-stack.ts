@@ -19,6 +19,7 @@ import * as path from 'path';
 import { StageConfig } from '../config/types';
 import { AuthStack } from './auth-stack';
 import { DataStack } from './data-stack';
+import { RacePicStack } from './racepic-stack';
 import { StorageStack } from './storage-stack';
 
 interface ApiStackProps extends StackProps {
@@ -26,6 +27,8 @@ interface ApiStackProps extends StackProps {
   authStack: AuthStack;
   dataStack: DataStack;
   storageStack: StorageStack;
+  // RacePic (Paket 1): optional, nur gesetzt wenn config.enableRacePic. Siehe app.ts.
+  racePicStack?: RacePicStack;
 }
 
 class SharedPermissionHttpLambdaIntegration extends apigwv2.HttpRouteIntegration {
@@ -1701,6 +1704,116 @@ export class ApiStack extends Stack {
         limit: 500
       })
     });
+
+    // --- RacePic (Paket 1: Fundament) -------------------------------------------------------
+    // Eigener Lambda-Handler statt Erweiterung von ApiHandler (siehe racepic-architecture.md
+    // Abschnitt B: getrennte Speicher-/Timeout-/Concurrency-Einstellungen, ohne einen neuen Service
+    // zu betreiben). Routen laufen ueber dieselbe HttpApi wie der bestehende ApiHandler.
+    if (props.racePicStack) {
+      const racePicStack = props.racePicStack;
+
+      const racePicApiHandler = new NodejsFunction(this, 'RacePicApiHandler', {
+        runtime: lambda.Runtime.NODEJS_24_X,
+        entry: path.join(__dirname, '../../../api/src/racepic/handler.ts'),
+        handler: 'handler',
+        functionName: `${props.config.prefix}-racepic-api-handler`,
+        memorySize: 512,
+        timeout: cdk.Duration.seconds(29),
+        depsLockFilePath,
+        environment: {
+          STAGE: props.config.stage,
+          DB_SECRET_ARN: dbSecretArn,
+          DB_HOST: dbHost,
+          DB_PORT: dbPort,
+          DB_NAME: props.config.dbName,
+          DB_USER: dbUser,
+          DB_REGION: dbRegion,
+          DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+          DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+          DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+          DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+          RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
+          RACEPIC_CDN_DOMAIN: racePicStack.distribution.distributionDomainName,
+          RACEPIC_INGEST_QUEUE_URL: racePicStack.ingestQueue.queueUrl,
+          RACEPIC_ANALYZE_QUEUE_URL: racePicStack.analyzeQueue.queueUrl,
+          RACEPIC_MATCH_QUEUE_URL: racePicStack.matchQueue.queueUrl,
+          RACEPIC_PHOTOGRAPHER_POOL_ID: racePicStack.photographerUserPool.userPoolId,
+          RACEPIC_PHOTOGRAPHER_POOL_CLIENT_ID: racePicStack.photographerUserPoolClientId,
+          RACEPIC_PHOTOGRAPHER_POOL_ISSUER: racePicStack.photographerUserPoolIssuerUrl
+        },
+        ...(props.config.apiInVpc ? lambdaVpcConfig : {})
+      });
+
+      racePicApiHandler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['secretsmanager:GetSecretValue'],
+          resources: [dbSecretArn]
+        })
+      );
+      racePicApiHandler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['rds-db:connect'],
+          resources: [dbConnectArn]
+        })
+      );
+      racePicApiHandler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:ListBucket'],
+          resources: [racePicStack.mediaBucket.bucketArn]
+        })
+      );
+      racePicApiHandler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+          resources: [`${racePicStack.mediaBucket.bucketArn}/*`]
+        })
+      );
+      [racePicStack.ingestQueue, racePicStack.analyzeQueue, racePicStack.matchQueue].forEach((queue) => queue.grantSendMessages(racePicApiHandler));
+
+      const racePicIntegration = new SharedPermissionHttpLambdaIntegration('RacePicApiIntegration', racePicApiHandler);
+
+      racePicApiHandler.addPermission('RacePicHttpApiInvokePermission', {
+        principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+        sourceArn: this.formatArn({
+          service: 'execute-api',
+          resource: this.api.apiId,
+          resourceName: '*/*/*'
+        })
+      });
+
+      // Zweiter JWT-Authorizer fuer den eigenstaendigen Fotografen-Pool (Abschnitt E: Blast-Radius-
+      // Trennung vom Staff-Pool). `jwtAuthorizer`/Staff-Gruppen bleiben fuer /admin/racepic/* zustaendig.
+      const photographerJwtAuthorizer = new authorizers.HttpJwtAuthorizer(
+        'PhotographerCognitoAuthorizer',
+        racePicStack.photographerUserPoolIssuerUrl,
+        { jwtAudience: [racePicStack.photographerUserPoolClientId] }
+      );
+
+      // Health-Check ohne Auth, damit Deploy/Monitoring den neuen Handler unabhaengig vom
+      // Fotografen-/Staff-Login pruefen kann.
+      this.api.addRoutes({
+        path: '/racepic/health',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration
+      });
+
+      // Stub-Routen (Paket 1): belegen den Pfad-Namespace und die Authorizer-Verdrahtung; die
+      // eigentliche Fachlogik kommt in Paket 2 (Identitaet), 3 (Upload), 6 (KI), 7/Admin (Review).
+      this.api.addRoutes({
+        path: '/photographer/me',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/ping',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+
+      new CfnOutput(this, 'RacePicApiHandlerName', { value: racePicApiHandler.functionName });
+    }
 
     new CfnOutput(this, 'ApiUrl', {
       value: this.api.url ?? 'n/a',

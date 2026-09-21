@@ -8,6 +8,7 @@ import { ApiStack } from '../lib/stacks/api-stack';
 import { AuthStack } from '../lib/stacks/auth-stack';
 import { DataStack } from '../lib/stacks/data-stack';
 import { MigrationRunnerStack } from '../lib/stacks/migration-runner-stack';
+import { RacePicStack } from '../lib/stacks/racepic-stack';
 import { StorageStack } from '../lib/stacks/storage-stack';
 
 const app = new cdk.App();
@@ -52,8 +53,17 @@ const storageStack = new StorageStack(app, `${config.prefix}-storage-stack`, {
   config
 });
 
+// RacePic (docs/memory-bank/racepic-architecture.md, Paket 1): eigener, optional einschaltbarer
+// Stack, damit dieser Foundation-Schritt keinen bestehenden Stage-Deploy veraendert oder gefaehrdet.
+const racePicStack = config.enableRacePic
+  ? new RacePicStack(app, `${config.prefix}-racepic-stack`, {
+      env: config.env,
+      config
+    })
+  : undefined;
+
 if (config.stage === 'dev') {
-  for (const stack of [authStack, storageStack, ...(needsDataStack ? [dataStack] : [])]) {
+  for (const stack of [authStack, storageStack, racePicStack, ...(needsDataStack ? [dataStack] : [])]) {
     if (!stack) {
       continue;
     }
@@ -72,12 +82,16 @@ if (config.enableApi && dataStack) {
     config,
     authStack,
     dataStack,
-    storageStack
+    storageStack,
+    racePicStack
   });
 
   apiStack.addDependency(authStack);
   apiStack.addDependency(dataStack);
   apiStack.addDependency(storageStack);
+  if (racePicStack) {
+    apiStack.addDependency(racePicStack);
+  }
 
   if (config.stage === 'dev') {
     Tags.of(apiStack).add('Project', config.prefix);

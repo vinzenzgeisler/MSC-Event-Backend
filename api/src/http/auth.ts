@@ -1,6 +1,15 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-const allowedRoles = ['admin', 'editor', 'viewer', 'technical_inspector', 'marshal_manager', 'simulator_manager', 'newsletter_manager'] as const;
+const allowedRoles = [
+  'admin',
+  'editor',
+  'viewer',
+  'technical_inspector',
+  'marshal_manager',
+  'simulator_manager',
+  'newsletter_manager',
+  'racepic_moderator'
+] as const;
 export type AllowedRole = (typeof allowedRoles)[number];
 const allowedRoleSet = new Set<string>(allowedRoles);
 const legacyRoleAliases: Record<string, AllowedRole> = {
@@ -37,7 +46,10 @@ export const adminPermissions = [
   'event_hub.read',
   'event_hub.write',
   'newsletter.read',
-  'newsletter.write'
+  'newsletter.write',
+  'racepic.read',
+  'racepic.review',
+  'racepic.manage'
 ] as const;
 export type AdminPermission = (typeof adminPermissions)[number];
 export type AdminReadPermission = Extract<AdminPermission, `${string}.read`>;
@@ -74,7 +86,10 @@ const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
     'event_hub.read',
     'event_hub.write',
     'newsletter.read',
-    'newsletter.write'
+    'newsletter.write',
+    'racepic.read',
+    'racepic.review',
+    'racepic.manage'
   ],
   editor: [
     'dashboard.read',
@@ -92,7 +107,10 @@ const rolePermissions: Record<AllowedRole, AdminPermission[]> = {
   technical_inspector: ['inspection.read', 'inspection.write'],
   marshal_manager: ['marshals.read', 'marshals.write', 'marshals.export'],
   simulator_manager: ['sim.read', 'sim.write'],
-  newsletter_manager: ['newsletter.read', 'newsletter.write']
+  newsletter_manager: ['newsletter.read', 'newsletter.write'],
+  // Review-Berechtigung fuer die RacePic-Bildzuordnung (Abschnitt E des Architekturplans); bewusst ohne
+  // 'racepic.manage' (Fotografen einladen/sperren, Lizenzen, Matching-Config bleibt admin vorbehalten).
+  racepic_moderator: ['racepic.read', 'racepic.review']
 };
 
 export type AuthContext = {

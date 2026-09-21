@@ -37,4 +37,17 @@ export interface StageConfig {
   dbBackupRetentionDays: number;
   dbPublicAccess: boolean;
   removalPolicy: 'destroy' | 'retain';
+  // RacePic (docs/memory-bank/racepic-architecture.md). Opt-in-Flag analog zu enableApi/enableMigrationRunner,
+  // damit RacePicStack ohne Risiko fuer bestehende Deploys eingefuehrt werden kann (Paket 1).
+  enableRacePic: boolean;
+  // Herkuenfte fuer CORS auf dem RacePic-Media-Bucket (Studio-Uploads) - i. d. R. dieselben wie
+  // assetsCorsAllowedOrigins, separat gehalten, damit RacePic-spezifische Domains unabhaengig
+  // erweitert werden koennen.
+  racepicMediaCorsAllowedOrigins: string[];
+  // Relying-Party-ID fuer Passkeys im Fotografen-Pool; muss die Domain sein, auf der /racepic/studio
+  // laeuft (siehe Architekturplan Abschnitt E).
+  racepicPhotographerRelyingPartyId: string;
+  // PEM-kodierter oeffentlicher Schluessel fuer CloudFront Signed URLs/Cookies (Downloads).
+  // Undefined bis das Schluesselpaar einmalig erzeugt wurde, siehe TODO in racepic-stack.ts.
+  racepicSigningPublicKeyPem?: string;
 }

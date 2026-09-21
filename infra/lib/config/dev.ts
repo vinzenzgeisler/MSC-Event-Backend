@@ -12,6 +12,8 @@ const devAdminLoginUrl = devPublicBaseUrl ? `${devPublicBaseUrl}/admin/login` : 
 const devVerifyUrl = devPublicBaseUrl ? `${devPublicBaseUrl}/anmeldung/verify` : 'http://localhost:5173/anmeldung/verify';
 const orgaNotificationRecipients = parseNotificationRecipients(process.env.ORGA_NOTIFICATION_RECIPIENTS);
 
+const devRacePicSigningPublicKeyPem = (process.env.DEV_RACEPIC_SIGNING_PUBLIC_KEY_PEM ?? '').trim() || undefined;
+
 const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrationRunner' | 'apiInVpc' | 'dbConnectivityMode' | 'dbUseIamAuth' | 'dbPublicAccess'> = {
   stage: 'dev',
   prefix: 'dreiecksrennen-dev',
@@ -42,7 +44,13 @@ const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrat
   dbAllocatedStorage: 20,
   dbMaxAllocatedStorage: 20,
   dbBackupRetentionDays: 1,
-  removalPolicy: 'destroy'
+  removalPolicy: 'destroy',
+  // RacePic bleibt in dev per Default aus (siehe Paket 1 in racepic-progress.md); ueber
+  // DEV_ENABLE_RACEPIC=true gezielt fuer den Test-Profil-Deploy einschaltbar.
+  enableRacePic: (process.env.DEV_ENABLE_RACEPIC ?? '').trim().toLowerCase() === 'true',
+  racepicMediaCorsAllowedOrigins: [...(devPublicBaseUrl ? [devPublicBaseUrl] : []), 'http://localhost:5173', 'http://localhost:4173'],
+  racepicPhotographerRelyingPartyId: (process.env.DEV_RACEPIC_RELYING_PARTY_ID ?? 'localhost').trim(),
+  racepicSigningPublicKeyPem: devRacePicSigningPublicKeyPem
 };
 
 const devIdleConfig: StageConfig = {

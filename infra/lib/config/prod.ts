@@ -64,6 +64,13 @@ export const resolveProdConfig = (): StageConfig => {
     dbMaxAllocatedStorage: 100,
     dbBackupRetentionDays: 30,
     dbPublicAccess: true,
-    removalPolicy: 'retain'
+    removalPolicy: 'retain',
+    // RacePic bleibt aus, bis Paket 1-9 abgeschlossen und Paket 0 (Rechtstexte) formal freigegeben
+    // sind (siehe docs/memory-bank/racepic-progress.md). Aktivierung ueber PROD_ENABLE_RACEPIC=true
+    // als bewusster, separater Schritt vor dem Piloten (Paket 10).
+    enableRacePic: (process.env.PROD_ENABLE_RACEPIC ?? '').trim().toLowerCase() === 'true',
+    racepicMediaCorsAllowedOrigins: [prodPublicBaseUrl, 'https://www.msc-oberlausitz.de', 'https://msc-oberlausitz.de'],
+    racepicPhotographerRelyingPartyId: (process.env.PROD_RACEPIC_RELYING_PARTY_ID ?? 'msc-oberlausitz.de').trim(),
+    racepicSigningPublicKeyPem: (process.env.PROD_RACEPIC_SIGNING_PUBLIC_KEY_PEM ?? '').trim() || undefined
   };
 };

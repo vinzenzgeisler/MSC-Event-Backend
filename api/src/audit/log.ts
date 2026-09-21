@@ -79,7 +79,9 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   racepic_photographer_claimed: ['photographerId'],
   racepic_photographer_profile_updated: ['photographerId', 'fieldMask'],
   // RacePic (Paket 4: Publish-Worker), siehe api/src/racepic/publish.ts.
-  racepic_image_visibility_changed: ['visibility']
+  racepic_image_visibility_changed: ['visibility'],
+  // RacePic (Paket 5: Admin-Basis), siehe api/src/racepic/adminEvents.ts.
+  racepic_event_config_updated: ['slug', 'enabled', 'published']
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

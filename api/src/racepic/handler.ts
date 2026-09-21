@@ -35,6 +35,7 @@ import {
 } from './uploads';
 import { sendIngestMessage } from './queues';
 import { getImageEventId, hideImage, publishImage, regenerateManifestsForEvent, removeImage } from './publish';
+import { getEventStats, listEventsWithRacepicConfig, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
 
 /**
  * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet, Paket 3: Upload). Eigenstaendiger
@@ -155,6 +156,20 @@ const patchImageVisibilitySchema = z.object({
   visibility: z.enum(['PUBLISHED', 'HIDDEN', 'REMOVED'])
 });
 
+// --- Paket 5: Admin-Basis ----------------------------------------------------------------------
+
+const slugPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+const putRacepicEventConfigSchema = z.object({
+  slug: z.string().trim().min(1).max(100).regex(slugPattern, 'slug must be lowercase kebab-case'),
+  title: z.string().trim().min(1).max(200),
+  enabled: z.boolean(),
+  published: z.boolean(),
+  uploadOpensAt: z.string().datetime().nullable().optional(),
+  uploadClosesAt: z.string().datetime().nullable().optional(),
+  defaultLicenseId: z.string().uuid().nullable().optional()
+});
+
 const uploadDto = (upload: { id: string; status: string; fileName: string | null; declaredSizeBytes: number; expiresAt: Date }) => ({
   id: upload.id,
   status: upload.status,
@@ -257,8 +272,67 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const auth = getAuthContext(event);
       if (!auth.sub) return errorJson(401, 'Unauthorized');
       if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
-      const photographers = await listPhotographers();
-      return json(200, { ok: true, photographers: photographers.map(photographerDto) });
+      const photographers = await listPhotographersWithEventAccess();
+      return json(200, {
+        ok: true,
+        photographers: photographers.map((photographer) => ({ ...photographerDto(photographer), events: photographer.events }))
+      });
+    }
+
+    // --- Admin: Event-Konfiguration und Statistik (Paket 5: Admin-Basis) ----------------------
+    if (method === 'GET' && path === '/admin/racepic/events') {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
+      const events = await listEventsWithRacepicConfig();
+      return json(200, { ok: true, events });
+    }
+
+    const putEventConfigMatch = path.match(/^\/admin\/racepic\/events\/([^/]+)$/);
+    if (method === 'PUT' && putEventConfigMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
+      try {
+        const input = putRacepicEventConfigSchema.parse(parseJsonBody(event));
+        const eventId = decodeURIComponent(putEventConfigMatch[1]);
+        const config = await upsertRacepicEventConfig(eventId, {
+          slug: input.slug,
+          title: input.title,
+          enabled: input.enabled,
+          uploadOpensAt: input.uploadOpensAt ? new Date(input.uploadOpensAt) : null,
+          uploadClosesAt: input.uploadClosesAt ? new Date(input.uploadClosesAt) : null,
+          published: input.published,
+          defaultLicenseId: input.defaultLicenseId ?? null
+        });
+        const db = await getDb();
+        await writeAuditLog(db, {
+          eventId,
+          actorUserId: auth.sub,
+          action: 'racepic_event_config_updated',
+          entityType: 'racepic_event',
+          entityId: eventId,
+          payload: { slug: input.slug, enabled: input.enabled, published: input.published }
+        });
+        return json(200, { ok: true, config });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    const eventStatsMatch = path.match(/^\/admin\/racepic\/events\/([^/]+)\/stats$/);
+    if (method === 'GET' && eventStatsMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
+      const stats = await getEventStats(decodeURIComponent(eventStatsMatch[1]));
+      return json(200, { ok: true, stats });
     }
 
     if (method === 'POST' && path === '/admin/racepic/photographers') {
@@ -435,6 +509,14 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!result.ok) return result.error;
       const events = await listMyEventAccess(result.photographer.id);
       return json(200, { ok: true, events });
+    }
+
+    if (method === 'GET' && path === '/admin/racepic/licenses') {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
+      const licenses = await listActiveLicenses();
+      return json(200, { ok: true, licenses: licenses.map((license) => ({ id: license.id, code: license.code, title: license.title })) });
     }
 
     if (method === 'GET' && path === '/photographer/licenses') {

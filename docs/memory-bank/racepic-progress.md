@@ -14,6 +14,7 @@ Alle Arbeit läuft im Branch `feature/racepic-planning` (noch nicht nach `main` 
 | 2a | Identität (Backend-Teil): Photographer-Pool, Einladung/Claim-API, Profil-API, `requireStepUp` | **erledigt (ungedeployed)** | siehe „Paket 2 – Ergebnis“ unten; Website-Teil (Studio-UI) siehe msc-website |
 | 3a | Upload (Backend-Teil): Batch- und Multipart-Endpoints, Reconciler | **erledigt (ungedeployed)** | siehe „Paket 3 – Ergebnis“ unten; Website-Teil siehe msc-website |
 | 4 | Ingest- und Publish-Worker: Varianten, EXIF, Manifeste | **erledigt (ungedeployed)** | siehe „Paket 4 – Ergebnis" unten |
+| 5b | Admin-Basis (Backend-Teil): Event-Konfiguration, Statistik, Lizenzliste für Admin-UI | **erledigt (ungedeployed)** | siehe „Paket 5 – Ergebnis" unten; UI siehe MSC-Event-Frontend |
 | 6 | KI-Pipeline: Referenz-Job, Analyze-Worker, Matcher, Config, Audit | offen | |
 | 9 | Datenschutz & Betrieb: Retention-Erweiterung (inkl. S3-Löschung Fahrzeugbild), Ausblenden-Funktion, Budgets, Runbook | offen | Siehe `racepic-retention-addendum.md` |
 | 10a | Pilot 12. OLD 2026 (Backend-Teil): Seed-Daten, Kalibrierung Matching-Schwellen | offen | |
@@ -81,6 +82,14 @@ Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implem
   - Das lokal gebündelte `sharp` enthält **Windows-x64-Binaries** (`@img/sharp-win32-x64`), nicht die für Lambda nötigen Linux-Binaries – erwartbar, weil `npm install` während des Bundlings die zur lokalen Maschine passende Variante installiert. Beim echten `cdk deploy`/`synth` in der Linux-CI installiert derselbe Mechanismus automatisch `@img/sharp-linux-x64`, passend zur gewählten `X86_64`-Architektur. Das ist **nicht live/deploy-verifizierbar** in dieser Sandbox.
   - **Nicht deployed.**
   - **Hinweis zur eigenen Methodik:** Frühere `cdk synth`-Prüfungen in diesem Branch liefen über `... | tail -N`, was den echten Exit-Code der Pipe maskiert (Bash gibt bei `cmd | tail` standardmäßig den Exit-Code von `tail`, nicht von `cmd`, zurück). Die Befunde zu Paket 1–3 wurden nachträglich nicht erneut geprüft, sind aber durch `tsc --noEmit` weiterhin auf TypeScript-Ebene abgesichert; künftige Synth-Checks in diesem Projekt sollten den Exit-Code ohne `| tail` (oder mit `set -o pipefail`) auswerten.
+
+## Paket 5 – Ergebnis (2026-09-21)
+
+- `api/src/racepic/adminEvents.ts` (neu): `listEventsWithRacepicConfig` (alle Nennungstool-Events, `racepic_event` per LEFT JOIN), `upsertRacepicEventConfig` (legt die racepic_event-Zeile an oder aktualisiert sie), `getEventStats` (Fotografen-Anzahl, Bilder nach `processingStatus`/`visibility` gruppiert), `listPhotographersWithEventAccess` (Fotografen inkl. zugeteilter Events, für die Admin-Liste).
+- `api/src/racepic/handler.ts`: `GET /admin/racepic/events`, `PUT /admin/racepic/events/{id}` (`racepic.manage`), `GET /admin/racepic/events/{id}/stats`, `GET /admin/racepic/licenses` (Admin-Variante des Lizenzkatalogs – die bestehende `GET /photographer/licenses` ist nur mit dem Photographer-JWT erreichbar, das Admin-Frontend nutzt den Staff-Pool).
+- `infra/lib/stacks/api-stack.ts`: die vier neuen Routen registriert (kein neuer Lambda, alles über `RacePicApiHandler`).
+- `api/src/audit/log.ts`: neue Audit-Action `racepic_event_config_updated`.
+- **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei. Ein `cdk synth`-Versuch traf erneut die aus Paket 4 bekannte Windows-Bundling-Flakiness (EPERM, RacePic-fremde Lambda) und wurde nicht mehrfach wiederholt, da die Änderung rein additiv ist (vier neue Routen auf dem bestehenden `RacePicApiHandler`, keine neuen Ressourcen) und strukturell identisch zu den bereits erfolgreich verifizierten Mustern aus Paket 1–3. **Nicht deployed.**
 
 ## Entscheidungen aus diesem Repo
 

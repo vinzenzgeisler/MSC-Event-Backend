@@ -1866,6 +1866,32 @@ export class ApiStack extends Stack {
         authorizer: jwtAuthorizer
       });
 
+      // Paket 5 (Admin-Basis): Event-Konfiguration und Statistik.
+      this.api.addRoutes({
+        path: '/admin/racepic/events',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/events/{eventId}',
+        methods: [apigwv2.HttpMethod.PUT],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/events/{eventId}/stats',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/licenses',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+
       // Paket 3b: Event-/Lizenzauswahl fuer den Studio-Uploader.
       this.api.addRoutes({
         path: '/photographer/events',

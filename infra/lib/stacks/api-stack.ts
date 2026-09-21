@@ -1765,7 +1765,18 @@ export class ApiStack extends Stack {
       );
       racePicApiHandler.addToRolePolicy(
         new iam.PolicyStatement({
-          actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+          // Paket 3: Multipart-Aktionen zusaetzlich zu Get/Put/Delete fuer den Presign- und
+          // Abschluss-/Abbruch-Flow (api/src/racepic/s3.ts).
+          actions: [
+            's3:GetObject',
+            's3:PutObject',
+            's3:DeleteObject',
+            's3:CreateMultipartUpload',
+            's3:UploadPart',
+            's3:ListMultipartUploadParts',
+            's3:CompleteMultipartUpload',
+            's3:AbortMultipartUpload'
+          ],
           resources: [`${racePicStack.mediaBucket.bucketArn}/*`]
         })
       );
@@ -1843,6 +1854,101 @@ export class ApiStack extends Stack {
         methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
         integration: racePicIntegration,
         authorizer: jwtAuthorizer
+      });
+
+      // Paket 3b: Event-/Lizenzauswahl fuer den Studio-Uploader.
+      this.api.addRoutes({
+        path: '/photographer/events',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/licenses',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+
+      // Paket 3 (Upload), siehe api/src/racepic/{uploads,s3}.ts und Architekturplan Abschnitt D.
+      this.api.addRoutes({
+        path: '/photographer/events/{eventId}/batches',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/batches/{batchId}/uploads',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/uploads/{uploadId}/parts',
+        methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/uploads/{uploadId}/complete',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/uploads/{uploadId}',
+        methods: [apigwv2.HttpMethod.DELETE],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/images',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+
+      // Paket 3: Upload-Reconciler (haengengebliebene Presign-Fenster), siehe
+      // api/src/racepic/reconcileUploads.ts. Laeuft alle 15 Minuten - lang genug, um den
+      // 15-Minuten-Presign-Ablauf sicher hinter sich zu haben, kurz genug, um S3-Reste zeitnah
+      // aufzuraeumen.
+      const racePicUploadReconciler = new NodejsFunction(this, 'RacePicUploadReconciler', {
+        runtime: lambda.Runtime.NODEJS_24_X,
+        entry: path.join(__dirname, '../../../api/src/racepic/reconcileUploads.ts'),
+        handler: 'handler',
+        functionName: `${props.config.prefix}-racepic-upload-reconciler`,
+        memorySize: 512,
+        timeout: cdk.Duration.minutes(2),
+        depsLockFilePath,
+        environment: {
+          STAGE: props.config.stage,
+          DB_SECRET_ARN: dbSecretArn,
+          DB_HOST: dbHost,
+          DB_PORT: dbPort,
+          DB_NAME: props.config.dbName,
+          DB_USER: dbUser,
+          DB_REGION: dbRegion,
+          DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+          DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+          DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+          DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+          RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName
+        },
+        ...(props.config.apiInVpc ? lambdaVpcConfig : {})
+      });
+      racePicUploadReconciler.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [dbSecretArn] })
+      );
+      racePicUploadReconciler.addToRolePolicy(new iam.PolicyStatement({ actions: ['rds-db:connect'], resources: [dbConnectArn] }));
+      racePicUploadReconciler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:DeleteObject', 's3:AbortMultipartUpload', 's3:ListMultipartUploadParts'],
+          resources: [`${racePicStack.mediaBucket.bucketArn}/*`]
+        })
+      );
+      new events.Rule(this, 'RacePicUploadReconcilerSchedule', {
+        schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+        targets: [new targets.LambdaFunction(racePicUploadReconciler)]
       });
 
       new CfnOutput(this, 'RacePicApiHandlerName', { value: racePicApiHandler.functionName });

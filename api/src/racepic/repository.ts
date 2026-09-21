@@ -3,6 +3,7 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import {
   event,
   racepicInvitation,
+  racepicLicense,
   racepicPhotographer,
   racepicPhotographerEvent
 } from '../db/schema';
@@ -223,4 +224,26 @@ export const updatePhotographerProfile = async (id: string, patch: PhotographerP
     .where(eq(racepicPhotographer.id, id))
     .returning();
   return updated ?? null;
+};
+
+/** Fuer die Event-Auswahl im Studio-Uploader (Paket 3b): Events, fuer die Upload-Zugang besteht. */
+export const listMyEventAccess = async (photographerId: string) => {
+  const db = await getDb();
+  return db
+    .select({
+      eventId: event.id,
+      eventName: event.name,
+      uploadOpensAt: racepicPhotographerEvent.uploadOpensAt,
+      uploadClosesAt: racepicPhotographerEvent.uploadClosesAt,
+      quotaImages: racepicPhotographerEvent.quotaImages
+    })
+    .from(racepicPhotographerEvent)
+    .innerJoin(event, eq(event.id, racepicPhotographerEvent.eventId))
+    .where(eq(racepicPhotographerEvent.photographerId, photographerId));
+};
+
+/** Aktive Lizenzen fuer die Lizenzwahl beim Upload (Abschnitt C: `racepic_license`, siehe docs/racepic/licenses.md). */
+export const listActiveLicenses = async () => {
+  const db = await getDb();
+  return db.select().from(racepicLicense).where(eq(racepicLicense.active, true)).orderBy(racepicLicense.code);
 };

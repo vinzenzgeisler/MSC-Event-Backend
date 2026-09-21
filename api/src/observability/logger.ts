@@ -33,7 +33,9 @@ const SAFE_KEYS = new Set([
   'signingMailQueueFailed',
   'inspectionNotificationMissing',
   'registrationNotificationMissing',
-  's3EvidenceMissing'
+  's3EvidenceMissing',
+  // RacePic (Paket 3), siehe api/src/racepic/reconcileUploads.ts.
+  'racepicUploadReconcilerErrors'
 ]);
 
 const sanitizeFields = (fields: Record<string, unknown>): Record<string, unknown> =>

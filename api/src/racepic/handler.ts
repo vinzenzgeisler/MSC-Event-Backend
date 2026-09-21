@@ -16,18 +16,32 @@ import {
   getInvitationPreviewByToken,
   getPhotographerByCognitoSub,
   hashToken,
+  listActiveLicenses,
+  listMyEventAccess,
   listPhotographers,
   RacePicError,
   updatePhotographerProfile
 } from './repository';
+import {
+  abortUpload,
+  completeUpload,
+  createBatch,
+  createUpload,
+  getBatchForPhotographer,
+  getUploadForPhotographer,
+  listMyImages,
+  listPartsForResume,
+  presignRemainingParts
+} from './uploads';
+import { sendIngestMessage } from './queues';
 
 /**
- * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet). Eigenstaendiger Lambda-Handler fuer
- * den `/photographer/*`-, `/public/racepic/*`- und `/admin/racepic/*`-Namespace, registriert auf
- * derselben HttpApi wie der bestehende ApiHandler (siehe infra/lib/stacks/api-stack.ts und
- * docs/memory-bank/racepic-architecture.md Abschnitt B/E/H).
+ * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet, Paket 3: Upload). Eigenstaendiger
+ * Lambda-Handler fuer den `/photographer/*`-, `/public/racepic/*`- und `/admin/racepic/*`-
+ * Namespace, registriert auf derselben HttpApi wie der bestehende ApiHandler (siehe
+ * infra/lib/stacks/api-stack.ts und docs/memory-bank/racepic-architecture.md Abschnitt B/D/E/H).
  *
- * Struktur und Response-Helfer folgen ../handler.ts. Upload (Paket 3), Review/KI (Paket 6/7) folgen.
+ * Struktur und Response-Helfer folgen ../handler.ts. Review/KI (Paket 6/7) folgen.
  */
 
 const isInvalidJson = (error: unknown): boolean => error instanceof Error && error.message === 'Invalid JSON body';
@@ -41,7 +55,7 @@ const maskEmail = (email: string): string => {
   return `${visible}${'*'.repeat(Math.max(local.length - 1, 1))}@${domain}`;
 };
 
-const invitationErrorStatus = (error: RacePicError): { status: number; message: string } => {
+const racePicErrorStatus = (error: RacePicError): { status: number; message: string } => {
   switch (error.code) {
     case 'RACEPIC_INVITATION_ALREADY_CONSUMED':
       return { status: 409, message: 'Invitation already consumed' };
@@ -51,6 +65,32 @@ const invitationErrorStatus = (error: RacePicError): { status: number; message: 
       return { status: 409, message: 'Photographer profile already claimed' };
     case 'RACEPIC_EVENT_NOT_FOUND':
       return { status: 400, message: 'One or more eventIds do not exist' };
+    case 'RACEPIC_EVENT_ACCESS_DENIED':
+      return { status: 403, message: 'No upload access granted for this event' };
+    case 'RACEPIC_UPLOAD_WINDOW_NOT_OPEN':
+      return { status: 403, message: 'Upload window is not open yet' };
+    case 'RACEPIC_UPLOAD_WINDOW_CLOSED':
+      return { status: 403, message: 'Upload window is closed' };
+    case 'RACEPIC_LICENSE_NOT_FOUND':
+      return { status: 400, message: 'License not found or inactive' };
+    case 'RACEPIC_UPLOAD_CONTENT_TYPE_UNSUPPORTED':
+      return { status: 415, message: 'Only JPEG uploads are supported in the MVP' };
+    case 'RACEPIC_UPLOAD_SIZE_INVALID':
+      return { status: 413, message: 'File size is invalid or exceeds the maximum' };
+    case 'RACEPIC_UPLOAD_DUPLICATE_IN_BATCH':
+      return { status: 409, message: 'A file with the same fingerprint is already queued in this batch' };
+    case 'RACEPIC_UPLOAD_QUOTA_EXCEEDED':
+      return { status: 403, message: 'Upload quota for this event has been reached' };
+    case 'RACEPIC_UPLOAD_NOT_MULTIPART':
+      return { status: 400, message: 'This upload is not a multipart upload' };
+    case 'RACEPIC_UPLOAD_NOT_COMPLETABLE':
+      return { status: 409, message: 'This upload is not in a completable state' };
+    case 'RACEPIC_UPLOAD_PARTS_REQUIRED':
+      return { status: 400, message: 'parts is required to complete a multipart upload' };
+    case 'RACEPIC_UPLOAD_OBJECT_MISSING':
+      return { status: 409, message: 'The uploaded object could not be found in storage' };
+    case 'RACEPIC_UPLOAD_ALREADY_COMPLETED':
+      return { status: 409, message: 'This upload was already completed and cannot be aborted' };
     default:
       return { status: 500, message: 'RacePic operation failed' };
   }
@@ -79,6 +119,88 @@ const claimInvitationSchema = z.object({
   // Versionspruefung folgt mit dem Onboarding-Screen (Website, Paket 2b).
   termsVersion: z.string().trim().min(1).max(50)
 });
+
+// --- Paket 3: Upload --------------------------------------------------------------------------
+
+const createBatchSchema = z.object({
+  licenseId: z.string().uuid()
+});
+
+const createUploadSchema = z.object({
+  name: z.string().trim().min(1).max(500),
+  type: z.literal('image/jpeg'),
+  size: z.number().int().positive(),
+  fingerprint: z.string().trim().max(200).optional()
+});
+
+const presignPartsSchema = z.object({
+  partNumbers: z.array(z.number().int().min(1).max(10_000)).min(1).max(50)
+});
+
+const completeUploadSchema = z.object({
+  parts: z
+    .array(z.object({ partNumber: z.number().int().min(1).max(10_000), eTag: z.string().trim().min(1).max(200) }))
+    .max(10_000)
+    .optional()
+});
+
+const uploadDto = (upload: { id: string; status: string; fileName: string | null; declaredSizeBytes: number; expiresAt: Date }) => ({
+  id: upload.id,
+  status: upload.status,
+  fileName: upload.fileName,
+  declaredSizeBytes: upload.declaredSizeBytes,
+  expiresAt: upload.expiresAt
+});
+
+const batchDto = (batch: {
+  id: string;
+  eventId: string;
+  licenseId: string;
+  fileCount: number;
+  completedCount: number;
+  failedCount: number;
+}) => ({
+  id: batch.id,
+  eventId: batch.eventId,
+  licenseId: batch.licenseId,
+  fileCount: batch.fileCount,
+  completedCount: batch.completedCount,
+  failedCount: batch.failedCount
+});
+
+const imageDto = (image: {
+  id: string;
+  eventId: string;
+  processingStatus: string;
+  visibility: string;
+  bytes: number | null;
+  createdAt: Date;
+}) => ({
+  id: image.id,
+  eventId: image.eventId,
+  processingStatus: image.processingStatus,
+  visibility: image.visibility,
+  bytes: image.bytes,
+  createdAt: image.createdAt
+});
+
+/** Ladet das Fotografenprofil zum JWT und lehnt ab, wenn es noch nicht (fertig) geclaimt ist. */
+type ActivePhotographerResult =
+  | { ok: false; error: APIGatewayProxyStructuredResultV2 }
+  | { ok: true; photographer: Awaited<ReturnType<typeof getPhotographerByCognitoSub>> & object };
+
+const requireActivePhotographer = async (event: APIGatewayProxyEventV2): Promise<ActivePhotographerResult> => {
+  const auth = getPhotographerAuthContext(event);
+  if (!auth.sub) return { ok: false, error: errorJson(401, 'Unauthorized') };
+  const photographer = await getPhotographerByCognitoSub(auth.sub);
+  if (!photographer) {
+    return { ok: false, error: errorJson(404, 'Photographer profile not found - claim an invitation first', undefined, 'PROFILE_NOT_CLAIMED') };
+  }
+  if (photographer.status === 'DISABLED') {
+    return { ok: false, error: errorJson(403, 'Photographer account disabled') };
+  }
+  return { ok: true, photographer };
+};
 
 const photographerDto = (photographer: {
   id: string;
@@ -169,7 +291,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
         if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
         if (error instanceof RacePicError) {
-          const { status, message } = invitationErrorStatus(error);
+          const { status, message } = racePicErrorStatus(error);
           return errorJson(status, message, undefined, error.code);
         }
         throw error;
@@ -212,7 +334,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         return json(200, { ok: true, email: invitation.email });
       } catch (error) {
         if (error instanceof RacePicError) {
-          const { status, message } = invitationErrorStatus(error);
+          const { status, message } = racePicErrorStatus(error);
           return errorJson(status, message, undefined, error.code);
         }
         throw error;
@@ -250,7 +372,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
         if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
         if (error instanceof RacePicError) {
-          const { status, message } = invitationErrorStatus(error);
+          const { status, message } = racePicErrorStatus(error);
           return errorJson(status, message, undefined, error.code);
         }
         throw error;
@@ -295,6 +417,163 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
         throw error;
       }
+    }
+
+    if (method === 'GET' && path === '/photographer/events') {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      const events = await listMyEventAccess(result.photographer.id);
+      return json(200, { ok: true, events });
+    }
+
+    if (method === 'GET' && path === '/photographer/licenses') {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      const licenses = await listActiveLicenses();
+      return json(200, {
+        ok: true,
+        licenses: licenses.map((license) => ({
+          id: license.id,
+          code: license.code,
+          title: license.title,
+          summary: license.summary,
+          attributionRequired: license.attributionRequired
+        }))
+      });
+    }
+
+    // --- Fotograf: Upload (Paket 3) ------------------------------------------------------------
+    const createBatchMatch = path.match(/^\/photographer\/events\/([^/]+)\/batches$/);
+    if (method === 'POST' && createBatchMatch) {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      try {
+        const input = createBatchSchema.parse(parseJsonBody(event));
+        const batch = await createBatch({ photographerId: result.photographer.id, eventId: decodeURIComponent(createBatchMatch[1]), licenseId: input.licenseId });
+        return json(201, { ok: true, batch: batchDto(batch) });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    const createUploadMatch = path.match(/^\/photographer\/batches\/([^/]+)\/uploads$/);
+    if (method === 'POST' && createUploadMatch) {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      try {
+        const batch = await getBatchForPhotographer(decodeURIComponent(createUploadMatch[1]), result.photographer.id);
+        if (!batch) return errorJson(404, 'Batch not found');
+        const input = createUploadSchema.parse(parseJsonBody(event));
+        const { upload, uploadUrl } = await createUpload({
+          batch,
+          fileName: input.name,
+          contentType: input.type,
+          declaredSizeBytes: input.size,
+          clientFingerprint: input.fingerprint ?? null
+        });
+        return json(201, {
+          ok: true,
+          upload: uploadDto(upload),
+          uploadUrl,
+          s3UploadId: upload.s3UploadId,
+          requiredHeaders: { 'content-type': input.type }
+        });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    const uploadPartsMatch = path.match(/^\/photographer\/uploads\/([^/]+)\/parts$/);
+    if (uploadPartsMatch) {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      const found = await getUploadForPhotographer(decodeURIComponent(uploadPartsMatch[1]), result.photographer.id);
+      if (!found) return errorJson(404, 'Upload not found');
+      try {
+        if (method === 'GET') {
+          const parts = await listPartsForResume(found.upload);
+          return json(200, { ok: true, parts });
+        }
+        if (method === 'POST') {
+          const input = presignPartsSchema.parse(parseJsonBody(event));
+          const parts = await presignRemainingParts(found.upload, input.partNumbers);
+          return json(200, { ok: true, parts });
+        }
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    const uploadCompleteMatch = path.match(/^\/photographer\/uploads\/([^/]+)\/complete$/);
+    if (method === 'POST' && uploadCompleteMatch) {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      const found = await getUploadForPhotographer(decodeURIComponent(uploadCompleteMatch[1]), result.photographer.id);
+      if (!found) return errorJson(404, 'Upload not found');
+      try {
+        const input = completeUploadSchema.parse(parseJsonBody(event));
+        const { image, alreadyCompleted } = await completeUpload(found.upload, found.batch, input.parts);
+        if (image && !alreadyCompleted) {
+          await sendIngestMessage(image.id).catch((error) =>
+            logOperationalEvent('error', 'racepic_upload.ingest_enqueue_failed', { errorCode: errorCodeOf(error) })
+          );
+        }
+        return json(200, { ok: true, image: image ? imageDto(image) : null, alreadyCompleted });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    const uploadDeleteMatch = path.match(/^\/photographer\/uploads\/([^/]+)$/);
+    if (method === 'DELETE' && uploadDeleteMatch) {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      const found = await getUploadForPhotographer(decodeURIComponent(uploadDeleteMatch[1]), result.photographer.id);
+      if (!found) return errorJson(404, 'Upload not found');
+      try {
+        await abortUpload(found.upload, found.batch);
+        return json(200, { ok: true });
+      } catch (error) {
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    if (method === 'GET' && path === '/photographer/images') {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      const query = event.queryStringParameters ?? {};
+      const limitRaw = Number(query.limit ?? '50');
+      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 200) : 50;
+      const images = await listMyImages({ photographerId: result.photographer.id, eventId: query.eventId, status: query.status, limit });
+      return json(200, { ok: true, images: images.map(imageDto) });
     }
 
     return errorJson(404, 'Not Found');

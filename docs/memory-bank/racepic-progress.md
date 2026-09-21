@@ -12,7 +12,7 @@ Alle Arbeit läuft im Branch `feature/racepic-planning` (noch nicht nach `main` 
 | 0 | Entscheidungen (Datenschutztexte, Lizenztexte, Bedrock-Region) | **erledigt (Entwurf)** | Texte liegen in `docs/racepic/licenses.md` und `docs/privacy/racepic-*.md`; Freigabe durch Datenschutzbeauftragten/Rechtsberatung steht noch aus |
 | 1 | Fundament: Migrationen `racepic_*`, `RacePicStack` (Bucket, CloudFront, SQS, Photographer-Pool), `RacePicApiHandler`, Permissions | **erledigt (ungedeployed)** | siehe „Paket 1 – Ergebnis“ unten |
 | 2a | Identität (Backend-Teil): Photographer-Pool, Einladung/Claim-API, Profil-API, `requireStepUp` | **erledigt (ungedeployed)** | siehe „Paket 2 – Ergebnis“ unten; Website-Teil (Studio-UI) siehe msc-website |
-| 3a | Upload (Backend-Teil): Batch- und Multipart-Endpoints, Reconciler | offen | Website-Teil (Uppy-UI) siehe msc-website |
+| 3a | Upload (Backend-Teil): Batch- und Multipart-Endpoints, Reconciler | **erledigt (ungedeployed)** | siehe „Paket 3 – Ergebnis“ unten; Website-Teil siehe msc-website |
 | 4 | Ingest- und Publish-Worker: Varianten, EXIF, Manifeste | offen | |
 | 6 | KI-Pipeline: Referenz-Job, Analyze-Worker, Matcher, Config, Audit | offen | |
 | 9 | Datenschutz & Betrieb: Retention-Erweiterung (inkl. S3-Löschung Fahrzeugbild), Ausblenden-Funktion, Budgets, Runbook | offen | Siehe `racepic-retention-addendum.md` |
@@ -47,6 +47,18 @@ Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implem
 - `infra/lib/config/{types,dev,prod}.ts`: neues Feld `racepicWebsiteBaseUrl` (Basis-URL für den Einladungslink, zeigt auf die Website, nicht das Nennungstool-Frontend).
 - `api/src/audit/log.ts`: neue Audit-Actions `racepic_photographer_invited`/`_claimed`/`_profile_updated`.
 - **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei; `cdk synth` für `ApiStack` mit `enableRacePic=true` erneut erfolgreich (neue Routen + IAM-Policy). **Nicht deployed.**
+
+## Paket 3 – Ergebnis (2026-09-21)
+
+- `api/migrations/0097_racepic_image_sha256_nullable.sql`: Korrektur an Paket 1 – `racepic_image.sha256` ist beim Upload-Abschluss noch nicht bekannt (erst der Ingest-Worker in Paket 4 berechnet ihn); Spalte ist jetzt nullable, der Unique-Index schließt `NULL` aus.
+- `api/src/racepic/s3.ts` (neu): Presign-Helfer für den Media-Bucket (einzelner PUT, Multipart create/uploadPart/listParts/complete/abort, headObject, deleteObject) – eigenes Modul statt Erweiterung von `docs/storage.ts` (anderes Zugriffsmuster: Fotografen-eigene Uploads statt Admin-generierte PDFs).
+- `api/src/racepic/uploads.ts` (neu): Batch anlegen (prüft Event-Zugang, Upload-Fenster, aktive Lizenz), Upload anlegen (MIME/Größe/Duplikat-Fingerprint/Quota, entscheidet Single-PUT vs. Multipart ab 16 MB), Complete (idempotent, legt `racepic_image` an), Abort, Bildliste, Reconciler-Abfrage.
+- `api/src/racepic/queues.ts` (neu): sendet nach erfolgreichem Upload-Abschluss eine Nachricht an die Ingest-Queue (Paket 4 konsumiert sie).
+- `api/src/racepic/reconcileUploads.ts` (neu) + EventBridge-Schedule (alle 15 Minuten): räumt Uploads auf, deren Presign-Fenster ohne `complete`-Aufruf abgelaufen ist (S3-Abbruch/-Löschung + Status `EXPIRED`).
+- `api/src/racepic/handler.ts`: volle Routen für Batch-/Upload-Erstellung, Teile signieren/auflisten (Resume), Complete, Abort, Bildliste, sowie `GET /photographer/events` (Event-Zugang für die UI) und `GET /photographer/licenses` (aktiver Lizenzkatalog).
+- `infra/lib/stacks/api-stack.ts`: Routen registriert, zusätzliche S3-Multipart-Permissions für `RacePicApiHandler`, neue `RacePicUploadReconciler`-Lambda mit eigenen (minimalen) S3-/DB-Permissions.
+- `api/package.json`: `@aws-sdk/client-sqs` als neue Abhängigkeit.
+- **Verifiziert:** `tsc --noEmit` für `api/` und `infra/` fehlerfrei; `cdk synth` für `ApiStack` mit `enableRacePic=true` erneut erfolgreich (neue Routen, IAM-Policies, Reconciler-Lambda + Schedule). **Nicht deployed.**
 
 ## Entscheidungen aus diesem Repo
 

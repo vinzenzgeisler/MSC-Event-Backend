@@ -23,6 +23,7 @@
     "@aws-sdk/client-s3": "^3.1097.0",
     "@aws-sdk/client-secrets-manager": "^3.1097.0",
     "@aws-sdk/client-ses": "^3.1097.0",
+    "@aws-sdk/client-sqs": "^3.1136.0",
     "@aws-sdk/rds-signer": "^3.1097.0",
     "@aws-sdk/s3-request-presigner": "^3.1097.0",
     "@types/aws-lambda": "^8.10.137",

@@ -1764,7 +1764,8 @@ export const racepicImage = pgTable('racepic_image', {
     .notNull()
     .references(() => racepicLicense.id),
   originalKey: text('original_key'),
-  sha256: text('sha256').notNull(),
+  // Nullable: erst ab dem Ingest-Worker (Paket 4) bekannt, siehe migrations/0097_racepic_image_sha256_nullable.sql.
+  sha256: text('sha256'),
   bytes: bigint('bytes', { mode: 'number' }),
   width: integer('width'),
   height: integer('height'),
@@ -1779,7 +1780,7 @@ export const racepicImage = pgTable('racepic_image', {
 }, (table) => ({
   eventSha256Unique: uniqueIndex('racepic_image_event_sha256_unique')
     .on(table.eventId, table.sha256)
-    .where(sql`${table.processingStatus} <> 'DUPLICATE'`),
+    .where(sql`${table.sha256} is not null and ${table.processingStatus} <> 'DUPLICATE'`),
   eventStatusIndex: index('racepic_image_event_status_idx').on(table.eventId, table.processingStatus),
   photographerIndex: index('racepic_image_photographer_idx').on(table.photographerId),
   visibilityIndex: index('racepic_image_visibility_idx').on(table.eventId, table.visibility),

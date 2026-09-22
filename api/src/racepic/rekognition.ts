@@ -37,13 +37,35 @@ export const detectVehicles = async (jpegBuffer: Buffer): Promise<VehicleDetecti
   const detections: VehicleDetection[] = [];
   for (const label of result.Labels ?? []) {
     if (!label.Name || !VEHICLE_LABELS.has(label.Name)) continue;
-    for (const instance of label.Instances ?? []) {
+    const instances = (label.Instances ?? []).filter((instance) => {
       const box = instance.BoundingBox;
-      if (!box || box.Width === undefined || box.Height === undefined || box.Left === undefined || box.Top === undefined) continue;
+      return box && box.Width !== undefined && box.Height !== undefined && box.Left !== undefined && box.Top !== undefined;
+    });
+
+    if (instances.length === 0) {
+      // Rekognition erkennt ein Fahrzeug manchmal nur als Szenen-Label ohne Instanz-Bounding-Box
+      // (typisch bei Motorsportfotos: das Fahrzeug fuellt fast den ganzen Rahmen, ist ungewoehnlich
+      // beschnitten/angeschnitten oder bewegungsunscharf) - Nutzer-Feedback 2026-09-22: "auf dem
+      // Bild war ein Auto zu sehen", aber keine Zuordnung, weil ohne Instanz-BBox ueberhaupt keine
+      // `racepic_detection`-Zeile entstand: der Match-Worker hatte dadurch nichts zu bewerten, und
+      // jeder im Bild erkannte Startnummern-Text (`detectText`) blieb unverknuepft (`detectionId:
+      // null`) und wurde nie fuers Matching benutzt. Fallback: das gesamte Bild als BBox verwenden,
+      // damit zumindest OCR/Embedding/Farbe eine Chance zum Matchen bekommen.
+      detections.push({
+        label: label.Name as 'Car' | 'Motorcycle',
+        confidence: label.Confidence ?? 0,
+        bbox: { width: 1, height: 1, left: 0, top: 0 },
+        dominantColors: []
+      });
+      continue;
+    }
+
+    for (const instance of instances) {
+      const box = instance.BoundingBox!;
       detections.push({
         label: label.Name as 'Car' | 'Motorcycle',
         confidence: instance.Confidence ?? label.Confidence ?? 0,
-        bbox: { width: box.Width, height: box.Height, left: box.Left, top: box.Top },
+        bbox: { width: box.Width!, height: box.Height!, left: box.Left!, top: box.Top! },
         dominantColors: (instance.DominantColors ?? [])
           .filter((color) => color.Red !== undefined && color.Green !== undefined && color.Blue !== undefined)
           .map((color) => ({ red: color.Red!, green: color.Green!, blue: color.Blue! }))

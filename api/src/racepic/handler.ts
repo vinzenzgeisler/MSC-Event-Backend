@@ -61,7 +61,7 @@ import {
   searchEntriesByEvent
 } from './reviewQueue';
 import { requestImageDownload } from './download';
-import { racepicEvent, racepicImage } from '../db/schema';
+import { racepicDetection, racepicEvent, racepicImage, racepicProcessingStep } from '../db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 
 /**
@@ -994,8 +994,22 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!auth.sub) return errorJson(401, 'Unauthorized');
       if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
       const imageId = decodeURIComponent(reanalyzeImageMatch[1]);
-      await sendAnalyzeMessage(imageId);
       const db = await getDb();
+      // Bug gefunden 2026-09-22 (Nutzer-Feedback "wie schaffen wir es, dass die Erkennung besser
+      // wird?"): ein simples `sendAnalyzeMessage` allein war hier bislang wirkungslos, sobald ein
+      // Bild schon einmal analysiert wurde - analyzeWorker.ts prueft `racepic_processing_step`
+      // (step='analyze', gleiche PIPELINE_VERSION) auf status=DONE und beendet sich dann sofort
+      // (Idempotenz), und akzeptiert ausserdem nur processingStatus DERIVED/ANALYZED, nicht
+      // MATCHED. Ein echter Re-Analyze (z.B. nach einer Rekognition-Pipeline-Verbesserung) muss
+      // daher explizit den bisherigen Analyse-/Match-Fortschritt zuruecksetzen: alte Detections
+      // loeschen (cascadiert auf racepic_text_detection/racepic_match_candidate; bestehende
+      // racepic_assignment-Zeilen bleiben erhalten, verlieren nur ihren detection_id-Verweis -
+      // ON DELETE SET NULL), alte processing_step-Zeilen fuer 'analyze'/'match' entfernen und
+      // processingStatus auf DERIVED zuruecksetzen.
+      await db.delete(racepicDetection).where(eq(racepicDetection.imageId, imageId));
+      await db.delete(racepicProcessingStep).where(and(eq(racepicProcessingStep.imageId, imageId), inArray(racepicProcessingStep.step, ['analyze', 'match'])));
+      await db.update(racepicImage).set({ processingStatus: 'DERIVED', updatedAt: new Date() }).where(eq(racepicImage.id, imageId));
+      await sendAnalyzeMessage(imageId);
       await writeAuditLog(db, {
         actorUserId: auth.sub,
         action: 'racepic_reanalyze_triggered',

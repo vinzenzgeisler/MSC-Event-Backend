@@ -261,4 +261,3 @@ Reste. Ergebnis und daraus folgende Anpassungen:
 - Rechtliches Seller-Modell (A/B) vor Marketplace-Implementierung klären.
 - Keine Cost Anomaly Detection eingerichtet (bräuchte eine SNS-Themen-Abo-Bestätigung, in dieser Umgebung nicht einrichtbar/verifizierbar) – nur das neue `CfnBudget` (Paket 9) deckt die Kostenüberwachung ab.
 - Das neue `RacePicMonthlyBudget` ist nicht live getestet (kein AWS-Zugriff in dieser Umgebung) – vor dem Piloten (Paket 10) einmal in der CI beobachten, dass es tatsächlich erzeugt wird und die Schwellenwerte sinnvoll sind.
-- `hideParticipant` (Paket 9) hat keine eigene UI im Nennungstool-Frontend – aktuell nur über die API aufrufbar; falls das Orga-Team es regelmäßig braucht, einen Button in der Review-Queue/Fahreransicht ergänzen (Paket 7 UI, MSC-Event-Frontend).

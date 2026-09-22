@@ -183,6 +183,56 @@ Kalibrierung nötige **Tooling**, das während des echten Piloten gebraucht wird
 5. Echte Fotos hochladen (Studio), Pipeline laufen lassen, Review-Queue abarbeiten.
 6. Mit `matching-quality-report` kalibrieren (siehe Runbook-Abschnitt), Event veröffentlichen.
 
+## Bestandsaufnahme aller Pakete (2026-09-22)
+
+Auf Bitte des Vereins wurde der gesamte bisherige Stand (Pakete 0–10) über alle drei Repos
+geprüft: Routen-Inventar (registriert in `api-stack.ts` vs. tatsächlich in `handler.ts`
+behandelt), von Website/Frontend tatsächlich aufgerufene Endpunkte vs. Backend-Routen,
+Architekturdoku-Gleichheit über alle drei Repos, Branch-Drift gegenüber `main`, unkommitierte
+Reste. Ergebnis und daraus folgende Anpassungen:
+
+- **Architekturdoku:** in allen drei Repos weiterhin byte-identisch. Kein Handlungsbedarf.
+- **Branch-Drift:** `feature/racepic-planning` ist in allen drei Repos 0 Commits hinter `main` –
+  kein Merge-Konflikt-Risiko.
+- **Routen-Inventar Backend:** alle 32 in `api-stack.ts` registrierten RacePic-Routen haben eine
+  passende Behandlung in `handler.ts` und umgekehrt – keine verwaisten Routen.
+- **Website- und Frontend-Client-Aufrufe:** stimmen mit den tatsächlichen Backend-Pfaden überein
+  (Download-Varianten `small/medium/large/original` z. B. exakt deckungsgleich zwischen
+  `download.ts` und `publicClient.ts`).
+- **Gefundener und behobener Bug (dieses Repo):** `PUT /admin/racepic/events/{id}` (Event-
+  Konfiguration speichern, Paket 5) hat **nie** `regenerateManifestsForEvent` aufgerufen. Das
+  Umschalten von „Veröffentlicht" im Admin-Formular hatte dadurch **keine sichtbare Wirkung** auf
+  der öffentlichen Website, bis zufällig eine andere Aktion (Bild-Sichtbarkeit ändern,
+  Teilnehmer ausblenden) die Manifeste für dasselbe Event neu erzeugte. Der Runbook-Text
+  ("Veröffentlicht einschalten und speichern – das löst sofort … aus") beschrieb also ein
+  Verhalten, das der Code nicht hatte.
+  - **Zweiter, verwandter Fund:** Selbst wenn das ausgelöst worden wäre, hätte `regenerateManifestsForEvent`
+    beim **Zurückziehen** der Veröffentlichung (`published: true → false`) die zuvor geschriebenen
+    Manifeste **nicht gelöscht** (die Funktion bricht für ein nicht veröffentlichtes Event nur
+    früh ab) – die Teilnehmergalerie wäre über die alte CDN-URL weiterhin öffentlich erreichbar
+    geblieben. Bei einer Slug-Änderung eines veröffentlichten Events gilt dasselbe für die alten
+    Manifest-Pfade unter dem vorherigen Slug.
+  - **Fix:** `api/src/racepic/s3.ts`: neue `deleteObjectsByPrefix` (paginiertes List+Delete).
+    `api/src/racepic/publish.ts`: neue `unpublishEventManifests(previousSlug)` – löscht alle
+    Manifeste unter dem alten Slug, schreibt `manifests/events.json` neu (ohne das Event) und
+    invalidiert CloudFront. `api/src/racepic/handler.ts`: `PUT /admin/racepic/events/{id}` liest
+    jetzt den vorherigen Stand (Slug, `published`), ruft nach dem Speichern `unpublishEventManifests`
+    auf, wenn das Event gerade unveröffentlicht wurde oder sich der Slug eines veröffentlichten
+    Events geändert hat, und sonst (weiterhin/neu veröffentlicht) `regenerateManifestsForEvent`.
+  - **Verifiziert:** `tsc --noEmit` für `api/` fehlerfrei.
+- **Gefundene, aber nicht behobene Lücke (Frontend-UI):** Im Nennungstool-Frontend gibt es **keine
+  UI** für vier bereits im Backend fertige Funktionen: Bild-Sichtbarkeit ändern
+  (`PATCH /admin/racepic/images/{id}`, Paket 4), Teilnehmer ausblenden (Paket 9, siehe offener
+  Punkt oben), Matching-Config ansehen/anlegen (`GET/POST /admin/racepic/matching-configs`,
+  Paket 6) und Re-Match/Re-Analyze auslösen (Paket 6) sowie der neue Qualitätsreport
+  (`GET .../matching-quality-report`, Paket 10). Besonders der letzte Punkt wiegt schwer: das
+  Runbook beschreibt den kompletten Kalibrierungs-Workflow aus Paket 10 als Abfolge von
+  Admin-UI-Schritten, es gibt dafür aber nur rohe API-Endpunkte – ein Vereins-Admin ohne
+  Entwickler-Werkzeuge kann den Piloten in der Praxis so nicht durchführen. Empfehlung: ein
+  zusätzliches Frontend-Paket (informell "Paket 11") in MSC-Event-Frontend, das diese vier Punkte
+  in `/admin/racepic` und `/admin/racepic/review/:eventId` nachrüstet, bevor der echte Pilot
+  startet. Nicht in dieser Sitzung umgesetzt, siehe Rückfrage an den Verein.
+
 ## Entscheidungen aus diesem Repo
 
 - 2026-09-21: Bedrock-Region-Check abgeschlossen. Titan/Nova Multimodal Embeddings sind nur in us-east-1/us-west-2 verfügbar. Gewählt: **Cohere Embed v4 (multimodal) über Bedrock in eu-west-1 (Irland)**, Cross-Region-Aufruf aus der eu-central-1-Lambda, damit Fahrzeugbilder innerhalb der EU bleiben.

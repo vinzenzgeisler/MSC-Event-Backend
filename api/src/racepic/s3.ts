@@ -4,8 +4,10 @@ import {
   CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   ListPartsCommand,
   PutObjectCommand,
   S3Client,
@@ -122,6 +124,31 @@ export const headObject = async (key: string): Promise<{ sizeBytes: number; cont
 export const deleteObject = async (key: string): Promise<void> => {
   const client = getS3Client();
   await client.send(new DeleteObjectCommand({ Bucket: getMediaBucket(), Key: key })).catch(() => undefined);
+};
+
+/**
+ * Loescht alle Objekte unter einem Prefix (z. B. `manifests/{slug}/`), inkl. Pagination und in
+ * Batches von 1000 (S3-Limit fuer `DeleteObjects`). Wird fuer das Zurueckziehen von Manifesten
+ * beim Unpublish eines Events gebraucht (siehe publish.ts `unpublishEventManifests`) - dort gibt
+ * es keine feste Liste von Teilnehmer-Keys mehr, sobald das Event nicht mehr aktiv gepflegt wird.
+ */
+export const deleteObjectsByPrefix = async (prefix: string): Promise<number> => {
+  const client = getS3Client();
+  const bucket = getMediaBucket();
+  let continuationToken: string | undefined;
+  let deleted = 0;
+  do {
+    const listResult = await client.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken })
+    );
+    const keys = (listResult.Contents ?? []).map((object) => object.Key).filter((key): key is string => Boolean(key));
+    if (keys.length > 0) {
+      await client.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: keys.map((Key) => ({ Key })) } }));
+      deleted += keys.length;
+    }
+    continuationToken = listResult.IsTruncated ? listResult.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return deleted;
 };
 
 /** Direkter serverseitiger Download (Ingest-Worker) - kein Presign, laeuft in der Lambda selbst. */

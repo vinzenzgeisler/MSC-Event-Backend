@@ -14,7 +14,7 @@ import {
   vehicle
 } from '../db/schema';
 import { RacePicError } from './repository';
-import { copyObject, deleteObject, putObject } from './s3';
+import { copyObject, deleteObject, deleteObjectsByPrefix, putObject } from './s3';
 
 /**
  * Publish-Worker (Paket 4), siehe docs/memory-bank/racepic-architecture.md Abschnitt B/G/H.
@@ -287,4 +287,27 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
   );
 
   await invalidateCloudFront([`/manifests/${slug}/*`, '/manifests/events.json']);
+};
+
+/**
+ * Zieht die Manifeste eines Events vollstaendig zurueck (Luecke, gefunden bei einer Bestandsaufnahme
+ * am 2026-09-22: `regenerateManifestsForEvent` bricht fuer ein nicht (mehr) veroeffentlichtes Event
+ * fruehzeitig ab, ohne die zuvor geschriebenen Manifeste zu loeschen - ein Admin, der ein Event
+ * wieder auf "nicht veroeffentlicht" stellt, hat die Galerie also faelschlich weiterhin oeffentlich
+ * erreichbar). Wird gebraucht bei (a) Unpublish (`published: true -> false`) und (b) einer
+ * Slug-Aenderung eines veroeffentlichten Events (die alten Manifest-Pfade unter dem frueheren Slug
+ * werden sonst zu verwaisten, weiterhin oeffentlich erreichbaren Dateien).
+ */
+export const unpublishEventManifests = async (previousSlug: string): Promise<void> => {
+  await deleteObjectsByPrefix(`manifests/${previousSlug}/`);
+
+  const db = await getDb();
+  const publishedEvents = await db.select().from(racepicEvent).where(and(eq(racepicEvent.enabled, true), eq(racepicEvent.published, true)));
+  await putObject(
+    'manifests/events.json',
+    Buffer.from(JSON.stringify(publishedEvents.map((row) => ({ eventId: row.eventId, slug: row.slug, title: row.title })))),
+    'application/json'
+  );
+
+  await invalidateCloudFront([`/manifests/${previousSlug}/*`, '/manifests/events.json']);
 };

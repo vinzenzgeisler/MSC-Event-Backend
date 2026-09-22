@@ -34,13 +34,13 @@ import {
   presignRemainingParts
 } from './uploads';
 import { sendAnalyzeMessage, sendIngestMessage, sendMatchMessage } from './queues';
-import { getImageEventId, hideImage, publishImage, regenerateManifestsForEvent, removeImage } from './publish';
+import { getImageEventId, hideImage, publishImage, regenerateManifestsForEvent, removeImage, unpublishEventManifests } from './publish';
 import { getEventStats, listEventsWithRacepicConfig, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
 import { createMatchingConfig, listMatchingConfigs } from './matchingConfig';
 import { computeMatchQualityReport } from './matchQuality';
 import { addAssignment, confirmAssignment, correctAssignment, hideParticipant, listImagesForEntry, listReviewQueue, rejectAssignment, searchEntriesByEvent } from './reviewQueue';
 import { requestImageDownload } from './download';
-import { racepicImage } from '../db/schema';
+import { racepicEvent, racepicImage } from '../db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 
 /**
@@ -344,6 +344,14 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       try {
         const input = putRacepicEventConfigSchema.parse(parseJsonBody(event));
         const eventId = decodeURIComponent(putEventConfigMatch[1]);
+
+        const db = await getDb();
+        const [previous] = await db
+          .select({ slug: racepicEvent.slug, published: racepicEvent.published })
+          .from(racepicEvent)
+          .where(eq(racepicEvent.eventId, eventId))
+          .limit(1);
+
         const config = await upsertRacepicEventConfig(eventId, {
           slug: input.slug,
           title: input.title,
@@ -353,7 +361,23 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           published: input.published,
           defaultLicenseId: input.defaultLicenseId ?? null
         });
-        const db = await getDb();
+
+        // Manifeste synchron halten (Luecke, behoben 2026-09-22, siehe publish.ts): war das Event
+        // vorher veroeffentlicht und ist es das jetzt nicht mehr, oder hat sich der Slug eines
+        // veroeffentlichten Events geaendert, muessen die (dann verwaisten) alten Manifeste unter
+        // dem alten Slug zurueckgezogen werden. Ansonsten (weiterhin veroeffentlicht, gleicher
+        // Slug, oder neu veroeffentlicht) reicht die normale Regenerierung.
+        if (previous?.published && (!input.published || previous.slug !== input.slug)) {
+          await unpublishEventManifests(previous.slug).catch((error) =>
+            logOperationalEvent('error', 'racepic_publish.manifest_unpublish_failed', { errorCode: errorCodeOf(error) })
+          );
+        }
+        if (input.published) {
+          await regenerateManifestsForEvent(eventId).catch((error) =>
+            logOperationalEvent('error', 'racepic_publish.manifest_regen_failed', { errorCode: errorCodeOf(error) })
+          );
+        }
+
         await writeAuditLog(db, {
           eventId,
           actorUserId: auth.sub,

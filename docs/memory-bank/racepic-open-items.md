@@ -73,6 +73,13 @@ AWS-Zugriff, den diese Sandbox nicht abschließend verifizieren kann.
   Prüfung (siehe racepic-architecture.md Abschnitt K).
 - Alles andere aus Abschnitt K/M des Architekturplans (Stripe Connect, Wasserzeichen,
   Entitlements, `strong`-Step-up) ist bewusst nicht Teil des MVP.
+- **Warenkorb-/Konto-UI (Paket 18, msc-website) ist reine Vorbereitung, kein Checkout.** Der
+  client-seitige Warenkorb (`localStorage`, `src/integrations/racepic/cart.tsx`) sammelt nur
+  bereits kostenlose Bilder für einen bequemen Sammel-Download (ruft denselben bestehenden
+  `POST /public/racepic/images/{id}/download`-Endpunkt mehrfach auf) – kein Konto, keine
+  Zahlung, kein Backend-Zustand. Das Konto-Icon im RacePic-Header ist absichtlich deaktiviert.
+  Der eigentliche Checkout/Bezahlvorgang startet erst nach der oben genannten Rechtsprüfung und
+  den Marketplace-Paketen M1–M5.
 
 ## Verweise
 

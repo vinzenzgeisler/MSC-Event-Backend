@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { event, racepicAssignment, racepicDetection, racepicEvent, racepicImage, racepicMatchCandidate, racepicPhotographer, racepicPhotographerEvent, racepicProcessingStep } from '../db/schema';
 import { RacePicError } from './repository';
@@ -250,7 +250,7 @@ export const getImagePipelineStatus = async (imageId: string) => {
 /** Fuer die Fotografen-Liste im Admin (Paket 5), inkl. je Fotograf zugeteilter Events. */
 export const listPhotographersWithEventAccess = async () => {
   const db = await getDb();
-  const photographers = await db.select().from(racepicPhotographer);
+  const photographers = await db.select().from(racepicPhotographer).where(isNull(racepicPhotographer.deletedAt));
   if (photographers.length === 0) return [];
   const accessRows = await db
     .select({ photographerId: racepicPhotographerEvent.photographerId, eventId: event.id, eventName: event.name })

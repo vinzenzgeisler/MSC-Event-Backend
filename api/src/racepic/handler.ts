@@ -12,6 +12,7 @@ import { queuePhotographerInvitationMail } from './mail';
 import {
   claimInvitation,
   createPhotographerInvitation,
+  deletePhotographer,
   getConsumableInvitationByToken,
   getInvitationPreviewByToken,
   getPhotographerByCognitoSub,
@@ -163,6 +164,8 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 404, message: 'Requested variant is not available for this image' };
     case 'RACEPIC_ENTRY_NOT_FOUND':
       return { status: 404, message: 'Entry not found' };
+    case 'RACEPIC_PHOTOGRAPHER_NOT_FOUND':
+      return { status: 404, message: 'Photographer not found' };
     default:
       return { status: 500, message: 'RacePic operation failed' };
   }
@@ -574,6 +577,26 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       } catch (error) {
         if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
         if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) { const { status, message } = racePicErrorStatus(error); return errorJson(status, message, undefined, error.code); }
+        throw error;
+      }
+    }
+
+    // Admin-Loeschung eines Fotografen (Feedback 2026-09-22: "Fotografen will ich auch löschen
+    // können"). Soft-Delete (status=DISABLED + deletedAt), siehe Begruendung in repository.ts -
+    // ihre Bilder bleiben unangetastet.
+    const photographerDeleteMatch = path.match(/^\/admin\/racepic\/photographers\/([^/]+)$/);
+    if (method === 'DELETE' && photographerDeleteMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
+      const photographerId = decodeURIComponent(photographerDeleteMatch[1]);
+      try {
+        await deletePhotographer(photographerId);
+        const db = await getDb();
+        await writeAuditLog(db, { actorUserId: auth.sub, action: 'racepic_photographer_deleted', entityType: 'racepic_photographer', entityId: photographerId, payload: {} });
+        return json(200, { ok: true });
+      } catch (error) {
         if (error instanceof RacePicError) { const { status, message } = racePicErrorStatus(error); return errorJson(status, message, undefined, error.code); }
         throw error;
       }

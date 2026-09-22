@@ -1,4 +1,4 @@
-import { and, asc, count, eq, ne } from 'drizzle-orm';
+import { and, asc, eq, isNull, ne } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import {
   entry,
@@ -79,19 +79,20 @@ const loadCandidateDisplays = async (imageId: string, detectionId: string): Prom
 };
 
 export type ReviewQueueItem = {
-  assignmentId: string;
+  assignmentId: string | null;
   imageId: string;
   imagePreviewUrl: string;
   detection: { id: string; label: string; bbox: unknown } | null;
   confidence: number;
-  suggestedEntryId: string;
+  suggestedEntryId: string | null;
   candidates: CandidateDisplay[];
 };
 
 export const listReviewQueue = async (eventId: string, offset: number, limit: number): Promise<{ items: ReviewQueueItem[]; total: number }> => {
   const db = await getDb();
 
-  const rows = await db
+  // 1) Von der KI vorgeschlagene, aber noch nicht entschiedene Zuordnungen.
+  const reviewRows = await db
     .select({
       assignmentId: racepicAssignment.id,
       imageId: racepicAssignment.imageId,
@@ -104,28 +105,63 @@ export const listReviewQueue = async (eventId: string, offset: number, limit: nu
     .from(racepicAssignment)
     .innerJoin(racepicImage, eq(racepicImage.id, racepicAssignment.imageId))
     .leftJoin(racepicDetection, eq(racepicDetection.id, racepicAssignment.detectionId))
-    .where(and(eq(racepicImage.eventId, eventId), eq(racepicAssignment.status, 'REVIEW_REQUIRED')))
-    .orderBy(asc(racepicAssignment.decidedAt))
-    .limit(limit)
-    .offset(offset);
+    .where(and(eq(racepicImage.eventId, eventId), eq(racepicAssignment.status, 'REVIEW_REQUIRED')));
+
+  // 2) Erkannte Fahrzeuge ganz ohne Zuordnung (Bug gefunden 2026-09-22, Nutzer-Feedback: "wenn gar
+  // kein Match gibt, dass es dann zur Queue-Ansicht geht" und "wenn zwei oder mehr Fahrzeuge im
+  // Bild dann soll das in der Queue-Ansicht auch direkt klickbar sein") - matchWorker legt fuer ein
+  // Fahrzeug ohne Kandidat ueber der reviewThreshold ueberhaupt keine racepic_assignment-Zeile an
+  // (siehe `if (!desiredStatus) continue;`); ein solches Bild - oder ein zweites Fahrzeug auf einem
+  // bereits teilweise zugeordneten Bild - verschwand dadurch bisher spurlos aus jeder Uebersicht.
+  // Ein Detection zaehlt nur dann als offen, wenn es ueberhaupt noch keine (auch abgelehnte)
+  // Zuordnung dafuer gibt - eine explizit abgelehnte Entscheidung soll nicht endlos wiederkehren.
+  const orphanDetectionRows = await db
+    .select({
+      imageId: racepicDetection.imageId,
+      detectionId: racepicDetection.id,
+      detectionLabel: racepicDetection.label,
+      detectionBbox: racepicDetection.bbox
+    })
+    .from(racepicDetection)
+    .innerJoin(racepicImage, eq(racepicImage.id, racepicDetection.imageId))
+    .leftJoin(racepicAssignment, eq(racepicAssignment.detectionId, racepicDetection.id))
+    .where(and(eq(racepicImage.eventId, eventId), eq(racepicImage.processingStatus, 'MATCHED'), isNull(racepicAssignment.id)));
+
+  const merged = [
+    ...reviewRows.map((row) => ({
+      assignmentId: row.assignmentId as string | null,
+      imageId: row.imageId,
+      entryId: row.entryId as string | null,
+      confidence: Number(row.confidence ?? 0),
+      detectionId: row.detectionId,
+      detectionLabel: row.detectionLabel,
+      detectionBbox: row.detectionBbox
+    })),
+    ...orphanDetectionRows.map((row) => ({
+      assignmentId: null as string | null,
+      imageId: row.imageId,
+      entryId: null as string | null,
+      confidence: 0,
+      detectionId: row.detectionId as string | null,
+      detectionLabel: row.detectionLabel as string | null,
+      detectionBbox: row.detectionBbox
+    }))
+  ];
+
+  const total = merged.length;
+  const page = merged.slice(offset, offset + limit);
 
   const items = await Promise.all(
-    rows.map(async (row) => ({
+    page.map(async (row) => ({
       assignmentId: row.assignmentId,
       imageId: row.imageId,
       imagePreviewUrl: await presignGetObject(previewKey(row.imageId), PREVIEW_URL_TTL_SECONDS),
       detection: row.detectionId ? { id: row.detectionId, label: row.detectionLabel!, bbox: row.detectionBbox } : null,
-      confidence: Number(row.confidence ?? 0),
+      confidence: row.confidence,
       suggestedEntryId: row.entryId,
       candidates: row.detectionId ? await loadCandidateDisplays(row.imageId, row.detectionId) : []
     }))
   );
-
-  const [{ value: total }] = await db
-    .select({ value: count() })
-    .from(racepicAssignment)
-    .innerJoin(racepicImage, eq(racepicImage.id, racepicAssignment.imageId))
-    .where(and(eq(racepicImage.eventId, eventId), eq(racepicAssignment.status, 'REVIEW_REQUIRED')));
 
   return { items, total };
 };

@@ -123,6 +123,23 @@ export const listPhotographers = async () => {
     .orderBy(racepicPhotographer.createdAt);
 };
 
+/**
+ * Admin-Loeschung eines Fotografen (Feedback 2026-09-22: "Fotografen will ich auch löschen
+ * können"). Bewusst ein Soft-Delete (status=DISABLED + deletedAt) statt eines Hard-Deletes: die
+ * DB-FK racepic_image.photographer_id ist ON DELETE CASCADE - ein Hard-Delete wuerde also
+ * kommentarlos alle Bilder dieses Fotografen mitloeschen, auch bereits veroeffentlichte. Der
+ * Cognito-User bleibt bestehen (kein zusaetzlicher AWS-Aufruf noetig); `deletedAt` wird bereits an
+ * allen relevanten Lookups (Login/Claim/Registrierung, siehe oben) respektiert, der Login schlaegt
+ * damit fehl.
+ */
+export const deletePhotographer = async (photographerId: string): Promise<void> => {
+  const db = await getDb();
+  const [photographer] = await db.select({ id: racepicPhotographer.id }).from(racepicPhotographer)
+    .where(and(eq(racepicPhotographer.id, photographerId), isNull(racepicPhotographer.deletedAt))).limit(1);
+  if (!photographer) throw new RacePicError('RACEPIC_PHOTOGRAPHER_NOT_FOUND');
+  await db.update(racepicPhotographer).set({ status: 'DISABLED', deletedAt: new Date(), updatedAt: new Date() }).where(eq(racepicPhotographer.id, photographerId));
+};
+
 /** Fuer die oeffentliche Einladungsseite: nur Eventnamen + maskierte E-Mail, kein Fotografenname. */
 export const getInvitationPreviewByToken = async (token: string) => {
   const db = await getDb();

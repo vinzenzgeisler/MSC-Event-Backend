@@ -35,7 +35,7 @@ import {
 } from './uploads';
 import { sendAnalyzeMessage, sendIngestMessage, sendMatchMessage } from './queues';
 import { getImageEventId, hideImage, publishImage, regenerateManifestsForEvent, removeImage, unpublishEventManifests } from './publish';
-import { getEventStats, listEventsWithRacepicConfig, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
+import { getEventStats, listEventsWithRacepicConfig, listImagesForEvent, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
 import { createMatchingConfig, listMatchingConfigs } from './matchingConfig';
 import { computeMatchQualityReport } from './matchQuality';
 import { addAssignment, confirmAssignment, correctAssignment, hideParticipant, listImagesForEntry, listReviewQueue, rejectAssignment, searchEntriesByEvent } from './reviewQueue';
@@ -405,6 +405,24 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
       const stats = await getEventStats(decodeURIComponent(eventStatsMatch[1]));
       return json(200, { ok: true, stats });
+    }
+
+    // Paket 11: allgemeine Bildliste je Event (Bestandsaufnahme 2026-09-22), siehe adminEvents.ts.
+    const eventImagesMatch = path.match(/^\/admin\/racepic\/events\/([^/]+)\/images$/);
+    if (method === 'GET' && eventImagesMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.review')) return errorJson(403, 'Forbidden');
+      const query = event.queryStringParameters ?? {};
+      const limit = Math.min(Math.max(Number(query.limit ?? '20') || 20, 1), 100);
+      const offset = Math.max(Number(query.offset ?? '0') || 0, 0);
+      const result = await listImagesForEvent(
+        decodeURIComponent(eventImagesMatch[1]),
+        { visibility: query.visibility, processingStatus: query.processingStatus },
+        offset,
+        limit
+      );
+      return json(200, { ok: true, ...result });
     }
 
     if (method === 'POST' && path === '/admin/racepic/photographers') {

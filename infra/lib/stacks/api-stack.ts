@@ -1921,6 +1921,13 @@ export class ApiStack extends Stack {
         integration: racePicIntegration,
         authorizer: jwtAuthorizer
       });
+      // Paket 11: allgemeine Bildliste je Event, siehe api/src/racepic/adminEvents.ts.
+      this.api.addRoutes({
+        path: '/admin/racepic/events/{eventId}/images',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
       this.api.addRoutes({
         path: '/admin/racepic/licenses',
         methods: [apigwv2.HttpMethod.GET],

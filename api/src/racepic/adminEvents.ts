@@ -1,7 +1,8 @@
-import { count, eq, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { event, racepicEvent, racepicImage, racepicPhotographer, racepicPhotographerEvent } from '../db/schema';
 import { RacePicError } from './repository';
+import { presignGetObject } from './s3';
 
 /**
  * Admin-Verwaltung von RacePic pro Event (Paket 5: Admin-Basis), siehe
@@ -124,6 +125,73 @@ export const getEventStats = async (eventId: string): Promise<RacepicEventStats>
     imagesByStatus: Object.fromEntries(statusRows.map((row) => [row.status, row.value])),
     imagesByVisibility: Object.fromEntries(visibilityRows.map((row) => [row.visibility, row.value]))
   };
+};
+
+export type RacepicAdminImageListItem = {
+  id: string;
+  previewUrl: string | null;
+  visibility: string;
+  processingStatus: string;
+  photographerDisplayName: string;
+  capturedAt: string | null;
+  createdAt: string;
+};
+
+/**
+ * Allgemeine Bildliste fuer ein Event (Paket 11), siehe Bestandsaufnahme 2026-09-22 in
+ * racepic-progress.md: bislang gab es keinen Weg, Bilder eines Events unabhaengig von einer
+ * bereits bestehenden Zuordnung zu sehen (Review-Queue zeigt nur REVIEW_REQUIRED, die
+ * Fahrer-Ansicht nur bereits zugeordnete Bilder) - ohne diese Liste konnte ein frisch
+ * hochgeladenes (`visibility=DRAFT`) Bild admin-seitig nie erreicht/veroeffentlicht werden, wenn
+ * es (noch) keine Zuordnung hatte. Offset-Pagination wie im Rest des RacePic-Admin-Bereichs.
+ */
+export const listImagesForEvent = async (
+  eventId: string,
+  filter: { visibility?: string; processingStatus?: string },
+  offset: number,
+  limit: number
+): Promise<{ items: RacepicAdminImageListItem[]; total: number }> => {
+  const db = await getDb();
+  const conditions = [eq(racepicImage.eventId, eventId)];
+  if (filter.visibility) conditions.push(eq(racepicImage.visibility, filter.visibility));
+  if (filter.processingStatus) conditions.push(eq(racepicImage.processingStatus, filter.processingStatus));
+  const where = and(...conditions);
+
+  const [{ value: total }] = await db.select({ value: count() }).from(racepicImage).where(where);
+
+  const rows = await db
+    .select({
+      id: racepicImage.id,
+      visibility: racepicImage.visibility,
+      processingStatus: racepicImage.processingStatus,
+      photographerDisplayName: racepicPhotographer.displayName,
+      capturedAt: racepicImage.capturedAt,
+      createdAt: racepicImage.createdAt
+    })
+    .from(racepicImage)
+    .innerJoin(racepicPhotographer, eq(racepicPhotographer.id, racepicImage.photographerId))
+    .where(where)
+    .orderBy(desc(racepicImage.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  const items = await Promise.all(
+    rows.map(async (row) => ({
+      id: row.id,
+      // Nur die private derived/-Vorschau (kein Abhaengigkeit davon, ob das Bild schon
+      // oeffentlich ist) - dieselbe Quelle wie die Review-Queue (Paket 7).
+      previewUrl: ['UPLOADED', 'VALIDATED'].includes(row.processingStatus)
+        ? null
+        : await presignGetObject(`derived/${row.id}/preview.webp`, 300).catch(() => null),
+      visibility: row.visibility,
+      processingStatus: row.processingStatus,
+      photographerDisplayName: row.photographerDisplayName,
+      capturedAt: row.capturedAt ? row.capturedAt.toISOString() : null,
+      createdAt: row.createdAt.toISOString()
+    }))
+  );
+
+  return { items, total };
 };
 
 /** Fuer die Fotografen-Liste im Admin (Paket 5), inkl. je Fotograf zugeteilter Events. */

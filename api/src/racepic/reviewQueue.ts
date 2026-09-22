@@ -247,6 +247,59 @@ export const addAssignment = async (imageId: string, entryId: string, detectionI
   return created;
 };
 
+/**
+ * Zuordnungs-Detail zu einem Bild (Paket 16: Admin-Redesign, siehe racepic-ux-redesign-plan.md) -
+ * das Gegenstueck zu `listImagesForEntry` (dort nach `entryId`, hier nach `imageId`). Schliesst
+ * die vom Verein genannte Lücke "wie ich die Zuordnung zum Fahrer sehen/ändern kann" direkt aus
+ * der neuen Bilder-Grid-Ansicht heraus, ohne erst über die Fahrersuche gehen zu muessen.
+ */
+export type ImageAssignmentDisplay = {
+  assignmentId: string;
+  entryId: string;
+  status: string;
+  source: string;
+  confidence: number | null;
+  driverName: string;
+  startNumber: string | null;
+  vehicleMake: string | null;
+  vehicleModel: string | null;
+};
+
+export const listAssignmentsForImage = async (imageId: string): Promise<ImageAssignmentDisplay[]> => {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      assignmentId: racepicAssignment.id,
+      entryId: racepicAssignment.entryId,
+      status: racepicAssignment.status,
+      source: racepicAssignment.source,
+      confidence: racepicAssignment.confidence,
+      startNumber: entry.startNumberNorm,
+      firstName: person.firstName,
+      lastName: person.lastName,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model
+    })
+    .from(racepicAssignment)
+    .innerJoin(entry, eq(entry.id, racepicAssignment.entryId))
+    .innerJoin(person, eq(person.id, entry.driverPersonId))
+    .innerJoin(vehicle, eq(vehicle.id, entry.vehicleId))
+    .where(eq(racepicAssignment.imageId, imageId))
+    .orderBy(asc(racepicAssignment.decidedAt));
+
+  return rows.map((row) => ({
+    assignmentId: row.assignmentId,
+    entryId: row.entryId,
+    status: row.status,
+    source: row.source,
+    confidence: row.confidence ? Number(row.confidence) : null,
+    driverName: `${row.firstName} ${row.lastName}`.trim(),
+    startNumber: row.startNumber,
+    vehicleMake: row.vehicleMake,
+    vehicleModel: row.vehicleModel
+  }));
+};
+
 /** Fahreransicht zur Korrektur (Abschnitt H: `GET /admin/racepic/participants/{entryId}/images`). */
 export const listImagesForEntry = async (entryId: string) => {
   const db = await getDb();

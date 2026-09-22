@@ -49,7 +49,17 @@ import {
 import { getEventStats, listEventsWithRacepicConfig, listImagesForEvent, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
 import { createMatchingConfig, listMatchingConfigs } from './matchingConfig';
 import { computeMatchQualityReport } from './matchQuality';
-import { addAssignment, confirmAssignment, correctAssignment, hideParticipant, listImagesForEntry, listReviewQueue, rejectAssignment, searchEntriesByEvent } from './reviewQueue';
+import {
+  addAssignment,
+  confirmAssignment,
+  correctAssignment,
+  hideParticipant,
+  listAssignmentsForImage,
+  listImagesForEntry,
+  listReviewQueue,
+  rejectAssignment,
+  searchEntriesByEvent
+} from './reviewQueue';
 import { requestImageDownload } from './download';
 import { racepicEvent, racepicImage } from '../db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -1141,6 +1151,16 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
       const images = await listImagesForEntry(decodeURIComponent(entryImagesMatch[1]));
       return json(200, { ok: true, images });
+    }
+
+    // Paket 16 (Admin-Redesign): Gegenstueck zu obigem Endpunkt, nach imageId statt entryId.
+    const imageAssignmentsMatch = path.match(/^\/admin\/racepic\/images\/([^/]+)\/assignments$/);
+    if (method === 'GET' && imageAssignmentsMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
+      const assignments = await listAssignmentsForImage(decodeURIComponent(imageAssignmentsMatch[1]));
+      return json(200, { ok: true, assignments });
     }
 
     // --- Admin: Teilnehmer ausblenden (Paket 9: Datenschutz) -----------------------------------

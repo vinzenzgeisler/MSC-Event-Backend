@@ -23,6 +23,7 @@ Alle Arbeit läuft im Branch `feature/racepic-planning` (noch nicht nach `main` 
 | 12 | Öffentliches Fotografenprofil (Backend-Teil): Slug, Manifest | **erledigt (ungedeployed)** | siehe „Paket 12 – Ergebnis" unten; Seite selbst in msc-website |
 | 13 | Entwicklungsumgebung: CORS, CI/CD-Deploy-Lücke für `RacePicStack` | **erledigt (ungedeployed)** | siehe „Paket 13 – Ergebnis" unten |
 | 15 | Studio-Redesign (Backend-Teil): Eigene-Bilder-Verwaltung | **erledigt (ungedeployed)** | siehe „Paket 15 – Ergebnis" unten; UI siehe msc-website |
+| 16 | Admin-Redesign (Backend-Teil): Zuordnungen je Bild | **erledigt (ungedeployed)** | siehe „Paket 16 – Ergebnis" unten; UI siehe MSC-Event-Frontend |
 
 Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implementiert, auch wenn die UI dazu in MSC-Event-Frontend liegt (Paket 5/7 dort).
 
@@ -379,6 +380,23 @@ auslösen zu lassen – anders als die Hotfixes zuvor).
   registriert.
 - **Verifiziert:** `tsc --noEmit` (`api/`, `infra/`) und `npm --workspace api test` grün. **Nicht
   deployed** (Feature-Branch, noch kein Merge nach `main`).
+
+## Paket 16 – Ergebnis (Backend-Teil, 2026-09-22)
+
+Backend-Ergänzung für das Admin-Redesign, siehe
+[racepic-ux-redesign-plan.md](./racepic-ux-redesign-plan.md). Auf `feature/racepic-ux-redesign`.
+
+- `api/src/racepic/reviewQueue.ts`: neue `listAssignmentsForImage(imageId)` – Gegenstück zum
+  bestehenden `listImagesForEntry` (dort nach `entryId`, hier nach `imageId`), liefert je Bild
+  alle Zuordnungen mit Fahrername/Startnummer/Fahrzeug/Status/Konfidenz. Schließt die vom Verein
+  genannte Lücke "wie ich die Zuordnung zum Fahrer sehen/ändern kann" direkt aus einer
+  Bild-Detailansicht heraus (bestehende `confirmAssignment`/`rejectAssignment`/
+  `correctAssignment`-Endpunkte bleiben unverändert, nur ein neuer Lesezugriff).
+- `api/src/racepic/handler.ts`, `infra/lib/stacks/api-stack.ts`:
+  `GET /admin/racepic/images/{id}/assignments` (die bestehende `POST`-Route auf demselben Pfad
+  – `addAssignment` – bleibt unverändert, nur um `GET` erweitert).
+- **Verifiziert:** `tsc --noEmit` (`api/`, `infra/`) und `npm --workspace api test` grün. **Nicht
+  deployed.**
 
 ## Bestandsaufnahme aller Pakete (2026-09-22)
 

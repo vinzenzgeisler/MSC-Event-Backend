@@ -1996,7 +1996,7 @@ export class ApiStack extends Stack {
       });
       this.api.addRoutes({
         path: '/admin/racepic/images/{imageId}/assignments',
-        methods: [apigwv2.HttpMethod.POST],
+        methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
         integration: racePicIntegration,
         authorizer: jwtAuthorizer
       });

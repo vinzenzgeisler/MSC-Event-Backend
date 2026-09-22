@@ -59,10 +59,12 @@ const hashKey = (value: string): string => {
   return hash.toString(16);
 };
 
-// `embedding: null` heisst "noch kein erfolgreicher Bedrock-Aufruf" (z. B. AWS-Kontoverifizierung
-// noch nicht abgeschlossen, siehe racepic-open-items.md) - Matching faellt dann auf OCR/Typ/Farbe
-// zurueck, statt den ganzen Match-Lauf abzubrechen (Bug gefunden 2026-09-22, siehe unten).
-export type VehicleReference = { embedding: number[] | null; dominantColor: RgbColor; vehicleType: string | null };
+// `embedding`/`dominantColor`: null heisst "Signal nicht verfuegbar" (Bedrock-Kontoverifizierung
+// noch nicht abgeschlossen bzw. sharp konnte das Referenzfoto nicht dekodieren, z. B. ein
+// beschaedigtes/nicht standardkonformes JPEG - "VipsJpeg: Invalid SOS parameters for sequential
+// JPEG" bei einem echten Nennungsfoto in Prod, 2026-09-22) - Matching faellt dann auf die
+// verbleibenden Signale zurueck, statt den ganzen Match-Lauf abzubrechen.
+export type VehicleReference = { embedding: number[] | null; dominantColor: RgbColor | null; vehicleType: string | null };
 
 /**
  * Liefert die Referenzdaten fuer ein Fahrzeug, berechnet sie bei Bedarf. Gibt `null` zurueck, wenn
@@ -79,7 +81,7 @@ export const ensureVehicleReference = async (vehicleId: string): Promise<Vehicle
   if (existing && existing.sourceKeyHash === sourceKeyHash && existing.embedding) {
     return {
       embedding: existing.embedding as unknown as number[],
-      dominantColor: (existing.dominantColors as unknown as { color: RgbColor })?.color ?? { red: 0, green: 0, blue: 0 },
+      dominantColor: (existing.dominantColors as unknown as { color: RgbColor | null } | null)?.color ?? null,
       vehicleType: existing.vehicleType
     };
   }
@@ -87,15 +89,20 @@ export const ensureVehicleReference = async (vehicleId: string): Promise<Vehicle
   const imageBuffer = await findVehicleImageObject(vehicleRow.imageS3Key);
   if (!imageBuffer) return null;
 
-  // `embedImage` faellt separat abgefangen aus (Bug gefunden 2026-09-22: ein einzelner
-  // Bedrock-Fehler hier liess vorher den kompletten Match-Lauf fuer das Bild abstuerzen, statt nur
-  // dieses eine embedding_sim-Signal auszulassen - dasselbe Prinzip wie schon in analyzeWorker.ts).
+  // Beide Aufrufe einzeln abgefangen (Bug gefunden 2026-09-22: ein einzelner Fehler in einem von
+  // beiden liess vorher den kompletten Match-Lauf fuer das Bild abstuerzen, statt nur dieses eine
+  // Signal auszulassen - dasselbe Prinzip wie schon in analyzeWorker.ts). Zuerst nur
+  // `embedImage` abgesichert (Bedrock-Kontoverifizierung), dann live in Prod festgestellt: auch
+  // `approximateDominantColor` (sharp-Dekodierung) kann an einem defekten Referenzfoto scheitern.
   const [embedding, dominantColor] = await Promise.all([
     embedImage(imageBuffer).catch((error) => {
       logOperationalEvent('error', 'racepic_vehicle_reference.embedding_failed', { errorCode: errorCodeOf(error) });
       return null;
     }),
-    approximateDominantColor(imageBuffer)
+    approximateDominantColor(imageBuffer).catch((error) => {
+      logOperationalEvent('error', 'racepic_vehicle_reference.color_failed', { errorCode: errorCodeOf(error) });
+      return null;
+    })
   ]);
 
   const reference: VehicleReference = { embedding, dominantColor, vehicleType: vehicleRow.vehicleType };

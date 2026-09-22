@@ -2243,7 +2243,10 @@ export class ApiStack extends Stack {
         entry: path.join(__dirname, '../../../api/src/racepic/matchWorker.ts'),
         handler: 'handler',
         functionName: `${props.config.prefix}-racepic-match-worker`,
-        memorySize: 1024,
+        // 1536 statt 1024 (Bug gefunden 2026-09-22: Runtime.OutOfMemory bei mehreren
+        // gleichzeitigen Fahrzeugbild-Downloads/-Dekodierungen) - zusaetzliche Absicherung neben
+        // der jetzt begrenzten Parallelitaet in matchWorker.ts, kein Ersatz dafuer.
+        memorySize: 1536,
         timeout: cdk.Duration.seconds(90),
         depsLockFilePath,
         bundling: { nodeModules: ['sharp'] },

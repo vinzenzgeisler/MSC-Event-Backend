@@ -27,6 +27,26 @@ import type { RgbColor } from './rekognition';
  */
 export const PIPELINE_VERSION = '2026-09-21.1';
 const MAX_STORED_CANDIDATES = 5;
+// Bug gefunden 2026-09-22: `eligible.map(...)` in `Promise.all` feuerte pro Detection so viele
+// gleichzeitige `ensureVehicleReference`-Aufrufe wie es zulaessige Nennungen im Event gibt - jeder
+// davon laedt bei einem Cache-Miss ein volles Fahrzeugfoto herunter und dekodiert es mit sharp.
+// Bei einem groesseren Event (mehrere Dutzend/hundert Nennungen) fuehrte das zu
+// `Runtime.OutOfMemory`. Begrenzt die Parallelitaet stattdessen auf einen festen Wert.
+const CANDIDATE_SCORING_CONCURRENCY = 5;
+
+async function mapWithConcurrencyLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await fn(items[currentIndex]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 type EligibleEntry = {
   entryId: string;
@@ -89,26 +109,24 @@ const processOneImage = async (imageId: string): Promise<void> => {
     const detectionColor: RgbColor | null = Array.isArray(detection.dominantColors) && detection.dominantColors[0] ? (detection.dominantColors[0] as RgbColor) : null;
     const detectionEmbedding = detection.embedding as unknown as number[] | null;
 
-    const scored = await Promise.all(
-      eligible.map(async (candidateEntry) => {
-        const textMatches = candidateEntry.startNumberNorm
-          ? linkedTexts.filter((text) => text.normalized === candidateEntry.startNumberNorm)
-          : [];
-        const reference = await ensureVehicleReference(candidateEntry.vehicleId);
+    const scored = await mapWithConcurrencyLimit(eligible, CANDIDATE_SCORING_CONCURRENCY, async (candidateEntry) => {
+      const textMatches = candidateEntry.startNumberNorm
+        ? linkedTexts.filter((text) => text.normalized === candidateEntry.startNumberNorm)
+        : [];
+      const reference = await ensureVehicleReference(candidateEntry.vehicleId);
 
-        const features: CandidateFeatures = {
-          ocrExact: textMatches.length > 0,
-          ocrConfidence: textMatches.length > 0 ? Math.max(...textMatches.map((t) => Number(t.confidence ?? 0))) / 100 : 0,
-          vehicleTypeMatch: vehicleTypeMatches(detection.label as 'Car' | 'Motorcycle', candidateEntry.vehicleType),
-          embeddingSimilarity:
-            detectionEmbedding && reference?.embedding ? embeddingSimilarity(detectionEmbedding, reference.embedding) : null,
-          colorSimilarity: detectionColor && reference?.dominantColor ? colorSimilarity(detectionColor, reference.dominantColor) : null,
-          ambiguityCount: candidateEntry.startNumberNorm ? (ambiguityCounts.get(candidateEntry.startNumberNorm) ?? 1) : 1
-        };
+      const features: CandidateFeatures = {
+        ocrExact: textMatches.length > 0,
+        ocrConfidence: textMatches.length > 0 ? Math.max(...textMatches.map((t) => Number(t.confidence ?? 0))) / 100 : 0,
+        vehicleTypeMatch: vehicleTypeMatches(detection.label as 'Car' | 'Motorcycle', candidateEntry.vehicleType),
+        embeddingSimilarity:
+          detectionEmbedding && reference?.embedding ? embeddingSimilarity(detectionEmbedding, reference.embedding) : null,
+        colorSimilarity: detectionColor && reference?.dominantColor ? colorSimilarity(detectionColor, reference.dominantColor) : null,
+        ambiguityCount: candidateEntry.startNumberNorm ? (ambiguityCounts.get(candidateEntry.startNumberNorm) ?? 1) : 1
+      };
 
-        return { entryId: candidateEntry.entryId, score: scoreCandidate(features, config.weights), features };
-      })
-    );
+      return { entryId: candidateEntry.entryId, score: scoreCandidate(features, config.weights), features };
+    });
 
     scored.sort((a, b) => b.score - a.score);
     if (scored.length === 0) continue;

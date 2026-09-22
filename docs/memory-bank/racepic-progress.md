@@ -309,12 +309,50 @@ Anwendungscode geändert, da `matchWorker.ts` die 0-100-Skala bereits korrekt vo
 **Verifiziert:** `tsc --noEmit` und `npm --workspace api test` (alle Bestands-Tests) grün. Direkt
 auf `main` committed (gleiche Begründung wie oben).
 
-**Noch zu tun (kein Code, operativ):** Das bereits hochgeladene Testbild hängt vermutlich in
-`processing_status=ANALYZED`-Vorstufe bzw. hat einen fehlgeschlagenen `racepic_processing_step`
-(`step='analyze'`) und muss nach dem Deploy dieser Migration einmal per
-`POST /admin/racepic/images/{id}/reanalyze` neu angestoßen werden (Bild-ID über die neue
-Bildliste in `/admin/racepic` unter „Konfigurieren" → „Bilder" finden, sofern schon durch den
-Ingest-Worker verarbeitet).
+**Update:** Nach dem Deploy dieser Migration lief die Analyse tatsächlich durch (Status
+`ANALYZED` im Admin sichtbar) – der Match-Worker scheiterte danach aber an zwei weiteren, echten
+Bugs, siehe nächster Abschnitt.
+
+## Bugfix (2026-09-22, gefunden beim ersten echten Match-Lauf)
+
+Bild stand auf `ANALYZED`, aber keine Zuordnung entstand und die öffentliche Website zeigte 0
+Ergebnisse (das Event-Manifest enthält nur Teilnehmer mit einer aktiven Zuordnung, siehe
+`buildManifestData` in `publish.ts`). CloudWatch-Logs des `RacePicMatchWorker`:
+
+```
+{ eventType: 'racepic_match.failed', errorCode: 'Error' }                     ← 1. Versuch
+{ ... Status: error, Error Type: Runtime.OutOfMemory ... }                    ← 2. Versuch (Retry)
+```
+
+**Zwei echte Bugs, beide in der Kandidaten-Bewertung von `matchWorker.ts`:**
+
+1. `ensureVehicleReference` (`vehicleReference.ts`) hat einen fehlschlagenden Bedrock-Aufruf
+   (dieselbe, noch offene AWS-Kontoverifizierung wie bei Paket 6 dokumentiert) nicht abgefangen –
+   der Fehler propagierte durch die `Promise.all`-Kandidatenschleife nach oben und brach den
+   **kompletten** Match-Lauf für das Bild ab, statt nur das `embedding_sim`-Signal für diese eine
+   Nennung auszulassen (das Architekturprinzip "kein einzelnes KI-Modell darf die Zuordnung zum
+   Absturz bringen" war in `analyzeWorker.ts` korrekt umgesetzt, in `vehicleReference.ts` aber
+   nicht).
+2. Die Kandidatenschleife (`eligible.map(...)` in `Promise.all`) startete **für jede erkannte
+   Fahrzeug-Box gleichzeitig so viele Fahrzeugbild-Downloads+sharp-Dekodierungen wie es zulässige
+   Nennungen im Event gibt** – keine Begrenzung der Parallelität. Bei genug Nennungen reichte das,
+   um den Lambda (1024 MB) mit `Runtime.OutOfMemory` abstürzen zu lassen.
+
+**Fix:**
+- `vehicleReference.ts`: `embedImage(...)` bekommt ein `.catch(...)`, das den Fehler loggt und
+  `embedding: null` zurückgibt (Typ von `VehicleReference.embedding` entsprechend auf
+  `number[] | null` geändert) – Matching fällt dann auf OCR/Typ/Farbe zurück, bricht aber nicht ab.
+- `matchWorker.ts`: neue `mapWithConcurrencyLimit`-Hilfsfunktion, Kandidatenbewertung läuft jetzt
+  mit maximal 5 gleichzeitigen `ensureVehicleReference`-Aufrufen statt unbegrenzt.
+- `infra/lib/stacks/api-stack.ts`: `RacePicMatchWorker`-Speicher von 1024 auf 1536 MB erhöht
+  (zusätzliche Absicherung, kein Ersatz für die Parallelitätsgrenze).
+
+**Verifiziert:** `tsc --noEmit` (`api/`, `infra/`) und `npm --workspace api test` grün. Direkt auf
+`main` committed.
+
+**Noch zu tun (operativ):** Nach dem Deploy einmal `POST /admin/racepic/events/{id}/rematch`
+auslösen (Button „Re-Match auslösen" in `/admin/racepic` unter „Konfigurieren"), damit das schon
+analysierte Testbild eine Zuordnung bekommt – kein erneuter Rekognition-/Bedrock-Aufruf nötig.
 
 ## Bestandsaufnahme aller Pakete (2026-09-22)
 

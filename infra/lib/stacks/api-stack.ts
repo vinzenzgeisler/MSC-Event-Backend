@@ -1741,12 +1741,23 @@ export class ApiStack extends Stack {
 
       const racePicApiHandler = new NodejsFunction(this, 'RacePicApiHandler', {
         runtime: lambda.Runtime.NODEJS_24_X,
+        architecture: lambda.Architecture.X86_64, // gleiche Begruendung wie RacePicIngestWorker (sharp).
         entry: path.join(__dirname, '../../../api/src/racepic/handler.ts'),
         handler: 'handler',
         functionName: `${props.config.prefix}-racepic-api-handler`,
         memorySize: 512,
         timeout: cdk.Duration.seconds(29),
         depsLockFilePath,
+        bundling: {
+          // handler.ts importiert transitiv sharp (ueber uploads.ts/imageProcessing.ts fuer die
+          // Watermark-Vorschau im Upload-Flow) - ohne diese Ausnahme bundelt esbuild sharps
+          // ESM-Build (sharp.mjs, nutzt import.meta.url) mit ins CJS-Ausgabeformat. Dabei wird
+          // import.meta.url zu undefined, createRequire(undefined) wirft dann beim Cold Start
+          // (Init Error, nicht erst beim ersten Request) - jede Route dieses Handlers antwortete
+          // dadurch mit 500. Siehe gleiche Begruendung/Fix bei RacePicIngestWorker/-AnalyzeWorker/
+          // -MatchWorker unten.
+          nodeModules: ['sharp']
+        },
         environment: {
           STAGE: props.config.stage,
           DB_SECRET_ARN: dbSecretArn,

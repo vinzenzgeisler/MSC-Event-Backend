@@ -94,7 +94,7 @@ export const createUpload = async (input: {
   declaredSizeBytes: number;
   clientFingerprint: string | null;
 }) => {
-  if (input.contentType !== 'image/jpeg') {
+  if (input.contentType !== 'image/jpeg' && input.contentType !== 'image/png') {
     throw new RacePicError('RACEPIC_UPLOAD_CONTENT_TYPE_UNSUPPORTED');
   }
   if (input.declaredSizeBytes <= 0 || input.declaredSizeBytes > MAX_UPLOAD_BYTES) {

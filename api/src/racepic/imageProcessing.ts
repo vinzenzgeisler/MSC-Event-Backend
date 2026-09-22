@@ -16,8 +16,16 @@ import exifr from 'exifr';
 const MAX_INPUT_PIXELS = 50_000_000;
 
 const JPEG_MAGIC_BYTES = Buffer.from([0xff, 0xd8, 0xff]);
+const PNG_MAGIC_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-export const looksLikeJpeg = (buffer: Buffer): boolean => buffer.length > 3 && buffer.subarray(0, 3).equals(JPEG_MAGIC_BYTES);
+export type SupportedImageFormat = 'jpeg' | 'png';
+
+/** JPEG oder PNG anhand der Magic Bytes, sonst null - siehe createUploadSchema (handler.ts) fuer die erlaubten Content-Types beim Upload. */
+export const detectSupportedImageFormat = (buffer: Buffer): SupportedImageFormat | null => {
+  if (buffer.length >= 3 && buffer.subarray(0, 3).equals(JPEG_MAGIC_BYTES)) return 'jpeg';
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(PNG_MAGIC_BYTES)) return 'png';
+  return null;
+};
 
 export const computeSha256 = (buffer: Buffer): string => createHash('sha256').update(buffer).digest('hex');
 

@@ -1749,7 +1749,7 @@ export const racepicUpload = pgTable('racepic_upload', {
     'racepic_upload_status_check',
     sql`${table.status} in ('INITIATED','MULTIPART_OPEN','COMPLETED','FAILED','ABORTED','EXPIRED')`
   ),
-  contentTypeCheck: check('racepic_upload_content_type_check', sql`${table.contentType} in ('image/jpeg')`)
+  contentTypeCheck: check('racepic_upload_content_type_check', sql`${table.contentType} in ('image/jpeg', 'image/png')`)
 }));
 
 export const racepicImage = pgTable('racepic_image', {

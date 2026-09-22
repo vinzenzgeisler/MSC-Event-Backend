@@ -3,7 +3,7 @@ import { and, eq, isNotNull, ne } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { racepicImage, racepicImageVariant, racepicPhotographer, racepicProcessingStep, racepicUpload } from '../db/schema';
 import { logOperationalEvent, errorCodeOf } from '../observability/logger';
-import { computeSha256, decodeImage, extractExif, looksLikeJpeg, renderVariants } from './imageProcessing';
+import { computeSha256, decodeImage, detectSupportedImageFormat, extractExif, renderVariants } from './imageProcessing';
 import { deleteObject, getObject, putObject } from './s3';
 import { sendAnalyzeMessage } from './queues';
 
@@ -16,7 +16,7 @@ import { sendAnalyzeMessage } from './queues';
  */
 export const PIPELINE_VERSION = '2026-09-21.1';
 
-const buildOriginalKey = (eventId: string, imageId: string): string => `originals/${eventId}/${imageId}.jpg`;
+const buildOriginalKey = (eventId: string, imageId: string, extension: string): string => `originals/${eventId}/${imageId}.${extension}`;
 const buildDerivedKey = (imageId: string, kind: string, extension: string): string => `derived/${imageId}/${kind}.${extension}`;
 
 const markImageFailed = async (imageId: string, message: string) => {
@@ -57,8 +57,9 @@ const processOneImage = async (imageId: string): Promise<void> => {
   if (!originalBuffer) {
     throw new Error('RACEPIC_INGEST_OBJECT_MISSING');
   }
-  if (!looksLikeJpeg(originalBuffer)) {
-    await markImageFailed(imageId, 'Not a valid JPEG (magic bytes check failed)');
+  const imageFormat = detectSupportedImageFormat(originalBuffer);
+  if (!imageFormat) {
+    await markImageFailed(imageId, 'Not a valid JPEG/PNG (magic bytes check failed)');
     await deleteObject(upload.s3Key);
     return;
   }
@@ -107,8 +108,8 @@ const processOneImage = async (imageId: string): Promise<void> => {
   const copyrightLine = photographer?.copyrightLine || `© ${photographer?.displayName ?? 'RacePic'}`;
   const variants = await renderVariants(originalBuffer, copyrightLine);
 
-  const originalKey = buildOriginalKey(image.eventId, imageId);
-  await putObject(originalKey, originalBuffer, 'image/jpeg');
+  const originalKey = buildOriginalKey(image.eventId, imageId, imageFormat === 'png' ? 'png' : 'jpg');
+  await putObject(originalKey, originalBuffer, imageFormat === 'png' ? 'image/png' : 'image/jpeg');
   await deleteObject(upload.s3Key);
 
   for (const variant of variants) {

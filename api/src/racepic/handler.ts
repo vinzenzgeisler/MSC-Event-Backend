@@ -112,7 +112,7 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
     case 'RACEPIC_LICENSE_NOT_FOUND':
       return { status: 400, message: 'License not found or inactive' };
     case 'RACEPIC_UPLOAD_CONTENT_TYPE_UNSUPPORTED':
-      return { status: 415, message: 'Only JPEG uploads are supported in the MVP' };
+      return { status: 415, message: 'Only JPEG/PNG uploads are supported in the MVP' };
     case 'RACEPIC_UPLOAD_SIZE_INVALID':
       return { status: 413, message: 'File size is invalid or exceeds the maximum' };
     case 'RACEPIC_UPLOAD_DUPLICATE_IN_BATCH':
@@ -200,7 +200,7 @@ const createBatchSchema = z.object({
 
 const createUploadSchema = z.object({
   name: z.string().trim().min(1).max(500),
-  type: z.literal('image/jpeg'),
+  type: z.enum(['image/jpeg', 'image/png']),
   size: z.number().int().positive(),
   fingerprint: z.string().trim().max(200).optional()
 });

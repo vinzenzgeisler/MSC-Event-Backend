@@ -20,6 +20,7 @@ Alle Arbeit läuft im Branch `feature/racepic-planning` (noch nicht nach `main` 
 | 8b | Öffentliches RacePic (Backend-Teil): Teilnehmer-Bild-Manifeste, öffentlicher Download-Endpunkt | **erledigt (ungedeployed)** | siehe „Paket 8 – Ergebnis" unten; UI siehe msc-website |
 | 9 | Datenschutz & Betrieb: Retention-Erweiterung (inkl. S3-Löschung Fahrzeugbild), Ausblenden-Funktion, Budgets, Runbook | **erledigt (ungedeployed)** | siehe „Paket 9 – Ergebnis" unten |
 | 10a | Pilot 12. OLD 2026 (Backend-Teil): Kalibrierungs-Tooling | **Tooling erledigt (ungedeployed)** | siehe „Paket 10 – Ergebnis" unten; tatsächliche Piloten-Durchführung ist ein operativer Schritt, kein Code |
+| 12 | Öffentliches Fotografenprofil (Backend-Teil): Slug, Manifest | **erledigt (ungedeployed)** | siehe „Paket 12 – Ergebnis" unten; Seite selbst in msc-website |
 
 Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implementiert, auch wenn die UI dazu in MSC-Event-Frontend liegt (Paket 5/7 dort).
 
@@ -182,6 +183,38 @@ Kalibrierung nötige **Tooling**, das während des echten Piloten gebraucht wird
    Nennungstool-Admin einladen (`/admin/racepic`).
 5. Echte Fotos hochladen (Studio), Pipeline laufen lassen, Review-Queue abarbeiten.
 6. Mit `matching-quality-report` kalibrieren (siehe Runbook-Abschnitt), Event veröffentlichen.
+
+## Paket 12 – Ergebnis (2026-09-22)
+
+Schließt die letzte offene MVP-Scope-Lücke (siehe Bestandsaufnahme unten und
+`msc-website/docs/memory-bank/racepic-progress.md` Paket 8: "`/racepic/fotografen/:slug` fehlt
+noch") – öffentliches Fotografenprofil, wie in Abschnitt H/J des Architekturplans vorgesehen.
+
+- `api/migrations/0098_racepic_photographer_slug.sql`: neue nullable `slug`-Spalte auf
+  `racepic_photographer` mit Unique-Index (nur für gesetzte Slugs).
+- `api/src/racepic/slug.ts` (neu): gemeinsamer `slugify`-Helfer, ersetzt die bisher private Kopie
+  in `publish.ts` (dort für Klassen-Slugs im `participantKey`) und wird jetzt auch für
+  Fotografen-Slugs genutzt.
+- `api/src/racepic/repository.ts`: `createPhotographerInvitation` vergibt bei der Erstanlage
+  eines Fotografenprofils automatisch einen Slug aus dem Anzeigenamen, mit numerischem Suffix bei
+  Kollision (`max-mustermann`, `max-mustermann-2`, …).
+- `api/src/racepic/publish.ts`: neue `regeneratePhotographerManifest(photographerId)` –
+  schreibt `manifests/photographers/{slug}.json` mit `displayName`, `copyrightLine`, `website`,
+  `social` und allen `PUBLISHED`-Bildern aus **veröffentlichten** Events. Bewusst ohne
+  Teilnehmer-Verlinkung pro Bild (ein Bild kann mehreren Fahrern zugeordnet sein, siehe
+  Domain-Modell Abschnitt C) – verlinkt stattdessen auf die jeweilige Event-Galerie. Neue
+  `getImagePhotographerId`-Hilfsfunktion analog zu `getImageEventId`. Das bestehende
+  Teilnehmer-Bild-Manifest (`ManifestImage.photographer`) trägt jetzt zusätzlich `slug`, damit
+  die Website von der Teilnehmerseite zum Profil verlinken kann.
+- `api/src/racepic/handler.ts`: `PATCH /admin/racepic/images/{id}` und `PATCH /photographer/me`
+  lösen jetzt zusätzlich zur Event-Manifest-Regenerierung auch `regeneratePhotographerManifest`
+  aus (No-Op ohne Slug oder ohne veröffentlichte Bilder).
+- Kein neuer API-Endpunkt nötig: wie die Event-/Teilnehmer-Manifeste wird das Profil direkt vom
+  CDN gelesen (`manifests/photographers/{slug}.json`, öffentliches `public/*`-Verhalten in
+  `racepic-stack.ts` deckt den Präfix `manifests/*` bereits ab).
+- **Verifiziert:** `tsc --noEmit` für `api/` fehlerfrei. **Nicht deployed.**
+- Website-Teil (Seite, Route, Verlinkung von der Teilnehmerseite) siehe
+  `msc-website/docs/memory-bank/racepic-progress.md`.
 
 ## Bestandsaufnahme aller Pakete (2026-09-22)
 

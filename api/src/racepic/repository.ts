@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull, like } from 'drizzle-orm';
 import {
   event,
   racepicInvitation,
@@ -8,6 +8,7 @@ import {
   racepicPhotographerEvent
 } from '../db/schema';
 import { getDb } from '../db/client';
+import { slugify } from './slug';
 
 const INVITATION_TTL_DAYS = 14;
 
@@ -48,19 +49,34 @@ export const createPhotographerInvitation = async (input: {
       .where(and(eq(racepicPhotographer.emailNorm, emailNorm), isNull(racepicPhotographer.deletedAt)))
       .limit(1);
 
-    const photographer =
-      existing[0] ??
-      (
-        await tx
-          .insert(racepicPhotographer)
-          .values({
-            email: input.email.trim(),
-            emailNorm,
-            displayName: input.displayName.trim(),
-            status: 'INVITED'
-          })
-          .returning()
-      )[0];
+    let photographer = existing[0];
+    if (!photographer) {
+      // Slug fuer das oeffentliche Profil (Paket 12) - bei Kollision mit einem numerischen Suffix
+      // eindeutig machen, damit zwei Fotograf:innen mit gleichem Anzeigenamen nicht kollidieren.
+      const baseSlug = slugify(input.displayName, 'fotograf');
+      const takenSlugs = new Set(
+        (await tx.select({ slug: racepicPhotographer.slug }).from(racepicPhotographer).where(like(racepicPhotographer.slug, `${baseSlug}%`))).map(
+          (row) => row.slug
+        )
+      );
+      let slug = baseSlug;
+      let suffix = 2;
+      while (takenSlugs.has(slug)) {
+        slug = `${baseSlug}-${suffix}`;
+        suffix += 1;
+      }
+
+      [photographer] = await tx
+        .insert(racepicPhotographer)
+        .values({
+          email: input.email.trim(),
+          emailNorm,
+          displayName: input.displayName.trim(),
+          slug,
+          status: 'INVITED'
+        })
+        .returning();
+    }
 
     if (!photographer) {
       throw new RacePicError('RACEPIC_PHOTOGRAPHER_CREATE_FAILED');

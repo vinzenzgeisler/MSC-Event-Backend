@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { getDb } from '../db/client';
 import {
@@ -15,6 +15,7 @@ import {
 } from '../db/schema';
 import { RacePicError } from './repository';
 import { copyObject, deleteObject, deleteObjectsByPrefix, putObject } from './s3';
+import { slugify } from './slug';
 
 /**
  * Publish-Worker (Paket 4), siehe docs/memory-bank/racepic-architecture.md Abschnitt B/G/H.
@@ -70,6 +71,12 @@ export const getImageEventId = async (imageId: string): Promise<string | null> =
   return image?.eventId ?? null;
 };
 
+export const getImagePhotographerId = async (imageId: string): Promise<string | null> => {
+  const db = await getDb();
+  const [image] = await db.select({ photographerId: racepicImage.photographerId }).from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
+  return image?.photographerId ?? null;
+};
+
 export const publishImage = async (imageId: string): Promise<void> => {
   const image = await loadImageOrThrow(imageId);
   if (!['DERIVED', 'ANALYZED', 'MATCHED'].includes(image.processingStatus)) {
@@ -115,14 +122,6 @@ export const removeImage = async (imageId: string): Promise<void> => {
   await db.update(racepicImage).set({ visibility: 'REMOVED', updatedAt: new Date() }).where(eq(racepicImage.id, imageId));
 };
 
-const slugify = (value: string): string =>
-  value
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'klasse';
-
 export type ManifestParticipant = {
   participantKey: string;
   startNumber: string;
@@ -141,7 +140,7 @@ export type ManifestImage = {
   previewUrl: string;
   width: number | null;
   height: number | null;
-  photographer: { displayName: string; website: string | null };
+  photographer: { displayName: string; website: string | null; slug: string | null };
   license: { code: string; title: unknown; attributionRequired: boolean; attributionTemplate: string | null };
 };
 
@@ -174,6 +173,7 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
       imageHeight: racepicImage.height,
       photographerDisplayName: racepicPhotographer.displayName,
       photographerWebsite: racepicPhotographer.website,
+      photographerSlug: racepicPhotographer.slug,
       licenseCode: racepicLicense.code,
       licenseTitle: racepicLicense.title,
       licenseAttributionRequired: racepicLicense.attributionRequired,
@@ -207,7 +207,7 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
     if (row.processingRestricted || row.objectionFlag) continue;
     if (!row.startNumberNorm) continue;
     const displayName = row.publicationName?.trim() || `${row.firstName} ${row.lastName}`.trim();
-    const participantKey = `${row.startNumberNorm}-${slugify(row.className)}`;
+    const participantKey = `${row.startNumberNorm}-${slugify(row.className, 'klasse')}`;
 
     const existing = byEntry.get(row.entryId);
     if (existing) {
@@ -236,7 +236,7 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
         previewUrl: `/public/${row.imageId}/preview.webp`,
         width: row.imageWidth,
         height: row.imageHeight,
-        photographer: { displayName: row.photographerDisplayName, website: row.photographerWebsite },
+        photographer: { displayName: row.photographerDisplayName, website: row.photographerWebsite, slug: row.photographerSlug },
         license: {
           code: row.licenseCode,
           title: row.licenseTitle,
@@ -310,4 +310,60 @@ export const unpublishEventManifests = async (previousSlug: string): Promise<voi
   );
 
   await invalidateCloudFront([`/manifests/${previousSlug}/*`, '/manifests/events.json']);
+};
+
+/**
+ * Oeffentliches Fotografenprofil (Paket 12), siehe docs/memory-bank/racepic-architecture.md
+ * Abschnitt H ("GET /m/photographers/{slug}.json") und J (MVP-Scope). Nur Bilder aus
+ * veroeffentlichten Events (`racepic_event.published = true`), unabhaengig davon, ob/welchem
+ * Teilnehmer sie zugeordnet sind - ein Bild kann mehreren Fahrern zugeordnet sein (Abschnitt C),
+ * eine eindeutige Verlinkung zu "der" Teilnehmerseite gibt es deshalb nicht; die Kachel verlinkt
+ * stattdessen auf die Event-Galerie. Ohne Slug (noch nicht vergeben, siehe repository.ts) gibt es
+ * kein oeffentliches Profil, die Funktion ist dann ein No-Op.
+ */
+export const regeneratePhotographerManifest = async (photographerId: string): Promise<void> => {
+  const db = await getDb();
+  const [photographer] = await db.select().from(racepicPhotographer).where(eq(racepicPhotographer.id, photographerId)).limit(1);
+  if (!photographer || !photographer.slug) return;
+
+  const rows = await db
+    .select({
+      imageId: racepicImage.id,
+      eventSlug: racepicEvent.slug,
+      eventTitle: racepicEvent.title,
+      capturedAt: racepicImage.capturedAt,
+      createdAt: racepicImage.createdAt
+    })
+    .from(racepicImage)
+    .innerJoin(racepicEvent, eq(racepicEvent.eventId, racepicImage.eventId))
+    .where(and(eq(racepicImage.photographerId, photographerId), eq(racepicImage.visibility, 'PUBLISHED'), eq(racepicEvent.published, true)))
+    .orderBy(desc(racepicImage.createdAt));
+
+  const images = rows.map((row) => ({
+    imageId: row.imageId,
+    thumbUrl: `/public/${row.imageId}/thumb.webp`,
+    previewUrl: `/public/${row.imageId}/preview.webp`,
+    eventSlug: row.eventSlug,
+    eventTitle: row.eventTitle,
+    capturedAt: row.capturedAt ? row.capturedAt.toISOString() : null
+  }));
+
+  await putObject(
+    `manifests/photographers/${photographer.slug}.json`,
+    Buffer.from(
+      JSON.stringify({
+        photographerId,
+        slug: photographer.slug,
+        displayName: photographer.displayName,
+        copyrightLine: photographer.copyrightLine,
+        website: photographer.website,
+        social: photographer.social,
+        imageCount: images.length,
+        images
+      })
+    ),
+    'application/json'
+  );
+
+  await invalidateCloudFront([`/manifests/photographers/${photographer.slug}.json`]);
 };

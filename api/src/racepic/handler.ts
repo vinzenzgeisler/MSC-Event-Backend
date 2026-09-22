@@ -34,7 +34,16 @@ import {
   presignRemainingParts
 } from './uploads';
 import { sendAnalyzeMessage, sendIngestMessage, sendMatchMessage } from './queues';
-import { getImageEventId, hideImage, publishImage, regenerateManifestsForEvent, removeImage, unpublishEventManifests } from './publish';
+import {
+  getImageEventId,
+  getImagePhotographerId,
+  hideImage,
+  publishImage,
+  regenerateManifestsForEvent,
+  regeneratePhotographerManifest,
+  removeImage,
+  unpublishEventManifests
+} from './publish';
 import { getEventStats, listEventsWithRacepicConfig, listImagesForEvent, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
 import { createMatchingConfig, listMatchingConfigs } from './matchingConfig';
 import { computeMatchQualityReport } from './matchQuality';
@@ -596,6 +605,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         const input = patchPhotographerProfileSchema.parse(parseJsonBody(event));
         const updated = await updatePhotographerProfile(photographer.id, input);
         if (!updated) return errorJson(404, 'Photographer profile not found');
+        // Oeffentliches Profil (Paket 12) synchron halten - No-Op ohne Slug/veroeffentlichte Bilder.
+        await regeneratePhotographerManifest(photographer.id).catch((error) =>
+          logOperationalEvent('error', 'racepic_publish.photographer_manifest_regen_failed', { errorCode: errorCodeOf(error) })
+        );
         const db = await getDb();
         await writeAuditLog(db, {
           actorUserId: auth.sub,
@@ -790,9 +803,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         const requiredPermission = input.visibility === 'HIDDEN' ? 'racepic.review' : 'racepic.manage';
         if (!hasPermission(auth, requiredPermission)) return errorJson(403, 'Forbidden');
 
+        const photographerId = await getImagePhotographerId(imageId);
+
         if (input.visibility === 'PUBLISHED') await publishImage(imageId);
         else if (input.visibility === 'HIDDEN') await hideImage(imageId);
         else await removeImage(imageId);
+
+        if (photographerId) {
+          await regeneratePhotographerManifest(photographerId).catch((error) =>
+            logOperationalEvent('error', 'racepic_publish.photographer_manifest_regen_failed', { errorCode: errorCodeOf(error) })
+          );
+        }
 
         const eventId = await getImageEventId(imageId);
         if (eventId) {

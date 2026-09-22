@@ -1616,6 +1616,8 @@ export const racepicPhotographer = pgTable('racepic_photographer', {
   cognitoSub: text('cognito_sub'),
   email: text('email').notNull(),
   emailNorm: text('email_norm').notNull(),
+  // Oeffentliches Profil (Paket 12), siehe migrations/0098_racepic_photographer_slug.sql.
+  slug: text('slug'),
   displayName: text('display_name').notNull(),
   legalName: text('legal_name'),
   copyrightLine: text('copyright_line'),

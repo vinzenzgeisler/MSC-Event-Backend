@@ -1814,7 +1814,7 @@ export class ApiStack extends Stack {
       // api/src/racepic/cognito.ts. Nur der Photographer-Pool, nicht der Staff-Pool.
       racePicApiHandler.addToRolePolicy(
         new iam.PolicyStatement({
-          actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminGetUser'],
+          actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminSetUserPassword'],
           resources: [racePicStack.photographerUserPool.userPoolArn]
         })
       );
@@ -1868,6 +1868,8 @@ export class ApiStack extends Stack {
         integration: racePicIntegration,
         authorizer: photographerJwtAuthorizer
       });
+      this.api.addRoutes({ path: '/photographer/register', methods: [apigwv2.HttpMethod.POST], integration: racePicIntegration, authorizer: photographerJwtAuthorizer });
+      this.api.addRoutes({ path: '/photographer/password', methods: [apigwv2.HttpMethod.POST], integration: racePicIntegration, authorizer: photographerJwtAuthorizer });
       // Oeffentlich, kein Authorizer: Einladungslink gewaehrt keinen Zugriff, nur den Start des
       // Email-OTP-Flows fuer die eingeladene Adresse (siehe Architekturplan Abschnitt I "Einladung").
       this.api.addRoutes({
@@ -1901,6 +1903,7 @@ export class ApiStack extends Stack {
         integration: racePicIntegration,
         authorizer: jwtAuthorizer
       });
+      this.api.addRoutes({ path: '/admin/racepic/photographers/{photographerId}/review', methods: [apigwv2.HttpMethod.POST], integration: racePicIntegration, authorizer: jwtAuthorizer });
 
       // Paket 5 (Admin-Basis): Event-Konfiguration und Statistik.
       this.api.addRoutes({
@@ -2072,6 +2075,12 @@ export class ApiStack extends Stack {
         integration: racePicIntegration,
         authorizer: photographerJwtAuthorizer
       });
+      this.api.addRoutes({
+        path: '/photographer/images/{imageId}/details',
+        methods: [apigwv2.HttpMethod.PATCH],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
 
       // Paket 4 (Publish-Worker): Veroeffentlichen/Verbergen/Entfernen, siehe api/src/racepic/publish.ts.
       this.api.addRoutes({
@@ -2080,6 +2089,7 @@ export class ApiStack extends Stack {
         integration: racePicIntegration,
         authorizer: jwtAuthorizer
       });
+      this.api.addRoutes({ path: '/admin/racepic/images/{imageId}/status', methods: [apigwv2.HttpMethod.GET], integration: racePicIntegration, authorizer: jwtAuthorizer });
 
       // Paket 3: Upload-Reconciler (haengengebliebene Presign-Fenster), siehe
       // api/src/racepic/reconcileUploads.ts. Laeuft alle 15 Minuten - lang genug, um den

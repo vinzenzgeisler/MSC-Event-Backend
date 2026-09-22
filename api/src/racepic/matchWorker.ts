@@ -104,6 +104,15 @@ const processOneImage = async (imageId: string): Promise<void> => {
     ambiguityCounts.set(row.startNumberNorm, (ambiguityCounts.get(row.startNumberNorm) ?? 0) + 1);
   }
 
+  // Mehrere Fahrzeuge auf demselben Foto vergleichen dieselben Nennungsfahrzeuge. Ein
+  // Promise-Cache verhindert doppelte S3-/Bedrock-/DB-Arbeit innerhalb dieses Jobs.
+  const referenceCache = new Map<string, ReturnType<typeof ensureVehicleReference>>();
+  const getReference = (vehicleId: string) => {
+    let reference = referenceCache.get(vehicleId);
+    if (!reference) { reference = ensureVehicleReference(vehicleId); referenceCache.set(vehicleId, reference); }
+    return reference;
+  };
+
   for (const detection of detections) {
     const linkedTexts = textDetections.filter((text) => text.detectionId === detection.id);
     const detectionColor: RgbColor | null = Array.isArray(detection.dominantColors) && detection.dominantColors[0] ? (detection.dominantColors[0] as RgbColor) : null;
@@ -113,7 +122,7 @@ const processOneImage = async (imageId: string): Promise<void> => {
       const textMatches = candidateEntry.startNumberNorm
         ? linkedTexts.filter((text) => text.normalized === candidateEntry.startNumberNorm)
         : [];
-      const reference = await ensureVehicleReference(candidateEntry.vehicleId);
+      const reference = await getReference(candidateEntry.vehicleId);
 
       const features: CandidateFeatures = {
         ocrExact: textMatches.length > 0,

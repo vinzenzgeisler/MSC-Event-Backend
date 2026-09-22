@@ -499,3 +499,8 @@ Reste. Ergebnis und daraus folgende Anpassungen:
 - Rechtliches Seller-Modell (A/B) vor Marketplace-Implementierung klären.
 - Keine Cost Anomaly Detection eingerichtet (bräuchte eine SNS-Themen-Abo-Bestätigung, in dieser Umgebung nicht einrichtbar/verifizierbar) – nur das neue `CfnBudget` (Paket 9) deckt die Kostenüberwachung ab.
 - Das neue `RacePicMonthlyBudget` ist nicht live getestet (kein AWS-Zugriff in dieser Umgebung) – vor dem Piloten (Paket 10) einmal in der CI beobachten, dass es tatsächlich erzeugt wird und die Schwellenwerte sinnvoll sind.
+## Pakete 19–24 – Implementierungsstand 2026-09-22
+
+Backend: Bildkatalog und Preis-Migration, private Wasserzeichen-Vorschau, Registrierungsfreigabe, Event-/Download-Sperren, neue CDN-Detailmanifeste, OCR-Crops und räumliche Textzuordnung.
+
+Dies ist Feature-Branch-Arbeit. Lokal erfolgreich: TypeScript-Typechecks der Website, Backend-API, Backend-Infrastruktur und des Nennungstool-Admins. Ein echter Browser-/Cognito-/AWS-Durchlauf, eine KI-Qualitätsmessung mit bestätigten Bildern und eine rechtliche Freigabe stehen aus. Keine Merges, Deployments oder öffentliche Freischaltung erfolgten in diesem Paket. Das genaue Paket- und Abnahme-Raster steht in racepic-open-items.md, Abschnitt E.

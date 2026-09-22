@@ -222,6 +222,49 @@ export const getPhotographerByCognitoSub = async (cognitoSub: string) => {
   return photographer ?? null;
 };
 
+/** Self-service profile creation follows Cognito email confirmation; upload access is granted only by staff. */
+export const registerPhotographer = async (input: { cognitoSub: string; email: string; displayName: string; termsVersion: string }) => {
+  const db = await getDb();
+  const emailNorm = normalizeEmail(input.email);
+  const [existing] = await db.select().from(racepicPhotographer).where(and(eq(racepicPhotographer.emailNorm, emailNorm), isNull(racepicPhotographer.deletedAt))).limit(1);
+  if (existing) {
+    if (existing.cognitoSub === input.cognitoSub) return existing;
+    throw new RacePicError('RACEPIC_PHOTOGRAPHER_ALREADY_EXISTS');
+  }
+  const slug = `${slugify(input.displayName, 'fotograf')}-${input.cognitoSub.replace(/[^a-z0-9]/gi, '').slice(0, 10).toLowerCase()}`;
+  const [photographer] = await db.insert(racepicPhotographer).values({
+    cognitoSub: input.cognitoSub,
+    email: input.email.trim(),
+    emailNorm,
+    displayName: input.displayName.trim(),
+    slug,
+    status: 'PENDING_APPROVAL',
+    termsAcceptedVersion: input.termsVersion,
+    termsAcceptedAt: new Date()
+  }).onConflictDoNothing().returning();
+  if (photographer) return photographer;
+  const [raced] = await db.select().from(racepicPhotographer).where(and(eq(racepicPhotographer.emailNorm, emailNorm), isNull(racepicPhotographer.deletedAt))).limit(1);
+  if (raced?.cognitoSub === input.cognitoSub) return raced;
+  throw new RacePicError('RACEPIC_PHOTOGRAPHER_ALREADY_EXISTS');
+};
+
+export const reviewPhotographerRegistration = async (input: { photographerId: string; decision: 'approve' | 'reject'; eventIds: string[] }) => {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const [photographer] = await tx.select().from(racepicPhotographer).where(eq(racepicPhotographer.id, input.photographerId)).limit(1);
+    if (!photographer || photographer.status !== 'PENDING_APPROVAL') throw new RacePicError('RACEPIC_REGISTRATION_NOT_PENDING');
+    if (input.decision === 'approve') {
+      const found = await tx.select({ id: event.id }).from(event).where(inArray(event.id, input.eventIds));
+      if (!input.eventIds.length || found.length !== new Set(input.eventIds).size) throw new RacePicError('RACEPIC_EVENT_NOT_FOUND');
+      for (const eventId of input.eventIds) {
+        await tx.insert(racepicPhotographerEvent).values({ photographerId: photographer.id, eventId }).onConflictDoNothing();
+      }
+    }
+    const [updated] = await tx.update(racepicPhotographer).set({ status: input.decision === 'approve' ? 'ACTIVE_FREE' : 'DISABLED', updatedAt: new Date() }).where(eq(racepicPhotographer.id, photographer.id)).returning();
+    return updated;
+  });
+};
+
 export type PhotographerProfilePatch = Partial<{
   displayName: string;
   legalName: string | null;

@@ -1,6 +1,7 @@
 import {
   AdminCreateUserCommand,
   AdminGetUserCommand,
+  AdminSetUserPasswordCommand,
   CognitoIdentityProviderClient,
   UsernameExistsException
 } from '@aws-sdk/client-cognito-identity-provider';
@@ -71,4 +72,10 @@ export const photographerCognitoUserExists = async (email: string): Promise<bool
   } catch {
     return false;
   }
+};
+
+export const setPhotographerPassword = async (email: string, password: string): Promise<void> => {
+  await createClient().send(new AdminSetUserPasswordCommand({
+    UserPoolId: getPhotographerUserPoolId(), Username: email.trim().toLowerCase(), Password: password, Permanent: true
+  }));
 };

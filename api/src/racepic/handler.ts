@@ -7,7 +7,7 @@ import { writeAuditLog } from '../audit/log';
 import { getDb } from '../db/client';
 import { errorCodeOf, logOperationalEvent } from '../observability/logger';
 import { getPhotographerAuthContext, satisfiesStepUp } from './auth';
-import { ensurePhotographerCognitoUser } from './cognito';
+import { ensurePhotographerCognitoUser, setPhotographerPassword } from './cognito';
 import { queuePhotographerInvitationMail } from './mail';
 import {
   claimInvitation,
@@ -20,6 +20,8 @@ import {
   listMyEventAccess,
   listPhotographers,
   RacePicError,
+  registerPhotographer,
+  reviewPhotographerRegistration,
   updatePhotographerProfile
 } from './repository';
 import {
@@ -33,7 +35,8 @@ import {
   hideOwnImage,
   listMyImages,
   listPartsForResume,
-  presignRemainingParts
+  presignRemainingParts,
+  updateOwnImageDetails
 } from './uploads';
 import { sendAnalyzeMessage, sendIngestMessage, sendMatchMessage } from './queues';
 import {
@@ -44,9 +47,10 @@ import {
   regenerateManifestsForEvent,
   regeneratePhotographerManifest,
   removeImage,
+  setEventPublicObjectAvailability,
   unpublishEventManifests
 } from './publish';
-import { getEventStats, listEventsWithRacepicConfig, listImagesForEvent, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
+import { getEventStats, getImagePipelineStatus, listEventsWithRacepicConfig, listImagesForEvent, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
 import { createMatchingConfig, listMatchingConfigs } from './matchingConfig';
 import { computeMatchQualityReport } from './matchQuality';
 import {
@@ -61,7 +65,7 @@ import {
   searchEntriesByEvent
 } from './reviewQueue';
 import { requestImageDownload } from './download';
-import { racepicDetection, racepicEvent, racepicImage, racepicProcessingStep } from '../db/schema';
+import { racepicAssignment, racepicAssignmentEvent, racepicDetection, racepicEvent, racepicImage, racepicProcessingStep } from '../db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 
 /**
@@ -92,6 +96,10 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 410, message: 'Invitation expired' };
     case 'RACEPIC_PHOTOGRAPHER_ALREADY_CLAIMED':
       return { status: 409, message: 'Photographer profile already claimed' };
+    case 'RACEPIC_PHOTOGRAPHER_ALREADY_EXISTS':
+      return { status: 409, message: 'A photographer profile already exists for this email' };
+    case 'RACEPIC_REGISTRATION_NOT_PENDING':
+      return { status: 409, message: 'Registration is not pending' };
     case 'RACEPIC_EVENT_NOT_FOUND':
       return { status: 400, message: 'One or more eventIds do not exist' };
     case 'RACEPIC_EVENT_ACCESS_DENIED':
@@ -124,10 +132,20 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 404, message: 'Image not found' };
     case 'RACEPIC_IMAGE_NOT_READY_TO_PUBLISH':
       return { status: 409, message: 'Image has not finished processing yet' };
+    case 'RACEPIC_PAID_OFFER_NOT_PUBLIC':
+      return { status: 409, message: 'Paid offers remain private until checkout is available' };
     case 'RACEPIC_IMAGE_ALREADY_REMOVED':
       return { status: 409, message: 'Image was already removed' };
     case 'RACEPIC_IMAGE_NOT_DELETABLE':
       return { status: 409, message: 'Image can only be deleted while still a draft (not yet published)' };
+    case 'RACEPIC_IMAGE_LICENSE_LOCKED':
+      return { status: 409, message: 'License and offer can only be changed while the image is a draft' };
+    case 'RACEPIC_IMAGE_LICENSE_INVALID':
+      return { status: 400, message: 'License does not match the offer mode' };
+    case 'RACEPIC_IMAGE_PRICE_INVALID':
+      return { status: 400, message: 'Price does not match the offer mode' };
+    case 'RACEPIC_IMAGE_NOT_READY_TO_PRICE':
+      return { status: 409, message: 'Image preview has not finished processing' };
     case 'RACEPIC_ASSIGNMENT_NOT_FOUND':
       return { status: 404, message: 'Assignment not found' };
     case 'RACEPIC_ASSIGNMENT_ALREADY_EXISTS':
@@ -207,6 +225,25 @@ const patchOwnImageVisibilitySchema = z.object({
   visibility: z.literal('HIDDEN')
 });
 
+const registerPhotographerSchema = z.object({
+  displayName: z.string().trim().min(2).max(200),
+  termsVersion: z.string().trim().min(1).max(50)
+});
+const reviewRegistrationSchema = z.object({
+  decision: z.enum(['approve', 'reject']),
+  eventIds: z.array(z.string().uuid()).max(20).default([])
+});
+const setPhotographerPasswordSchema = z.object({ password: z.string().min(12).max(128) });
+
+const patchOwnImageDetailsSchema = z.object({
+  title: z.string().trim().max(160).nullable().optional(),
+  description: z.string().trim().max(2000).nullable().optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(15).optional(),
+  licenseId: z.string().uuid().optional(),
+  offerMode: z.enum(['FREE', 'PAID']).optional(),
+  priceCents: z.number().int().min(1).max(10000000).nullable().optional()
+}).strict();
+
 // --- Paket 5: Admin-Basis ----------------------------------------------------------------------
 
 const slugPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -281,6 +318,13 @@ const imageDto = (image: {
   bytes: number | null;
   createdAt: Date;
   thumbUrl?: string | null;
+  previewUrl?: string | null;
+  title?: string | null;
+  description?: string | null;
+  tags?: unknown;
+  licenseId?: string;
+  offerMode?: string;
+  priceCents?: number | null;
 }) => ({
   id: image.id,
   eventId: image.eventId,
@@ -288,7 +332,14 @@ const imageDto = (image: {
   visibility: image.visibility,
   bytes: image.bytes,
   createdAt: image.createdAt,
-  thumbUrl: image.thumbUrl ?? null
+  thumbUrl: image.thumbUrl ?? null,
+  previewUrl: image.previewUrl ?? null,
+  title: image.title ?? null,
+  description: image.description ?? null,
+  tags: image.tags ?? [],
+  licenseId: image.licenseId ?? null,
+  offerMode: image.offerMode ?? 'FREE',
+  priceCents: image.priceCents ?? null
 });
 
 /** Ladet das Fotografenprofil zum JWT und lehnt ab, wenn es noch nicht (fertig) geclaimt ist. */
@@ -303,8 +354,8 @@ const requireActivePhotographer = async (event: APIGatewayProxyEventV2): Promise
   if (!photographer) {
     return { ok: false, error: errorJson(404, 'Photographer profile not found - claim an invitation first', undefined, 'PROFILE_NOT_CLAIMED') };
   }
-  if (photographer.status === 'DISABLED') {
-    return { ok: false, error: errorJson(403, 'Photographer account disabled') };
+  if (photographer.status === 'DISABLED' || photographer.status === 'PENDING_APPROVAL') {
+    return { ok: false, error: errorJson(403, photographer.status === 'PENDING_APPROVAL' ? 'Registration is waiting for approval' : 'Photographer account disabled') };
   }
   return { ok: true, photographer };
 };
@@ -380,7 +431,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
         const db = await getDb();
         const [previous] = await db
-          .select({ slug: racepicEvent.slug, published: racepicEvent.published })
+          .select({ slug: racepicEvent.slug, published: racepicEvent.published, enabled: racepicEvent.enabled })
           .from(racepicEvent)
           .where(eq(racepicEvent.eventId, eventId))
           .limit(1);
@@ -400,15 +451,15 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         // veroeffentlichten Events geaendert, muessen die (dann verwaisten) alten Manifeste unter
         // dem alten Slug zurueckgezogen werden. Ansonsten (weiterhin veroeffentlicht, gleicher
         // Slug, oder neu veroeffentlicht) reicht die normale Regenerierung.
-        if (previous?.published && (!input.published || previous.slug !== input.slug)) {
-          await unpublishEventManifests(previous.slug).catch((error) =>
-            logOperationalEvent('error', 'racepic_publish.manifest_unpublish_failed', { errorCode: errorCodeOf(error) })
-          );
+        const wasPublic = Boolean(previous?.published && previous.enabled);
+        const nowPublic = input.published && input.enabled;
+        if (wasPublic && !nowPublic) await setEventPublicObjectAvailability(eventId, false);
+        if (nowPublic && !wasPublic) await setEventPublicObjectAvailability(eventId, true);
+        if (wasPublic && (!nowPublic || previous?.slug !== input.slug)) {
+          await unpublishEventManifests(previous.slug, eventId);
         }
-        if (input.published) {
-          await regenerateManifestsForEvent(eventId).catch((error) =>
-            logOperationalEvent('error', 'racepic_publish.manifest_regen_failed', { errorCode: errorCodeOf(error) })
-          );
+        if (nowPublic) {
+          await regenerateManifestsForEvent(eventId);
         }
 
         await writeAuditLog(db, {
@@ -506,6 +557,34 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       }
     }
 
+    const registrationReviewMatch = path.match(/^\/admin\/racepic\/photographers\/([^/]+)\/review$/);
+    if (method === 'POST' && registrationReviewMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
+      try {
+        const input = reviewRegistrationSchema.parse(parseJsonBody(event));
+        const photographer = await reviewPhotographerRegistration({ photographerId: decodeURIComponent(registrationReviewMatch[1]), ...input });
+        const db = await getDb();
+        await writeAuditLog(db, { actorUserId: auth.sub, action: 'racepic_photographer_registration_reviewed', entityType: 'racepic_photographer', entityId: photographer.id, payload: { decision: input.decision, eventIds: input.eventIds } });
+        return json(200, { ok: true, photographer: photographerDto(photographer) });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) { const { status, message } = racePicErrorStatus(error); return errorJson(status, message, undefined, error.code); }
+        throw error;
+      }
+    }
+
+    const imageStatusMatch = path.match(/^\/admin\/racepic\/images\/([^/]+)\/status$/);
+    if (method === 'GET' && imageStatusMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.read')) return errorJson(403, 'Forbidden');
+      try { return json(200, { ok: true, status: await getImagePipelineStatus(decodeURIComponent(imageStatusMatch[1])) }); }
+      catch (error) { if (error instanceof RacePicError) { const { status, message } = racePicErrorStatus(error); return errorJson(status, message, undefined, error.code); } throw error; }
+    }
+
     if (method === 'GET' && path === '/admin/racepic/ping') {
       const auth = getAuthContext(event);
       if (!auth.sub) return errorJson(401, 'Unauthorized');
@@ -568,6 +647,36 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
 
     // --- Fotograf: Claiming und Profil ---------------------------------------------------------
+    if (method === 'POST' && path === '/photographer/register') {
+      const auth = getPhotographerAuthContext(event);
+      if (!auth.sub || !auth.email || !auth.emailVerified) return errorJson(403, 'Verified email required');
+      try {
+        const input = registerPhotographerSchema.parse(parseJsonBody(event));
+        const photographer = await registerPhotographer({ cognitoSub: auth.sub, email: auth.email, ...input });
+        return json(201, { ok: true, photographer: photographerDto(photographer) });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) { const { status, message } = racePicErrorStatus(error); return errorJson(status, message, undefined, error.code); }
+        throw error;
+      }
+    }
+    if (method === 'POST' && path === '/photographer/password') {
+      const auth = getPhotographerAuthContext(event);
+      if (!satisfiesStepUp(auth, 'recent')) return errorJson(403, 'Recent sign-in required');
+      const photographer = await getPhotographerByCognitoSub(auth.sub!);
+      if (!photographer || photographer.status === 'DISABLED') return errorJson(403, 'Photographer account unavailable');
+      try {
+        const input = setPhotographerPasswordSchema.parse(parseJsonBody(event));
+        await setPhotographerPassword(photographer.email, input.password);
+        return json(200, { ok: true });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        throw error;
+      }
+    }
+
     if (method === 'POST' && path === '/photographer/claim') {
       const auth = getPhotographerAuthContext(event);
       if (!auth.sub) return errorJson(401, 'Unauthorized');
@@ -630,9 +739,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         const updated = await updatePhotographerProfile(photographer.id, input);
         if (!updated) return errorJson(404, 'Photographer profile not found');
         // Oeffentliches Profil (Paket 12) synchron halten - No-Op ohne Slug/veroeffentlichte Bilder.
-        await regeneratePhotographerManifest(photographer.id).catch((error) =>
-          logOperationalEvent('error', 'racepic_publish.photographer_manifest_regen_failed', { errorCode: errorCodeOf(error) })
-        );
+        await regeneratePhotographerManifest(photographer.id);
         const db = await getDb();
         await writeAuditLog(db, {
           actorUserId: auth.sub,
@@ -675,7 +782,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           code: license.code,
           title: license.title,
           summary: license.summary,
-          attributionRequired: license.attributionRequired
+          attributionRequired: license.attributionRequired,
+          pricingKind: license.pricingKind
         }))
       });
     }
@@ -817,6 +925,26 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     // Fotograf-Selbstverwaltung (Paket 15), siehe uploads.ts hideOwnImage/deleteOwnDraftImage fuer
     // die Begruendung der Einschraenkungen (nur verbergen, nur vor Veroeffentlichung loeschen).
     const ownImageMatch = path.match(/^\/photographer\/images\/([^/]+)$/);
+    const ownImageDetailsMatch = path.match(/^\/photographer\/images\/([^/]+)\/details$/);
+    if (method === 'PATCH' && ownImageDetailsMatch) {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      try {
+        const imageId = decodeURIComponent(ownImageDetailsMatch[1]);
+        const input = patchOwnImageDetailsSchema.parse(parseJsonBody(event));
+        const image = await updateOwnImageDetails(result.photographer.id, imageId, input);
+        if (image.visibility === 'PUBLISHED') await regenerateManifestsForEvent(image.eventId);
+        return json(200, { ok: true, image: imageDto(image) });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
     if (method === 'PATCH' && ownImageMatch) {
       const result = await requireActivePhotographer(event);
       if (!result.ok) return result.error;
@@ -887,16 +1015,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         else await removeImage(imageId);
 
         if (photographerId) {
-          await regeneratePhotographerManifest(photographerId).catch((error) =>
-            logOperationalEvent('error', 'racepic_publish.photographer_manifest_regen_failed', { errorCode: errorCodeOf(error) })
-          );
+          await regeneratePhotographerManifest(photographerId);
         }
 
         const eventId = await getImageEventId(imageId);
         if (eventId) {
-          await regenerateManifestsForEvent(eventId).catch((error) =>
-            logOperationalEvent('error', 'racepic_publish.manifest_regen_failed', { errorCode: errorCodeOf(error) })
-          );
+          await regenerateManifestsForEvent(eventId);
         }
 
         const db = await getDb();
@@ -995,6 +1119,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
       const imageId = decodeURIComponent(reanalyzeImageMatch[1]);
       const db = await getDb();
+      const [imageToReanalyze] = await db.select({ eventId: racepicImage.eventId, photographerId: racepicImage.photographerId, processingStatus: racepicImage.processingStatus }).from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
+      if (!imageToReanalyze) return errorJson(404, 'Image not found');
+      if (!['DERIVED', 'ANALYZED', 'MATCHED'].includes(imageToReanalyze.processingStatus)) return errorJson(409, 'Image is not ready for reanalysis');
       // Bug gefunden 2026-09-22 (Nutzer-Feedback "wie schaffen wir es, dass die Erkennung besser
       // wird?"): ein simples `sendAnalyzeMessage` allein war hier bislang wirkungslos, sobald ein
       // Bild schon einmal analysiert wurde - analyzeWorker.ts prueft `racepic_processing_step`
@@ -1006,9 +1133,18 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       // racepic_assignment-Zeilen bleiben erhalten, verlieren nur ihren detection_id-Verweis -
       // ON DELETE SET NULL), alte processing_step-Zeilen fuer 'analyze'/'match' entfernen und
       // processingStatus auf DERIVED zuruecksetzen.
-      await db.delete(racepicDetection).where(eq(racepicDetection.imageId, imageId));
-      await db.delete(racepicProcessingStep).where(and(eq(racepicProcessingStep.imageId, imageId), inArray(racepicProcessingStep.step, ['analyze', 'match'])));
-      await db.update(racepicImage).set({ processingStatus: 'DERIVED', updatedAt: new Date() }).where(eq(racepicImage.id, imageId));
+      await db.transaction(async (tx) => {
+        const oldAutomatic = await tx.select({ id: racepicAssignment.id, status: racepicAssignment.status }).from(racepicAssignment).where(and(eq(racepicAssignment.imageId, imageId), eq(racepicAssignment.source, 'AI'), inArray(racepicAssignment.status, ['AUTO_MATCHED', 'REVIEW_REQUIRED'])));
+        for (const assignment of oldAutomatic) {
+          await tx.update(racepicAssignment).set({ status: 'REJECTED', decidedAt: new Date() }).where(eq(racepicAssignment.id, assignment.id));
+          await tx.insert(racepicAssignmentEvent).values({ assignmentId: assignment.id, fromStatus: assignment.status, toStatus: 'REJECTED', actorType: 'admin', actorId: auth.sub, reason: 'reanalyze_reset' });
+        }
+        await tx.delete(racepicDetection).where(eq(racepicDetection.imageId, imageId));
+        await tx.delete(racepicProcessingStep).where(and(eq(racepicProcessingStep.imageId, imageId), inArray(racepicProcessingStep.step, ['analyze', 'match'])));
+        await tx.update(racepicImage).set({ processingStatus: 'DERIVED', updatedAt: new Date() }).where(eq(racepicImage.id, imageId));
+      });
+      await regenerateManifestsForEvent(imageToReanalyze.eventId);
+      await regeneratePhotographerManifest(imageToReanalyze.photographerId);
       await sendAnalyzeMessage(imageId);
       await writeAuditLog(db, {
         actorUserId: auth.sub,
@@ -1187,9 +1323,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         const entryId = decodeURIComponent(hideParticipantMatch[1]);
         const result = await hideParticipant(entryId, auth.sub);
         for (const eventId of result.eventIds) {
-          await regenerateManifestsForEvent(eventId).catch((error) =>
-            logOperationalEvent('error', 'racepic_publish.manifest_regen_failed', { errorCode: errorCodeOf(error) })
-          );
+          await regenerateManifestsForEvent(eventId);
         }
         const db = await getDb();
         await writeAuditLog(db, {

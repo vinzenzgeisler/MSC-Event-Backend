@@ -206,7 +206,7 @@ export class RacePicStack extends Stack {
     // da Profile ausschliesslich ueber den Einladungs-/Claim-Flow (Paket 2) angelegt werden.
     this.photographerUserPool = new cognito.UserPool(this, 'PhotographerUserPool', {
       userPoolName: `${props.config.prefix}-racepic-photographer-pool`,
-      selfSignUpEnabled: false,
+      selfSignUpEnabled: true,
       mfa: cognito.Mfa.OPTIONAL,
       signInAliases: { email: true },
       standardAttributes: {
@@ -231,7 +231,7 @@ export class RacePicStack extends Stack {
       clientName: `${props.config.prefix}-racepic-photographer-client`,
       userPoolId: this.photographerUserPool.userPoolId,
       generateSecret: false,
-      explicitAuthFlows: ['ALLOW_USER_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH'],
+      explicitAuthFlows: ['ALLOW_USER_AUTH', 'ALLOW_USER_PASSWORD_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH'],
       preventUserExistenceErrors: 'ENABLED',
       accessTokenValidity: 15,
       idTokenValidity: 15,

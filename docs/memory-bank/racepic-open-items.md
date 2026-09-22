@@ -58,10 +58,10 @@ AWS-Zugriff, den diese Sandbox nicht abschließend verifizieren kann.
 |---|---|---|
 | Kein Rate-Limiting auf `POST /public/racepic/images/{id}/download` | Backend | Vor breiterem öffentlichem Traffic nachziehen |
 | Kein Soft-Lock in der Review-Queue | Backend/Frontend | Bei kleinem Orga-Team unkritisch |
-| Passkey-Login (WEB_AUTHN) im Studio fehlt, nur Email-OTP | Website | Nachziehen, sobald Marketplace-Step-up (`strong`) ansteht |
+| Passkey-Login (WEB_AUTHN) im Studio fehlt; E-Mail-OTP und Passwort vorhanden | Website | Nachziehen und vor Marketplace-Step-up (`strong`) testen |
 | E-Mail-Änderung im Fotografenprofil nicht möglich | Backend/Website | Braucht Stufe „recent" + Cognito-Attributänderung |
 | Dynamische Sitemap-Einträge pro Event/Teilnehmer fehlen | Website | Nur der statische `/racepic`-Einstieg ist gelistet |
-| Matching-Gewichte nur per API editierbar, nicht im Admin-Formular | Frontend | Nur die drei Schwellen sind editierbar (reicht für Paket-10-Kalibrierung) |
+| Matching-Gewichte im Admin editierbar, Kalibrierung noch offen | Frontend/Backend | Versionierte Gewichte und Schwellen jetzt im Formular; echte Review-Daten für die Auswahl fehlen noch |
 | Keine Cost Anomaly Detection, nur das `CfnBudget` aus Paket 9 | Backend | Bräuchte eine SNS-Themen-Abo-Bestätigung |
 | Vereinfachtes Copyright-Handling (EXIF-Tag statt vollem IPTC/XMP) | Backend | Bei Bedarf nachziehen, falls Fotoportale volle IPTC-Metadaten erwarten |
 | `RACEPIC_EMBEDDING_MODEL_ID`-Override nicht als CDK-Env-Var gesetzt | Backend | Nutzt aktuell immer den Default `cohere.embed-v4:0` |
@@ -71,8 +71,8 @@ AWS-Zugriff, den diese Sandbox nicht abschließend verifizieren kann.
 - **Rechtliches Seller-Modell (A/B)** – verkauft der Fotograf selbst und der MSC vermittelt nur,
   oder verkauft der MSC? Braucht vor jeder Zahlungsimplementierung eine steuerliche/rechtliche
   Prüfung (siehe racepic-architecture.md Abschnitt K).
-- Alles andere aus Abschnitt K/M des Architekturplans (Stripe Connect, Wasserzeichen,
-  Entitlements, `strong`-Step-up) ist bewusst nicht Teil des MVP.
+- Stripe Connect, Käufer-Entitlements und `strong`-Step-up gehören zum späteren Checkout. Die
+  private Wasserzeichen-Vorschau für interne Preisentwürfe ist bereits in Paket 21 vorbereitet.
 - **Warenkorb-/Konto-UI (Paket 18, msc-website) ist reine Vorbereitung, kein Checkout.** Der
   client-seitige Warenkorb (`localStorage`, `src/integrations/racepic/cart.tsx`) sammelt nur
   bereits kostenlose Bilder für einen bequemen Sammel-Download (ruft denselben bestehenden
@@ -82,6 +82,19 @@ AWS-Zugriff, den diese Sandbox nicht abschließend verifizieren kann.
   den Marketplace-Paketen M1–M5.
 
 ## Verweise
+
+## E. Ausbaupakete 19–24 (in Arbeit auf den Feature-Branches, 2026-09-22)
+
+| Paket | Inhalt | Verifikation vor Freigabe |
+|---|---|---|
+| 19 Öffentliche Galerie | Gemeinsamer Bilddialog, Metadaten, ähnliche Bilder, Event-Filter, paginierte Entdeckung, DE/CZ/EN/PL, Layoutkorrekturen | Browserprüfung in allen vier Sprachen und auf schmalem Bildschirm |
+| 20 Studio und Zugang | Passwort und E-Mail-OTP, 30-Tage-Refresh, Selbstregistrierung mit E-Mail-Bestätigung, Admin-Freigabe, Bildeditor | Echter Cognito-Flow, Wiederanmeldung nach Reload, Freigabe und Upload |
+| 21 Interne Shop-Daten | EUR-Preis pro Bild, versionierte Lizenz, private Wasserzeichen-Vorschau, Sperre öffentlicher PAID-Bilder | Datenbankmigration, Preis-/Lizenzwechsel, CDN- und Download-Sperren |
+| 22 Admin | Direkter Event-Einstieg, Status und Pipeline-Schritte, Zuordnungen, manuelles Matching, Gewichte, Fotografenfreigabe | Review eines echten Testbilds nach Deploy |
+| 23 KI | OCR-Crops, räumliche Zuordnung bei überlappenden Fahrzeugen, Fahrzeug-Label-Fallback, gecachte Referenzen, Reanalyse | Goldsatz mit bestätigten Zuordnungen, Precision/Recall vor und nach Änderung |
+| 24 Recht und Betrieb | Lizenz-/Datenschutznachtrag, öffentliche Event-Sperre, Dokumentationssync | Rechts- und Steuerprüfung vor Kauf/Go-live; CI- und Browserprüfung |
+
+**Noch offen:** Passkey-UI, echter KI-Goldsatz und Live-Messung, AWS-/Cognito-/CDN-Integrationstest sowie der spätere Checkout mit Stripe Connect. Bezahlbilder bleiben bis dahin intern; ein öffentlicher Shop-Verkauf ist nicht freigeschaltet. Backend und Nennungstool-Admin bleiben bis zur Paketabnahme ungemergt; die Website bleibt außerhalb von main.
 
 - Architektur: [racepic-architecture.md](./racepic-architecture.md)
 - Repo-spezifischer Umsetzungsstand: `docs/memory-bank/racepic-progress.md` in jedem der drei Repos

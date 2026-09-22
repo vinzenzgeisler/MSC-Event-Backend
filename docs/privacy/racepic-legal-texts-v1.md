@@ -97,3 +97,11 @@ Der bestehende Medieneinwilligungstext (`legal-texts-v1.md`, Abschnitt „Einwil
 > „Ihre Einwilligung umfasst auch die automatisierte Zuordnung von Eventfotos verschiedener Fotografen zu Ihrem Fahrzeug/Ihrer Startnummer auf der Plattform RacePic sowie deren dortige öffentliche Darstellung mit Namen, Startnummer und Fahrzeugdaten.“
 
 Diese Ergänzung ist kein Blocker für den MVP (die bestehende Einwilligung deckt den Zweck bereits ab), sollte aber zur Klarstellung zeitnah nachgezogen werden. Betrifft **nicht** die separate, noch offene Entscheidung zur dauerhaften Namenssuche nach 365 Tagen (siehe `docs/memory-bank/racepic-progress.md`).
+
+## 4. Nachtrag zur internen Shop-Vorbereitung (2026-09-22, Entwurf)
+
+Fotograf:innen können sich künftig mit bestätigter E-Mail selbst registrieren. Das Konto bleibt bis zur Freigabe durch den MSC ohne Event- und Upload-Rechte. Der MSC verarbeitet dafür E-Mail-Adresse, Anzeigename, Zeitpunkt der Bestätigung und die akzeptierte Bedingungsversion. Eine ablehnende Entscheidung sperrt den Zugang; ein Lösch- und Auskunftsweg ist über die oben genannte Kontaktadresse vorzusehen.
+
+Für noch unveröffentlichte Bilder können Titel, Beschreibung, Tags, Lizenz und ein Preis in Euro gepflegt werden. Kostenpflichtige Entwürfe werden ausschließlich im geschützten Studio mit einer wasserzeichenbehafteten Vorschau angezeigt. Die Originaldatei bleibt privat. Es findet derzeit weder ein Verkauf noch eine Weitergabe von Käuferdaten an Fotograf:innen oder Zahlungsdienstleister statt.
+
+Für einen späteren Verkauf ist vorgesehen, dass der Fotograf Vertragspartner des Käufers wird und der MSC vermittelt. Die konkreten Rollen bei Zahlung, Rechnung, Umsatzsteuer, Widerruf und Datenschutz sind vor Aktivierung des Checkouts rechtlich und steuerlich zu prüfen. Bestehende kostenlose Veröffentlichungen bleiben kostenlos; eine nachträgliche Umstellung veröffentlichter Bilder auf kostenpflichtig ist technisch gesperrt.

@@ -109,3 +109,15 @@ export const isTextInsideVehicle = (text: BoundingBoxRatio, vehicle: BoundingBox
   const centerY = text.top + text.height / 2;
   return centerX >= vehicle.left && centerX <= vehicle.left + vehicle.width && centerY >= vehicle.top && centerY <= vehicle.top + vehicle.height;
 };
+
+/** A text inside overlapping boxes belongs to the smallest vehicle, not the first label returned by Rekognition. */
+export const nearestContainingVehicleIndex = (text: BoundingBoxRatio, vehicles: BoundingBoxRatio[]): number => {
+  let bestIndex = -1;
+  let bestArea = Number.POSITIVE_INFINITY;
+  vehicles.forEach((vehicle, index) => {
+    if (!isTextInsideVehicle(text, vehicle)) return;
+    const area = vehicle.width * vehicle.height;
+    if (area < bestArea) { bestArea = area; bestIndex = index; }
+  });
+  return bestIndex;
+};

@@ -511,3 +511,10 @@ Absicherung: AWS Budgets und Anomalie-Alarm auf Rekognition und CloudFront, Quot
   - Fremde `imageId` im Studio ergibt 404.
   - Verbrauchter Einladungslink bleibt wirkungslos.
 - **Website:** `npm test` (Such- und Filterlogik als Unit-Tests), Lighthouse Mobile auf der Galerieseite, manueller Durchlauf Suche → Galerie → Lightbox → Download mit Lizenzanzeige.
+# Ergänzung 2026-09-22: Galerie, Shop-Vorbereitung und Zugang
+
+- Ein öffentliches Bild ist nur zulässig, wenn Bild und Event veröffentlicht und aktiviert sind, der Angebotsmodus FREE ist und die zugeordnete Person die Medienfreigabe nicht widerrufen hat. Beim Event-Unpublish werden Manifeste und öffentliche Bildkopien entfernt; Downloads prüfen Event und Bild erneut.
+- Die öffentlichen JSON-Manifeste enthalten Bildmetadaten und einen Bilddetailpfad mit zugeordneten Teilnehmern und verwandten Bildern. Eine paginierte Entdeckung begrenzt die erste Downloadgröße. Öffentliche Seiten lesen weiterhin ausschließlich CDN-Manifeste.
+- PAID_PRIVATE ist eine versionierte Lizenz für interne Entwürfe. Preis in Cent, Angebotsmodus und Lizenz sind nur vor Veröffentlichung änderbar. Die private Studio-Vorschau wird mit einem Wasserzeichen erzeugt. Ohne Checkout und Entitlement gibt es keine öffentliche PAID-Ausgabe.
+- Die Fotografenregistrierung setzt eine bestätigte E-Mail voraus. Neue Profile starten als PENDING_APPROVAL und erhalten erst nach Admin-Freigabe Event-Zugriff. Das Studio bietet E-Mail-OTP und Passwort mit 30 Tagen Refresh-Token-Laufzeit. Passkeys sind weiterhin offen.
+- Matching-Konfigurationen bleiben versioniert. Admins können Gewichte und Schwellen anpassen; ein Re-Match schreibt neue Kandidaten mit der verwendeten Konfigurationsversion. KI-Erkennungen und Reanalyse müssen anhand eines bestätigten Goldsatzes gemessen werden.

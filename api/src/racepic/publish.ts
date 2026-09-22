@@ -79,13 +79,16 @@ export const getImagePhotographerId = async (imageId: string): Promise<string | 
 
 export const publishImage = async (imageId: string): Promise<void> => {
   const image = await loadImageOrThrow(imageId);
+  if (image.offerMode !== 'FREE') throw new RacePicError('RACEPIC_PAID_OFFER_NOT_PUBLIC');
   if (!['DERIVED', 'ANALYZED', 'MATCHED'].includes(image.processingStatus)) {
     throw new RacePicError('RACEPIC_IMAGE_NOT_READY_TO_PUBLISH');
   }
-  await Promise.all(
-    (['thumb', 'preview'] as const).map((kind) => copyObject(derivedVariantKey(imageId, kind), publicVariantKey(imageId, kind)))
-  );
   const db = await getDb();
+  const [event] = await db.select({ enabled: racepicEvent.enabled, published: racepicEvent.published })
+    .from(racepicEvent).where(eq(racepicEvent.eventId, image.eventId)).limit(1);
+  if (event?.enabled && event.published) {
+    await Promise.all((['thumb', 'preview'] as const).map((kind) => copyObject(derivedVariantKey(imageId, kind), publicVariantKey(imageId, kind))));
+  }
   await db.update(racepicImage).set({ visibility: 'PUBLISHED', updatedAt: new Date() }).where(eq(racepicImage.id, imageId));
   await invalidateCloudFront([`/public/${imageId}/*`]);
 };
@@ -140,6 +143,12 @@ export type ManifestImage = {
   previewUrl: string;
   width: number | null;
   height: number | null;
+  title: string | null;
+  description: string | null;
+  tags: string[];
+  camera: unknown;
+  capturedAt: string | null;
+  createdAt: string;
   photographer: { displayName: string; website: string | null; slug: string | null };
   license: { code: string; title: unknown; attributionRequired: boolean; attributionTemplate: string | null };
 };
@@ -171,6 +180,12 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
       imageId: racepicImage.id,
       imageWidth: racepicImage.width,
       imageHeight: racepicImage.height,
+      imageTitle: racepicImage.title,
+      imageDescription: racepicImage.description,
+      imageTags: racepicImage.tags,
+      imageCamera: racepicImage.camera,
+      imageCapturedAt: racepicImage.capturedAt,
+      imageCreatedAt: racepicImage.createdAt,
       photographerDisplayName: racepicPhotographer.displayName,
       photographerWebsite: racepicPhotographer.website,
       photographerSlug: racepicPhotographer.slug,
@@ -193,6 +208,7 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
         isNull(entry.deletedAt),
         eq(entry.consentMediaAccepted, true),
         eq(racepicImage.visibility, 'PUBLISHED'),
+        eq(racepicImage.offerMode, 'FREE'),
         inArray(racepicAssignment.status, ['AUTO_MATCHED', 'MANUALLY_CONFIRMED', 'MANUALLY_CORRECTED'])
       )
     );
@@ -236,6 +252,12 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
         previewUrl: `/public/${row.imageId}/preview.webp`,
         width: row.imageWidth,
         height: row.imageHeight,
+        title: row.imageTitle,
+        description: row.imageDescription,
+        tags: Array.isArray(row.imageTags) ? row.imageTags as string[] : [],
+        camera: row.imageCamera,
+        capturedAt: row.imageCapturedAt ? row.imageCapturedAt.toISOString() : null,
+        createdAt: row.imageCreatedAt.toISOString(),
         photographer: { displayName: row.photographerDisplayName, website: row.photographerWebsite, slug: row.photographerSlug },
         license: {
           code: row.licenseCode,
@@ -258,12 +280,18 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
 export const regenerateManifestsForEvent = async (eventId: string): Promise<void> => {
   const db = await getDb();
   const [racepicEventRow] = await db.select().from(racepicEvent).where(eq(racepicEvent.eventId, eventId)).limit(1);
-  if (!racepicEventRow || !racepicEventRow.published) {
+  if (!racepicEventRow || !racepicEventRow.published || !racepicEventRow.enabled) {
     return;
   }
 
   const { participants, imagesByParticipantKey } = await buildManifestData(eventId);
   const slug = racepicEventRow.slug;
+
+  // Entfernte Zuordnungen duerfen nicht ueber alte direkte CDN-Links erreichbar bleiben.
+  await Promise.all([
+    deleteObjectsByPrefix(`manifests/${slug}/p/`),
+    deleteObjectsByPrefix(`manifests/${slug}/i/`)
+  ]);
 
   await putObject(
     `manifests/${slug}/index.json`,
@@ -279,6 +307,25 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
     );
   }
 
+  const imageDetails = new Map<string, { image: ManifestImage; participants: ManifestParticipant[] }>();
+  for (const participant of participants) {
+    for (const image of imagesByParticipantKey.get(participant.participantKey) ?? []) {
+      const detail = imageDetails.get(image.imageId) ?? { image, participants: [] };
+      detail.participants.push(participant);
+      imageDetails.set(image.imageId, detail);
+    }
+  }
+  const allImages = Array.from(imageDetails.values()).map((detail) => detail.image);
+  for (const [imageId, detail] of imageDetails) {
+    const sameVehicle = detail.participants.flatMap((participant) => imagesByParticipantKey.get(participant.participantKey) ?? []);
+    const related = Array.from(new Map([...sameVehicle, ...allImages].filter((image) => image.imageId !== imageId).map((image) => [image.imageId, image])).values()).slice(0, 12);
+    await putObject(
+      `manifests/${slug}/i/${imageId}.json`,
+      Buffer.from(JSON.stringify({ image: detail.image, eventSlug: slug, eventTitle: racepicEventRow.title, participants: detail.participants, relatedImages: related })),
+      'application/json'
+    );
+  }
+
   const publishedEvents = await db.select().from(racepicEvent).where(and(eq(racepicEvent.enabled, true), eq(racepicEvent.published, true)));
   await putObject(
     'manifests/events.json',
@@ -287,10 +334,10 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
   );
 
   await regenerateGlobalDiscoveryManifests(publishedEvents);
-  await invalidateCloudFront([`/manifests/${slug}/*`, '/manifests/events.json', '/manifests/discover.json', '/manifests/search-index.json']);
+  await invalidateCloudFront([`/manifests/${slug}/*`, '/manifests/events.json', '/manifests/discover*', '/manifests/search-index.json']);
 };
 
-const DISCOVER_IMAGE_LIMIT = 60;
+const DISCOVER_PAGE_SIZE = 60;
 
 /**
  * Event-uebergreifende Manifeste fuer die Landingpage im Unsplash/Airbnb-Stil (Paket 17), siehe
@@ -303,46 +350,22 @@ const DISCOVER_IMAGE_LIMIT = 60;
  * inkrementell werden.
  */
 const regenerateGlobalDiscoveryManifests = async (publishedEvents: (typeof racepicEvent.$inferSelect)[]): Promise<void> => {
-  const db = await getDb();
-
-  const discoverRows =
-    publishedEvents.length > 0
-      ? await db
-          .select({
-            imageId: racepicImage.id,
-            eventSlug: racepicEvent.slug,
-            eventTitle: racepicEvent.title,
-            capturedAt: racepicImage.capturedAt,
-            createdAt: racepicImage.createdAt
-          })
-          .from(racepicImage)
-          .innerJoin(racepicEvent, eq(racepicEvent.eventId, racepicImage.eventId))
-          .where(and(eq(racepicImage.visibility, 'PUBLISHED'), inArray(racepicEvent.eventId, publishedEvents.map((row) => row.eventId))))
-          .orderBy(desc(racepicImage.createdAt))
-          .limit(DISCOVER_IMAGE_LIMIT)
-      : [];
-
-  await putObject(
-    'manifests/discover.json',
-    Buffer.from(
-      JSON.stringify(
-        discoverRows.map((row) => ({
-          imageId: row.imageId,
-          thumbUrl: `/public/${row.imageId}/thumb.webp`,
-          previewUrl: `/public/${row.imageId}/preview.webp`,
-          eventSlug: row.eventSlug,
-          eventTitle: row.eventTitle,
-          capturedAt: row.capturedAt ? row.capturedAt.toISOString() : null
-        }))
-      )
-    ),
-    'application/json'
-  );
-
+  const discoverById = new Map<string, { imageId: string; thumbUrl: string; previewUrl: string; eventSlug: string; eventTitle: string; capturedAt: string | null; createdAt: string }>();
   const searchEntries: { participantKey: string; eventSlug: string; eventTitle: string; startNumber: string; displayName: string; make: string | null; model: string | null; className: string }[] = [];
   for (const eventRow of publishedEvents) {
-    const { participants } = await buildManifestData(eventRow.eventId);
+    const { participants, imagesByParticipantKey } = await buildManifestData(eventRow.eventId);
     for (const participant of participants) {
+      for (const image of imagesByParticipantKey.get(participant.participantKey) ?? []) {
+        discoverById.set(image.imageId, {
+          imageId: image.imageId,
+          thumbUrl: image.thumbUrl,
+          previewUrl: image.previewUrl,
+          eventSlug: eventRow.slug,
+          eventTitle: eventRow.title,
+          capturedAt: image.capturedAt,
+          createdAt: image.createdAt
+        });
+      }
       searchEntries.push({
         participantKey: participant.participantKey,
         eventSlug: eventRow.slug,
@@ -355,7 +378,33 @@ const regenerateGlobalDiscoveryManifests = async (publishedEvents: (typeof racep
       });
     }
   }
+  const discover = Array.from(discoverById.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const pageCount = Math.ceil(discover.length / DISCOVER_PAGE_SIZE);
+  await deleteObjectsByPrefix('manifests/discover-pages/');
+  for (let page = 0; page < pageCount; page += 1) {
+    await putObject(
+      `manifests/discover-pages/${page + 1}.json`,
+      Buffer.from(JSON.stringify(discover.slice(page * DISCOVER_PAGE_SIZE, (page + 1) * DISCOVER_PAGE_SIZE))),
+      'application/json'
+    );
+  }
+  await putObject('manifests/discover.json', Buffer.from(JSON.stringify(discover.slice(0, DISCOVER_PAGE_SIZE))), 'application/json');
+  await putObject('manifests/discover-index.json', Buffer.from(JSON.stringify({ total: discover.length, pageCount, pageSize: DISCOVER_PAGE_SIZE })), 'application/json');
   await putObject('manifests/search-index.json', Buffer.from(JSON.stringify(searchEntries)), 'application/json');
+};
+
+export const setEventPublicObjectAvailability = async (eventId: string, available: boolean): Promise<void> => {
+  const db = await getDb();
+  const images = await db.select({ id: racepicImage.id }).from(racepicImage)
+    .where(and(eq(racepicImage.eventId, eventId), eq(racepicImage.visibility, 'PUBLISHED'), eq(racepicImage.offerMode, 'FREE')));
+  for (const image of images) {
+    if (available) {
+      await Promise.all((['thumb', 'preview'] as const).map((kind) => copyObject(derivedVariantKey(image.id, kind), publicVariantKey(image.id, kind))));
+    } else {
+      await unpublishObjects(image.id);
+    }
+  }
+  if (available && images.length > 0) await invalidateCloudFront(['/public/*']);
 };
 
 /**
@@ -367,7 +416,7 @@ const regenerateGlobalDiscoveryManifests = async (publishedEvents: (typeof racep
  * Slug-Aenderung eines veroeffentlichten Events (die alten Manifest-Pfade unter dem frueheren Slug
  * werden sonst zu verwaisten, weiterhin oeffentlich erreichbaren Dateien).
  */
-export const unpublishEventManifests = async (previousSlug: string): Promise<void> => {
+export const unpublishEventManifests = async (previousSlug: string, eventId: string): Promise<void> => {
   await deleteObjectsByPrefix(`manifests/${previousSlug}/`);
 
   const db = await getDb();
@@ -379,10 +428,15 @@ export const unpublishEventManifests = async (previousSlug: string): Promise<voi
   );
 
   await regenerateGlobalDiscoveryManifests(publishedEvents);
+  // Profile enthalten ebenfalls Event-Bilder. Nach einem Unpublish oder Slug-Wechsel
+  // muessen ihre alten CDN-Manifeste zurueckgezogen beziehungsweise neu aufgebaut werden.
+  const affectedPhotographers = await db.selectDistinct({ photographerId: racepicImage.photographerId })
+    .from(racepicImage).where(eq(racepicImage.eventId, eventId));
+  await Promise.all(affectedPhotographers.map(({ photographerId }) => regeneratePhotographerManifest(photographerId)));
   await invalidateCloudFront([
     `/manifests/${previousSlug}/*`,
     '/manifests/events.json',
-    '/manifests/discover.json',
+    '/manifests/discover*',
     '/manifests/search-index.json'
   ]);
 };
@@ -401,27 +455,26 @@ export const regeneratePhotographerManifest = async (photographerId: string): Pr
   const [photographer] = await db.select().from(racepicPhotographer).where(eq(racepicPhotographer.id, photographerId)).limit(1);
   if (!photographer || !photographer.slug) return;
 
-  const rows = await db
-    .select({
-      imageId: racepicImage.id,
-      eventSlug: racepicEvent.slug,
-      eventTitle: racepicEvent.title,
-      capturedAt: racepicImage.capturedAt,
-      createdAt: racepicImage.createdAt
-    })
-    .from(racepicImage)
-    .innerJoin(racepicEvent, eq(racepicEvent.eventId, racepicImage.eventId))
-    .where(and(eq(racepicImage.photographerId, photographerId), eq(racepicImage.visibility, 'PUBLISHED'), eq(racepicEvent.published, true)))
-    .orderBy(desc(racepicImage.createdAt));
-
-  const images = rows.map((row) => ({
-    imageId: row.imageId,
-    thumbUrl: `/public/${row.imageId}/thumb.webp`,
-    previewUrl: `/public/${row.imageId}/preview.webp`,
-    eventSlug: row.eventSlug,
-    eventTitle: row.eventTitle,
-    capturedAt: row.capturedAt ? row.capturedAt.toISOString() : null
-  }));
+  const publishedEvents = await db.select().from(racepicEvent).where(and(eq(racepicEvent.enabled, true), eq(racepicEvent.published, true)));
+  const imagesById = new Map<string, { imageId: string; thumbUrl: string; previewUrl: string; eventSlug: string; eventTitle: string; capturedAt: string | null; createdAt: string }>();
+  for (const eventRow of publishedEvents) {
+    const { imagesByParticipantKey } = await buildManifestData(eventRow.eventId);
+    for (const images of imagesByParticipantKey.values()) {
+      for (const image of images) {
+        if (image.photographer.slug !== photographer.slug) continue;
+        imagesById.set(image.imageId, {
+          imageId: image.imageId,
+          thumbUrl: image.thumbUrl,
+          previewUrl: image.previewUrl,
+          eventSlug: eventRow.slug,
+          eventTitle: eventRow.title,
+          capturedAt: image.capturedAt,
+          createdAt: image.createdAt
+        });
+      }
+    }
+  }
+  const images = Array.from(imagesById.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   await putObject(
     `manifests/photographers/${photographer.slug}.json`,

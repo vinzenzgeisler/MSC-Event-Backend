@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { racepicImage, racepicLicense, racepicPhotographer } from '../db/schema';
+import { racepicEvent, racepicImage, racepicLicense, racepicPhotographer } from '../db/schema';
 import { RacePicError } from './repository';
 import { presignGetObject } from './s3';
 
@@ -33,6 +33,8 @@ export const requestImageDownload = async (imageId: string, variant: DownloadVar
   const [row] = await db
     .select({
       visibility: racepicImage.visibility,
+      eventPublished: racepicEvent.published,
+      eventEnabled: racepicEvent.enabled,
       offerMode: racepicImage.offerMode,
       originalKey: racepicImage.originalKey,
       photographerDisplayName: racepicPhotographer.displayName,
@@ -43,13 +45,14 @@ export const requestImageDownload = async (imageId: string, variant: DownloadVar
       licenseAttributionTemplate: racepicLicense.attributionTemplate
     })
     .from(racepicImage)
+    .innerJoin(racepicEvent, eq(racepicEvent.eventId, racepicImage.eventId))
     .innerJoin(racepicPhotographer, eq(racepicPhotographer.id, racepicImage.photographerId))
     .innerJoin(racepicLicense, eq(racepicLicense.id, racepicImage.licenseId))
     .where(eq(racepicImage.id, imageId))
     .limit(1);
 
   if (!row) throw new RacePicError('RACEPIC_IMAGE_NOT_FOUND');
-  if (row.visibility !== 'PUBLISHED') throw new RacePicError('RACEPIC_IMAGE_NOT_PUBLISHED');
+  if (row.visibility !== 'PUBLISHED' || !row.eventPublished || !row.eventEnabled) throw new RacePicError('RACEPIC_IMAGE_NOT_PUBLISHED');
   if (row.offerMode !== 'FREE') {
     // Der Marketplace (kostenpflichtige Bilder, Entitlement-Pruefung) ist nicht Teil des MVP -
     // siehe Architekturplan Abschnitt K/J. Dieser Codepfad existiert, damit spaeter nur die

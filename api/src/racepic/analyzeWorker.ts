@@ -5,7 +5,7 @@ import { and, eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { racepicAiAnalysis, racepicDetection, racepicImage, racepicProcessingStep, racepicTextDetection } from '../db/schema';
 import { logOperationalEvent, errorCodeOf } from '../observability/logger';
-import { detectText, detectVehicles, isTextInsideVehicle } from './rekognition';
+import { detectText, detectVehicles, isTextInsideVehicle, nearestContainingVehicleIndex, type TextDetectionResult } from './rekognition';
 import { embedImage } from './bedrock';
 import { getObject, putObject } from './s3';
 import { sendMatchMessage } from './queues';
@@ -15,13 +15,13 @@ import { sendMatchMessage } from './queues';
  * docs/memory-bank/racepic-architecture.md Abschnitt F. Idempotent ueber `racepic_processing_step`
  * (step='analyze'), analog zum Ingest-Worker (Paket 4).
  */
-export const PIPELINE_VERSION = '2026-09-21.1';
+export const PIPELINE_VERSION = '2026-09-22.2';
 
 const derivedKey = (imageId: string, kind: string): string => `derived/${imageId}/${kind}.jpg`;
 
 const toPixelBox = (bbox: { left: number; top: number; width: number; height: number }, imgWidth: number, imgHeight: number) => {
-  const left = Math.max(0, Math.round(bbox.left * imgWidth));
-  const top = Math.max(0, Math.round(bbox.top * imgHeight));
+  const left = Math.min(imgWidth - 1, Math.max(0, Math.round(bbox.left * imgWidth)));
+  const top = Math.min(imgHeight - 1, Math.max(0, Math.round(bbox.top * imgHeight)));
   const width = Math.max(1, Math.min(imgWidth - left, Math.round(bbox.width * imgWidth)));
   const height = Math.max(1, Math.min(imgHeight - top, Math.round(bbox.height * imgHeight)));
   return { left, top, width, height };
@@ -55,20 +55,7 @@ const processOneImage = async (imageId: string): Promise<void> => {
   const largeBuffer = await getObject(derivedKey(imageId, 'large'));
   if (!largeBuffer) throw new Error('RACEPIC_ANALYZE_VARIANT_MISSING');
 
-  const [vehicles, texts] = await Promise.all([detectVehicles(largeBuffer), detectText(largeBuffer)]);
-
-  const rawResultKey = `analysis/${imageId}/rekognition-${randomUUID()}.json`;
-  await putObject(rawResultKey, Buffer.from(JSON.stringify({ vehicles, texts })), 'application/json');
-
-  await db.insert(racepicAiAnalysis).values({
-    imageId,
-    service: 'rekognition',
-    operation: 'detect_labels+detect_text',
-    pipelineVersion: PIPELINE_VERSION,
-    finishedAt: new Date(),
-    rawResultKey,
-    summary: { vehicleCount: vehicles.length, textCount: texts.length }
-  });
+  const [vehicles, initialTexts] = await Promise.all([detectVehicles(largeBuffer), detectText(largeBuffer)]);
 
   // Fahrzeug-Crops fuer die visuelle Aehnlichkeit (Abschnitt F: "Titan Multimodal Embedding je
   // Fahrzeug-Crop", hier Cohere Embed v4). Metadata.width/height aus dem großen Derivat, nicht dem
@@ -76,6 +63,38 @@ const processOneImage = async (imageId: string): Promise<void> => {
   const largeVariantMeta = await sharp(largeBuffer).metadata();
   const largeWidth = largeVariantMeta.width ?? image.width;
   const largeHeight = largeVariantMeta.height ?? image.height;
+
+  // Eine zweite, begrenzte OCR-Pruefung fuer Fahrzeuge ohne zugeordneten Text. Ein
+  // fremdes Text-Token im Hintergrund darf den Crop nicht unterdruecken.
+  const texts: TextDetectionResult[] = [...initialTexts];
+  let cropOcrAttempts = 0;
+  const vehiclesMissingText = vehicles.filter((vehicle) => !initialTexts.some((text) => isTextInsideVehicle(text.bbox, vehicle.bbox)));
+  if (vehiclesMissingText.length > 0) {
+    for (const vehicle of [...vehiclesMissingText].sort((a, b) => b.confidence - a.confidence).slice(0, 2)) {
+      const box = vehicle.bbox;
+      if (box.width * box.height >= 0.9) continue;
+      cropOcrAttempts += 1;
+      try {
+        const crop = await sharp(largeBuffer).extract(toPixelBox(box, largeWidth, largeHeight)).resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
+        const cropTexts = await detectText(crop);
+        for (const text of cropTexts) texts.push({ ...text, bbox: {
+          left: box.left + text.bbox.left * box.width,
+          top: box.top + text.bbox.top * box.height,
+          width: text.bbox.width * box.width,
+          height: text.bbox.height * box.height
+        } });
+      } catch (error) {
+        logOperationalEvent('error', 'racepic_analyze.crop_ocr_failed', { errorCode: errorCodeOf(error) });
+      }
+    }
+  }
+
+  const rawResultKey = `analysis/${imageId}/rekognition-${randomUUID()}.json`;
+  await putObject(rawResultKey, Buffer.from(JSON.stringify({ vehicles, texts, cropOcrAttempts })), 'application/json');
+  await db.insert(racepicAiAnalysis).values({
+    imageId, service: 'rekognition', operation: 'detect_labels+detect_text', pipelineVersion: PIPELINE_VERSION,
+    finishedAt: new Date(), rawResultKey, summary: { vehicleCount: vehicles.length, textCount: texts.length, cropOcrAttempts }
+  });
 
   const detectionIds: { id: string; bbox: { left: number; top: number; width: number; height: number } }[] = [];
   let embeddingSuccessCount = 0;
@@ -110,7 +129,8 @@ const processOneImage = async (imageId: string): Promise<void> => {
   }
 
   for (const text of texts) {
-    const containingDetection = detectionIds.find((detection) => isTextInsideVehicle(text.bbox, detection.bbox));
+    const detectionIndex = nearestContainingVehicleIndex(text.bbox, detectionIds.map((detection) => detection.bbox));
+    const containingDetection = detectionIndex >= 0 ? detectionIds[detectionIndex] : null;
     await db.insert(racepicTextDetection).values({
       detectionId: containingDetection?.id ?? null,
       imageId,

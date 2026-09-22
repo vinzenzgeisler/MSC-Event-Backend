@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { and, count, eq, inArray, isNull, ne } from 'drizzle-orm';
+import sharp from 'sharp';
+import { and, count, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import {
   racepicEvent,
@@ -12,16 +13,19 @@ import {
 } from '../db/schema';
 import { RacePicError } from './repository';
 import { hideImage } from './publish';
+import { renderWatermarkedPreview } from './imageProcessing';
 import {
   abortMultipartUpload,
   buildIncomingKey,
   completeMultipartUpload,
   createMultipartUpload,
   deleteObject,
+  getObject,
   headObject,
   listUploadedParts,
   presignGetObject,
   presignPutObject,
+  putObject,
   presignUploadParts
 } from './s3';
 
@@ -61,7 +65,7 @@ export const createBatch = async (input: { photographerId: string; eventId: stri
     .from(racepicLicense)
     .where(and(eq(racepicLicense.id, input.licenseId), eq(racepicLicense.active, true)))
     .limit(1);
-  if (!license) {
+  if (!license || license.pricingKind !== 'FREE') {
     throw new RacePicError('RACEPIC_LICENSE_NOT_FOUND');
   }
 
@@ -306,17 +310,75 @@ export const listMyImages = async (input: { photographerId: string; eventId?: st
     .select()
     .from(racepicImage)
     .where(and(...conditions))
-    .orderBy(racepicImage.createdAt)
+    .orderBy(desc(racepicImage.createdAt))
     .limit(input.limit);
 
   return Promise.all(
     rows.map(async (row) => ({
       ...row,
-      thumbUrl: HAS_THUMB_STATUSES.includes(row.processingStatus)
+      thumbUrl: row.visibility !== 'REMOVED' && HAS_THUMB_STATUSES.includes(row.processingStatus)
         ? await presignGetObject(`derived/${row.id}/thumb.webp`, 300).catch(() => null)
+        : null,
+      previewUrl: row.visibility !== 'REMOVED' && HAS_THUMB_STATUSES.includes(row.processingStatus)
+        ? await presignGetObject(`derived/${row.id}/${row.offerMode === 'PAID' ? 'watermarked_preview' : 'preview'}.webp`, 300).catch(() => null)
         : null
     }))
   );
+};
+
+export type OwnImageDetailsPatch = {
+  title?: string | null;
+  description?: string | null;
+  tags?: string[];
+  licenseId?: string;
+  offerMode?: 'FREE' | 'PAID';
+  priceCents?: number | null;
+};
+
+export const updateOwnImageDetails = async (photographerId: string, imageId: string, patch: OwnImageDetailsPatch) => {
+  const db = await getDb();
+  const [image] = await db.select().from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
+  if (!image || image.photographerId !== photographerId || image.visibility === 'REMOVED') {
+    throw new RacePicError('RACEPIC_IMAGE_NOT_FOUND');
+  }
+  const changingOffer = patch.offerMode !== undefined || patch.priceCents !== undefined;
+  if ((patch.licenseId !== undefined || changingOffer) && image.visibility !== 'DRAFT') {
+    throw new RacePicError('RACEPIC_IMAGE_LICENSE_LOCKED');
+  }
+  const nextOfferMode = patch.offerMode ?? image.offerMode;
+  const nextPriceCents = patch.priceCents !== undefined ? patch.priceCents : image.priceCents;
+  if ((nextOfferMode === 'FREE' && nextPriceCents !== null) || (nextOfferMode === 'PAID' && (!nextPriceCents || nextPriceCents <= 0))) {
+    throw new RacePicError('RACEPIC_IMAGE_PRICE_INVALID');
+  }
+  const nextLicenseId = patch.licenseId ?? image.licenseId;
+  if (patch.licenseId !== undefined || changingOffer) {
+    const [license] = await db.select().from(racepicLicense).where(eq(racepicLicense.id, nextLicenseId)).limit(1);
+    if (!license || !license.active || license.pricingKind !== nextOfferMode) {
+      throw new RacePicError('RACEPIC_IMAGE_LICENSE_INVALID');
+    }
+  }
+  if (nextOfferMode === 'PAID' && image.offerMode !== 'PAID') {
+    if (!HAS_THUMB_STATUSES.includes(image.processingStatus)) throw new RacePicError('RACEPIC_IMAGE_NOT_READY_TO_PRICE');
+    const source = await getObject(`derived/${imageId}/preview.webp`);
+    if (!source) throw new RacePicError('RACEPIC_IMAGE_NOT_READY_TO_PRICE');
+    const buffer = await renderWatermarkedPreview(source);
+    const key = `derived/${imageId}/watermarked_preview.webp`;
+    await putObject(key, buffer, 'image/webp');
+    const metadata = await sharp(buffer).metadata();
+    await db.insert(racepicImageVariant).values({ imageId, kind: 'watermarked_preview', s3Key: key, width: metadata.width, height: metadata.height, bytes: buffer.length, access: 'signed' })
+      .onConflictDoUpdate({ target: [racepicImageVariant.imageId, racepicImageVariant.kind], set: { s3Key: key, width: metadata.width, height: metadata.height, bytes: buffer.length } });
+  }
+  const [updated] = await db.update(racepicImage).set({
+    ...patch,
+    title: patch.title === undefined ? image.title : patch.title,
+    description: patch.description === undefined ? image.description : patch.description,
+    tags: patch.tags === undefined ? image.tags : patch.tags,
+    licenseId: nextLicenseId,
+    offerMode: nextOfferMode,
+    priceCents: nextPriceCents,
+    updatedAt: new Date()
+  }).where(eq(racepicImage.id, imageId)).returning();
+  return updated;
 };
 
 /** Fuer den Reconciler (Paket 3): Uploads, die ihr Presign-Fenster ueberschritten haben. */

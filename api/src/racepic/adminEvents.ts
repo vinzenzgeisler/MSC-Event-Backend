@@ -1,6 +1,6 @@
 import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { event, racepicAssignment, racepicEvent, racepicImage, racepicPhotographer, racepicPhotographerEvent } from '../db/schema';
+import { event, racepicAssignment, racepicDetection, racepicEvent, racepicImage, racepicMatchCandidate, racepicPhotographer, racepicPhotographerEvent, racepicProcessingStep } from '../db/schema';
 import { RacePicError } from './repository';
 import { presignGetObject } from './s3';
 
@@ -150,6 +150,8 @@ export type RacepicAdminImageListItem = {
   previewUrl: string | null;
   visibility: string;
   processingStatus: string;
+  processingError: string | null;
+  assignmentState: string;
   photographerDisplayName: string;
   capturedAt: string | null;
   createdAt: string;
@@ -182,6 +184,7 @@ export const listImagesForEvent = async (
       id: racepicImage.id,
       visibility: racepicImage.visibility,
       processingStatus: racepicImage.processingStatus,
+      processingError: racepicImage.processingError,
       photographerDisplayName: racepicPhotographer.displayName,
       capturedAt: racepicImage.capturedAt,
       createdAt: racepicImage.createdAt
@@ -192,6 +195,11 @@ export const listImagesForEvent = async (
     .orderBy(desc(racepicImage.createdAt))
     .limit(limit)
     .offset(offset);
+
+  const assignments = rows.length ? await db.select({ imageId: racepicAssignment.imageId, status: racepicAssignment.status })
+    .from(racepicAssignment).where(inArray(racepicAssignment.imageId, rows.map((row) => row.id))) : [];
+  const statusByImage = new Map<string, string[]>();
+  for (const assignment of assignments) statusByImage.set(assignment.imageId, [...(statusByImage.get(assignment.imageId) ?? []), assignment.status]);
 
   const items = await Promise.all(
     rows.map(async (row) => ({
@@ -208,6 +216,8 @@ export const listImagesForEvent = async (
           : await presignGetObject(`derived/${row.id}/preview.webp`, 300).catch(() => null),
       visibility: row.visibility,
       processingStatus: row.processingStatus,
+      processingError: row.processingError,
+      assignmentState: assignmentStateOf(statusByImage.get(row.id) ?? []),
       photographerDisplayName: row.photographerDisplayName,
       capturedAt: row.capturedAt ? row.capturedAt.toISOString() : null,
       createdAt: row.createdAt.toISOString()
@@ -215,6 +225,26 @@ export const listImagesForEvent = async (
   );
 
   return { items, total };
+};
+
+const assignmentStateOf = (statuses: string[]): string => {
+  if (statuses.some((status) => status === 'MANUALLY_CONFIRMED' || status === 'MANUALLY_CORRECTED')) return 'CONFIRMED';
+  if (statuses.includes('AUTO_MATCHED')) return 'AUTO_MATCHED';
+  if (statuses.includes('REVIEW_REQUIRED')) return 'REVIEW_REQUIRED';
+  return 'UNASSIGNED';
+};
+
+export const getImagePipelineStatus = async (imageId: string) => {
+  const db = await getDb();
+  const [image] = await db.select({ id: racepicImage.id, processingStatus: racepicImage.processingStatus, processingError: racepicImage.processingError, visibility: racepicImage.visibility, offerMode: racepicImage.offerMode, priceCents: racepicImage.priceCents }).from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
+  if (!image) throw new RacePicError('RACEPIC_IMAGE_NOT_FOUND');
+  const [steps, detections, candidates, assignments] = await Promise.all([
+    db.select().from(racepicProcessingStep).where(eq(racepicProcessingStep.imageId, imageId)).orderBy(desc(racepicProcessingStep.startedAt)),
+    db.select({ id: racepicDetection.id }).from(racepicDetection).where(eq(racepicDetection.imageId, imageId)),
+    db.select({ id: racepicMatchCandidate.id }).from(racepicMatchCandidate).where(eq(racepicMatchCandidate.imageId, imageId)),
+    db.select({ status: racepicAssignment.status }).from(racepicAssignment).where(eq(racepicAssignment.imageId, imageId))
+  ]);
+  return { ...image, assignmentState: assignmentStateOf(assignments.map((item) => item.status)), detectionCount: detections.length, candidateCount: candidates.length, steps };
 };
 
 /** Fuer die Fotografen-Liste im Admin (Paket 5), inkl. je Fotograf zugeteilter Events. */

@@ -166,3 +166,10 @@ Wie bisher: jedes Paket bekommt einen "Paket N – Ergebnis"-Abschnitt in der je
 repo-spezifischen `docs/memory-bank/racepic-progress.md`, plus Aktualisierung von
 `racepic-open-items.md`, wo relevant. Dieses Dokument (Roadmap) bleibt 1:1 in allen drei Repos
 synchron, wie `racepic-architecture.md` und `racepic-open-items.md`.
+# Ergänzung Pakete 19–24 (2026-09-22)
+
+1. **Galerie:** Ein Klick auf ein Bild öffnet überall denselben Dialog mit großer Vorschau, Fotograf, Lizenz, Kamera, Aufnahmedatum, Tags, Fahrzeugen und verwandten Bildern. Favoriten bleiben im Browser. Die öffentliche UI ist in Deutsch, Tschechisch, Englisch und Polnisch nutzbar.
+2. **Shop-Vorbereitung:** Das Studio verwaltet pro unveröffentlichtem Bild Titel, Beschreibung, Tags, Lizenz und EUR-Preis. Kostenpflichtige Bilder sind mit Wasserzeichen ausschließlich privat sichtbar. Warenkorb und kostenloser Download bleiben auf FREE-Bilder beschränkt. Checkout und öffentliche PAID-Angebote folgen erst nach Rechts- und Steuerprüfung.
+3. **Studio:** E-Mail-OTP und Passwort, selbstständige Registrierung mit bestätigter E-Mail und Admin-Freigabe. Die Session kann mit Refresh-Token bis zu 30 Tage bestehen. Ein geführter Passkey-Flow bleibt offen.
+4. **Admin:** Direkter Event-Einstieg, eine Übersicht der Bildzustände, sichtbare Pipeline-Schritte, Fahrerzuordnung und Reanalyse im Bilddetail sowie versionierte Matching-Gewichte im Formular.
+5. **KI:** Zusätzliche OCR-Crops bei fehlender Vollbild-Erkennung, räumliche Zuordnung von Text zu überlappenden Fahrzeugen, Rekognition-Fallback und wiederverwendete Referenzdaten. Vor Produktivfreigabe anhand realer, geprüfter Bilder vergleichen.

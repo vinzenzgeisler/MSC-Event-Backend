@@ -105,3 +105,14 @@ export const renderVariants = async (buffer: Buffer, copyrightLine: string): Pro
   }
   return results;
 };
+
+/** Private preview for paid drafts. The source remains private and this variant is never copied to public/. */
+export const renderWatermarkedPreview = async (previewBuffer: Buffer): Promise<Buffer> => {
+  const metadata = await sharp(previewBuffer, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+  const width = metadata.width ?? 1600;
+  const height = metadata.height ?? 1000;
+  const fontSize = Math.max(28, Math.round(width / 14));
+  const rows = Array.from({ length: 5 }, (_, row) => `<text x="-25%" y="${Math.round((row + 0.6) * height / 5)}">RacePic · VORSCHAU · RacePic · VORSCHAU</text>`).join('');
+  const overlay = Buffer.from(`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><g transform="rotate(-18 ${width / 2} ${height / 2})" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="bold" fill="white" fill-opacity="0.56" stroke="black" stroke-opacity="0.42" stroke-width="2" paint-order="stroke">${rows}</g></svg>`);
+  return sharp(previewBuffer, { limitInputPixels: MAX_INPUT_PIXELS }).composite([{ input: overlay }]).webp({ quality: 82 }).toBuffer();
+};

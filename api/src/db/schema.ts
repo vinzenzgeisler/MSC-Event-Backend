@@ -1634,7 +1634,7 @@ export const racepicPhotographer = pgTable('racepic_photographer', {
 }, (table) => ({
   statusCheck: check(
     'racepic_photographer_status_check',
-    sql`${table.status} in ('INVITED','ACTIVE_FREE','PAYMENT_ONBOARDING_REQUIRED','PAYMENT_ONBOARDING_PENDING','PAYMENT_ENABLED','PAYMENT_RESTRICTED','PAYMENT_DISABLED','DISABLED')`
+    sql`${table.status} in ('INVITED','PENDING_APPROVAL','ACTIVE_FREE','PAYMENT_ONBOARDING_REQUIRED','PAYMENT_ONBOARDING_PENDING','PAYMENT_ENABLED','PAYMENT_RESTRICTED','PAYMENT_DISABLED','DISABLED')`
   )
 }));
 
@@ -1773,6 +1773,10 @@ export const racepicImage = pgTable('racepic_image', {
   height: integer('height'),
   capturedAt: timestamp('captured_at', { withTimezone: true }),
   camera: jsonb('camera'),
+  title: text('title'),
+  description: text('description'),
+  tags: jsonb('tags').notNull().default(sql`'[]'::jsonb`),
+  priceCents: integer('price_cents'),
   processingStatus: text('processing_status').notNull().default('UPLOADED'),
   processingError: text('processing_error'),
   visibility: text('visibility').notNull().default('DRAFT'),
@@ -1791,7 +1795,8 @@ export const racepicImage = pgTable('racepic_image', {
     sql`${table.processingStatus} in ('UPLOADED','VALIDATED','DERIVED','ANALYZED','MATCHED','FAILED','DUPLICATE')`
   ),
   visibilityCheck: check('racepic_image_visibility_check', sql`${table.visibility} in ('DRAFT','PUBLISHED','HIDDEN','REMOVED')`),
-  offerModeCheck: check('racepic_image_offer_mode_check', sql`${table.offerMode} in ('FREE','PAID')`)
+  offerModeCheck: check('racepic_image_offer_mode_check', sql`${table.offerMode} in ('FREE','PAID')`),
+  priceCheck: check('racepic_image_price_check', sql`(${table.offerMode} = 'FREE' and ${table.priceCents} is null) or (${table.offerMode} = 'PAID' and ${table.priceCents} is not null and ${table.priceCents} > 0)`)
 }));
 
 export const racepicImageVariant = pgTable('racepic_image_variant', {

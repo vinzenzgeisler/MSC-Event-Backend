@@ -89,7 +89,9 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   // RacePic (Paket 7: Review-Queue), siehe api/src/racepic/reviewQueue.ts.
   racepic_assignment_reviewed: ['decision'],
   // RacePic (Paket 9: Datenschutz), siehe api/src/racepic/reviewQueue.ts.
-  racepic_participant_hidden: ['rejectedCount']
+  racepic_participant_hidden: ['rejectedCount'],
+  // RacePic (Paket 15: Studio-Redesign), siehe api/src/racepic/uploads.ts.
+  racepic_own_image_deleted: []
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

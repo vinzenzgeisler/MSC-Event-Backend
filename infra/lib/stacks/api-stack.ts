@@ -2065,6 +2065,13 @@ export class ApiStack extends Stack {
         integration: racePicIntegration,
         authorizer: photographerJwtAuthorizer
       });
+      // Paket 15 (Studio-Redesign): Fotograf-Selbstverwaltung, siehe api/src/racepic/uploads.ts.
+      this.api.addRoutes({
+        path: '/photographer/images/{imageId}',
+        methods: [apigwv2.HttpMethod.PATCH, apigwv2.HttpMethod.DELETE],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
 
       // Paket 4 (Publish-Worker): Veroeffentlichen/Verbergen/Entfernen, siehe api/src/racepic/publish.ts.
       this.api.addRoutes({

@@ -27,8 +27,10 @@ import {
   completeUpload,
   createBatch,
   createUpload,
+  deleteOwnDraftImage,
   getBatchForPhotographer,
   getUploadForPhotographer,
+  hideOwnImage,
   listMyImages,
   listPartsForResume,
   presignRemainingParts
@@ -112,6 +114,10 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 404, message: 'Image not found' };
     case 'RACEPIC_IMAGE_NOT_READY_TO_PUBLISH':
       return { status: 409, message: 'Image has not finished processing yet' };
+    case 'RACEPIC_IMAGE_ALREADY_REMOVED':
+      return { status: 409, message: 'Image was already removed' };
+    case 'RACEPIC_IMAGE_NOT_DELETABLE':
+      return { status: 409, message: 'Image can only be deleted while still a draft (not yet published)' };
     case 'RACEPIC_ASSIGNMENT_NOT_FOUND':
       return { status: 404, message: 'Assignment not found' };
     case 'RACEPIC_ASSIGNMENT_ALREADY_EXISTS':
@@ -183,6 +189,12 @@ const completeUploadSchema = z.object({
 
 const patchImageVisibilitySchema = z.object({
   visibility: z.enum(['PUBLISHED', 'HIDDEN', 'REMOVED'])
+});
+
+// Paket 15: Fotografen duerfen ihr eigenes Bild nur verbergen, nicht veroeffentlichen/entfernen
+// (siehe hideOwnImage in uploads.ts) - daher ein eigenes, engeres Schema statt des obigen.
+const patchOwnImageVisibilitySchema = z.object({
+  visibility: z.literal('HIDDEN')
 });
 
 // --- Paket 5: Admin-Basis ----------------------------------------------------------------------
@@ -258,13 +270,15 @@ const imageDto = (image: {
   visibility: string;
   bytes: number | null;
   createdAt: Date;
+  thumbUrl?: string | null;
 }) => ({
   id: image.id,
   eventId: image.eventId,
   processingStatus: image.processingStatus,
   visibility: image.visibility,
   bytes: image.bytes,
-  createdAt: image.createdAt
+  createdAt: image.createdAt,
+  thumbUrl: image.thumbUrl ?? null
 });
 
 /** Ladet das Fotografenprofil zum JWT und lehnt ab, wenn es noch nicht (fertig) geclaimt ist. */
@@ -788,6 +802,59 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 200) : 50;
       const images = await listMyImages({ photographerId: result.photographer.id, eventId: query.eventId, status: query.status, limit });
       return json(200, { ok: true, images: images.map(imageDto) });
+    }
+
+    // Fotograf-Selbstverwaltung (Paket 15), siehe uploads.ts hideOwnImage/deleteOwnDraftImage fuer
+    // die Begruendung der Einschraenkungen (nur verbergen, nur vor Veroeffentlichung loeschen).
+    const ownImageMatch = path.match(/^\/photographer\/images\/([^/]+)$/);
+    if (method === 'PATCH' && ownImageMatch) {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      try {
+        const input = patchOwnImageVisibilitySchema.parse(parseJsonBody(event));
+        const imageId = decodeURIComponent(ownImageMatch[1]);
+        await hideOwnImage(result.photographer.id, imageId);
+        const db = await getDb();
+        await writeAuditLog(db, {
+          actorUserId: result.photographer.cognitoSub,
+          action: 'racepic_image_visibility_changed',
+          entityType: 'racepic_image',
+          entityId: imageId,
+          payload: { visibility: input.visibility }
+        });
+        return json(200, { ok: true, visibility: input.visibility });
+      } catch (error) {
+        if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
+        if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+    if (method === 'DELETE' && ownImageMatch) {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      try {
+        const imageId = decodeURIComponent(ownImageMatch[1]);
+        await deleteOwnDraftImage(result.photographer.id, imageId);
+        const db = await getDb();
+        await writeAuditLog(db, {
+          actorUserId: result.photographer.cognitoSub,
+          action: 'racepic_own_image_deleted',
+          entityType: 'racepic_image',
+          entityId: imageId,
+          payload: {}
+        });
+        return json(200, { ok: true });
+      } catch (error) {
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
     }
 
     // --- Admin: Veroeffentlichen/Verbergen/Entfernen (Paket 4: Publish-Worker) -----------------

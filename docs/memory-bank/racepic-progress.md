@@ -22,6 +22,7 @@ Alle Arbeit läuft im Branch `feature/racepic-planning` (noch nicht nach `main` 
 | 10a | Pilot 12. OLD 2026 (Backend-Teil): Kalibrierungs-Tooling | **Tooling erledigt (ungedeployed)** | siehe „Paket 10 – Ergebnis" unten; tatsächliche Piloten-Durchführung ist ein operativer Schritt, kein Code |
 | 12 | Öffentliches Fotografenprofil (Backend-Teil): Slug, Manifest | **erledigt (ungedeployed)** | siehe „Paket 12 – Ergebnis" unten; Seite selbst in msc-website |
 | 13 | Entwicklungsumgebung: CORS, CI/CD-Deploy-Lücke für `RacePicStack` | **erledigt (ungedeployed)** | siehe „Paket 13 – Ergebnis" unten |
+| 15 | Studio-Redesign (Backend-Teil): Eigene-Bilder-Verwaltung | **erledigt (ungedeployed)** | siehe „Paket 15 – Ergebnis" unten; UI siehe msc-website |
 
 Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implementiert, auch wenn die UI dazu in MSC-Event-Frontend liegt (Paket 5/7 dort).
 
@@ -353,6 +354,31 @@ Ergebnisse (das Event-Manifest enthält nur Teilnehmer mit einer aktiven Zuordnu
 **Noch zu tun (operativ):** Nach dem Deploy einmal `POST /admin/racepic/events/{id}/rematch`
 auslösen (Button „Re-Match auslösen" in `/admin/racepic` unter „Konfigurieren"), damit das schon
 analysierte Testbild eine Zuordnung bekommt – kein erneuter Rekognition-/Bedrock-Aufruf nötig.
+
+## Paket 15 – Ergebnis (Backend-Teil, 2026-09-22)
+
+Backend-Ergänzungen für das Studio-Redesign, siehe
+[racepic-ux-redesign-plan.md](./racepic-ux-redesign-plan.md). Auf `feature/racepic-ux-redesign`
+(nicht direkt auf `main`, um nicht jeden kleinen UI-Commit einen Prod-Deploy-Freigabe-Prompt
+auslösen zu lassen – anders als die Hotfixes zuvor).
+
+- `api/src/racepic/uploads.ts`: `listMyImages` liefert jetzt zusätzlich eine presignte
+  Vorschau-URL je Bild (analog zu `adminEvents.listImagesForEvent`/Paket 11), damit Fotograf:innen
+  auch unveröffentlichte eigene Bilder als Thumbnail sehen. Neu: `hideOwnImage` (verbergen,
+  delegiert an `publish.ts` `hideImage`) und `deleteOwnDraftImage` (echtes Löschen, nur solange
+  `visibility='DRAFT'` – danach nur noch über den Admin-Weg, Audit-Trail bleibt dort erhalten).
+  Beides war in Abschnitt H des Architekturplans vorgesehen, aber nie gebaut (derselbe
+  Musterfund wie bei Paket 5/7/11).
+- `api/src/racepic/handler.ts`: `PATCH /photographer/images/{id}` (nur `visibility: 'HIDDEN'`
+  erlaubt – veröffentlichen/entfernen bleibt Admin-Sache) und
+  `DELETE /photographer/images/{id}`.
+- `api/src/audit/log.ts`: neue Audit-Action `racepic_own_image_deleted`; die PATCH-Route nutzt die
+  bestehende `racepic_image_visibility_changed`-Action weiter (gleiches Ereignis, nur ein anderer
+  Akteur).
+- `infra/lib/stacks/api-stack.ts`: Route `/photographer/images/{imageId}` (PATCH, DELETE)
+  registriert.
+- **Verifiziert:** `tsc --noEmit` (`api/`, `infra/`) und `npm --workspace api test` grün. **Nicht
+  deployed** (Feature-Branch, noch kein Merge nach `main`).
 
 ## Bestandsaufnahme aller Pakete (2026-09-22)
 

@@ -4,12 +4,14 @@ import { getDb } from '../db/client';
 import {
   racepicEvent,
   racepicImage,
+  racepicImageVariant,
   racepicLicense,
   racepicPhotographerEvent,
   racepicUpload,
   racepicUploadBatch
 } from '../db/schema';
 import { RacePicError } from './repository';
+import { hideImage } from './publish';
 import {
   abortMultipartUpload,
   buildIncomingKey,
@@ -18,6 +20,7 @@ import {
   deleteObject,
   headObject,
   listUploadedParts,
+  presignGetObject,
   presignPutObject,
   presignUploadParts
 } from './s3';
@@ -285,17 +288,35 @@ export const abortUpload = async (upload: typeof racepicUpload.$inferSelect, bat
     .where(eq(racepicUploadBatch.id, batch.id));
 };
 
+// Bilder, deren processing_status vor DERIVED liegt, haben noch keine `derived/{id}/thumb.webp`
+// (die legt erst der Ingest-Worker an, siehe ingestWorker.ts) - fuer die gilt kein Presign-Versuch.
+const HAS_THUMB_STATUSES = ['DERIVED', 'ANALYZED', 'MATCHED'];
+
+/**
+ * Fuer die "Meine Bilder"-Ansicht im Studio (Paket 15): dieselbe presignte Vorschau-URL wie in der
+ * Admin-Bildliste (`adminEvents.listImagesForEvent`, Paket 11) - auch unveroeffentlichte, private
+ * eigene Bilder sollen fuer den Fotografen sichtbar sein, nicht nur nach der Veroeffentlichung.
+ */
 export const listMyImages = async (input: { photographerId: string; eventId?: string; status?: string; limit: number }) => {
   const db = await getDb();
   const conditions = [eq(racepicImage.photographerId, input.photographerId)];
   if (input.eventId) conditions.push(eq(racepicImage.eventId, input.eventId));
   if (input.status) conditions.push(eq(racepicImage.processingStatus, input.status));
-  return db
+  const rows = await db
     .select()
     .from(racepicImage)
     .where(and(...conditions))
     .orderBy(racepicImage.createdAt)
     .limit(input.limit);
+
+  return Promise.all(
+    rows.map(async (row) => ({
+      ...row,
+      thumbUrl: HAS_THUMB_STATUSES.includes(row.processingStatus)
+        ? await presignGetObject(`derived/${row.id}/thumb.webp`, 300).catch(() => null)
+        : null
+    }))
+  );
 };
 
 /** Fuer den Reconciler (Paket 3): Uploads, die ihr Presign-Fenster ueberschritten haben. */
@@ -309,4 +330,36 @@ export const listExpiredOpenUploads = async (limit: number) => {
     .where(and(inArray(racepicUpload.status, ['INITIATED', 'MULTIPART_OPEN']), isNull(racepicUpload.completedAt)))
     .limit(limit)
     .then((rows) => rows.filter((row) => row.upload.expiresAt.getTime() < now.getTime()));
+};
+
+/**
+ * Bild-Selbstverwaltung fuer Fotograf:innen (Paket 15), siehe Architekturplan Abschnitt H
+ * ("`PATCH /photographer/images/{id}` ... verbergen, `DELETE` (Stufe recent)") - war seit Paket 3
+ * vorgesehen, aber nie gebaut (derselbe Musterfund wie bei Paket 5/7/11).
+ *
+ * Bewusst eingeschraenkt: ein Fotograf darf sein eigenes Bild **verbergen**, aber nicht selbst
+ * veroeffentlichen oder endgueltig entfernen (das bleibt Admin-Moderation, siehe `publish.ts`
+ * `publishImage`/`removeImage`) - und **loeschen** nur, solange es noch nie veroeffentlicht war
+ * (`visibility='DRAFT'`), danach nur ueber den Admin-Weg (Audit-Trail bleibt erhalten).
+ */
+export const hideOwnImage = async (photographerId: string, imageId: string): Promise<void> => {
+  const db = await getDb();
+  const [image] = await db.select().from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
+  if (!image || image.photographerId !== photographerId) throw new RacePicError('RACEPIC_IMAGE_NOT_FOUND');
+  if (image.visibility === 'REMOVED') throw new RacePicError('RACEPIC_IMAGE_ALREADY_REMOVED');
+  await hideImage(imageId);
+};
+
+export const deleteOwnDraftImage = async (photographerId: string, imageId: string): Promise<void> => {
+  const db = await getDb();
+  const [image] = await db.select().from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
+  if (!image || image.photographerId !== photographerId) throw new RacePicError('RACEPIC_IMAGE_NOT_FOUND');
+  if (image.visibility !== 'DRAFT') throw new RacePicError('RACEPIC_IMAGE_NOT_DELETABLE');
+
+  const variants = await db.select({ s3Key: racepicImageVariant.s3Key }).from(racepicImageVariant).where(eq(racepicImageVariant.imageId, imageId));
+  await Promise.all(variants.map((variant) => deleteObject(variant.s3Key)));
+  if (image.originalKey) await deleteObject(image.originalKey);
+
+  await db.delete(racepicImageVariant).where(eq(racepicImageVariant.imageId, imageId));
+  await db.delete(racepicImage).where(eq(racepicImage.id, imageId));
 };

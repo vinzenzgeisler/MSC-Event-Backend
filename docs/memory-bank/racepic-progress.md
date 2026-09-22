@@ -281,6 +281,41 @@ String) – `cdk synth dreiecksrennen-prod-racepic-stack` lief danach sauber dur
 Direkt auf `main` committed (Hotfix nach fehlgeschlagenem Prod-Deploy, kein Feature-Branch-Umweg
 nötig, da `feature/racepic-planning` bereits vollständig nach `main` gemergt war).
 
+## Bugfix (2026-09-22, gefunden beim ersten echten Foto-Upload+Analyze-Lauf)
+
+Nach dem ersten echten Fotografen-Upload gegen prod war das Bild im Admin nirgends zu finden.
+CloudWatch-Logs des `RacePicAnalyzeWorker` zeigten:
+
+```
+{ eventType: 'racepic_analyze.embedding_failed', errorCode: 'AccessDeniedException' }
+{ eventType: 'racepic_analyze.failed', errorCode: '22003' }
+```
+
+`AccessDeniedException` beim Bedrock-Aufruf ist die schon bekannte, noch offene
+AWS-Kontoverifizierung (siehe `racepic-open-items.md` A.3) – wird bereits korrekt abgefangen
+und stoppt die restliche Analyse nicht (Architekturprinzip: "kein einzelnes KI-Modell loest
+zuverlaessig alle Zuordnungen"). **`22003` (Postgres `numeric_value_out_of_range`) war aber ein
+echter, zweiter Bug:** `racepic_detection.confidence` und `racepic_text_detection.confidence`
+waren als `numeric(5, 4)` angelegt (Bereich max. 9.9999), Rekognition liefert `Confidence` aber
+im Bereich **0-100**, nicht 0-1 – `matchWorker.ts` erwartet das beim Lesen sogar bereits explizit
+(teilt durch 100). Jeder Rekognition-Treffer (typischerweise 50-100 % Konfidenz) ließ den Insert
+mit einem Overflow scheitern, was den kompletten Analyze-Lauf für das Bild abbrach, noch bevor
+irgendeine Zuordnung oder ein Review-Queue-Eintrag entstehen konnte – daher "kein Bild sichtbar".
+
+**Fix:** `api/migrations/0099_racepic_detection_confidence_range.sql` – beide Spalten auf
+`numeric(7, 4)` erweitert (deckt 0.0000-999.9999 ab), `schema.ts` entsprechend angepasst. Kein
+Anwendungscode geändert, da `matchWorker.ts` die 0-100-Skala bereits korrekt voraussetzt.
+
+**Verifiziert:** `tsc --noEmit` und `npm --workspace api test` (alle Bestands-Tests) grün. Direkt
+auf `main` committed (gleiche Begründung wie oben).
+
+**Noch zu tun (kein Code, operativ):** Das bereits hochgeladene Testbild hängt vermutlich in
+`processing_status=ANALYZED`-Vorstufe bzw. hat einen fehlgeschlagenen `racepic_processing_step`
+(`step='analyze'`) und muss nach dem Deploy dieser Migration einmal per
+`POST /admin/racepic/images/{id}/reanalyze` neu angestoßen werden (Bild-ID über die neue
+Bildliste in `/admin/racepic` unter „Konfigurieren" → „Bilder" finden, sofern schon durch den
+Ingest-Worker verarbeitet).
+
 ## Bestandsaufnahme aller Pakete (2026-09-22)
 
 Auf Bitte des Vereins wurde der gesamte bisherige Stand (Pakete 0–10) über alle drei Repos

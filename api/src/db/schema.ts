@@ -1857,7 +1857,8 @@ export const racepicDetection = pgTable('racepic_detection', {
   analysisId: uuid('analysis_id').references(() => racepicAiAnalysis.id, { onDelete: 'set null' }),
   label: text('label').notNull(),
   bbox: jsonb('bbox').notNull(),
-  confidence: numeric('confidence', { precision: 5, scale: 4 }),
+  // 0-100 (Rekognition-Skala), nicht 0-1 - siehe migrations/0099_racepic_detection_confidence_range.sql.
+  confidence: numeric('confidence', { precision: 7, scale: 4 }),
   dominantColors: jsonb('dominant_colors'),
   embedding: vector('embedding', { dimensions: 1024 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
@@ -1874,7 +1875,8 @@ export const racepicTextDetection = pgTable('racepic_text_detection', {
     .references(() => racepicImage.id, { onDelete: 'cascade' }),
   text: text('text').notNull(),
   normalized: text('normalized').notNull(),
-  confidence: numeric('confidence', { precision: 5, scale: 4 }),
+  // 0-100 (Rekognition-Skala), nicht 0-1 - siehe migrations/0099_racepic_detection_confidence_range.sql.
+  confidence: numeric('confidence', { precision: 7, scale: 4 }),
   bbox: jsonb('bbox').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 }, (table) => ({

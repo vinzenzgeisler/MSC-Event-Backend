@@ -179,10 +179,15 @@ export const listImagesForEvent = async (
     rows.map(async (row) => ({
       id: row.id,
       // Nur die private derived/-Vorschau (kein Abhaengigkeit davon, ob das Bild schon
-      // oeffentlich ist) - dieselbe Quelle wie die Review-Queue (Paket 7).
-      previewUrl: ['UPLOADED', 'VALIDATED'].includes(row.processingStatus)
-        ? null
-        : await presignGetObject(`derived/${row.id}/preview.webp`, 300).catch(() => null),
+      // oeffentlich ist) - dieselbe Quelle wie die Review-Queue (Paket 7). Bug gefunden
+      // 2026-09-22: bei `visibility=REMOVED` loescht `removeImage()` (publish.ts) alle
+      // `derived/`-Varianten aus S3 - ein Presign dafuer war trotzdem "erfolgreich" (S3-Presigning
+      // prueft nicht, ob das Objekt existiert), das Bild im Admin-Grid lud dann als kaputtes <img>
+      // statt gar keins anzuzeigen.
+      previewUrl:
+        row.visibility === 'REMOVED' || ['UPLOADED', 'VALIDATED'].includes(row.processingStatus)
+          ? null
+          : await presignGetObject(`derived/${row.id}/preview.webp`, 300).catch(() => null),
       visibility: row.visibility,
       processingStatus: row.processingStatus,
       photographerDisplayName: row.photographerDisplayName,

@@ -7,9 +7,13 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
  * Region-Check in Paket 1), Cohere Embed v4 laeuft dagegen in Irland - einer EU-Region. Die
  * Analyze-Worker-Lambda selbst bleibt in eu-central-1 und ruft hier per Cross-Region-Aufruf.
  *
- * Modell und Request-/Response-Format anhand der aktuellen AWS-Dokumentation verifiziert
- * (docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html, Stand 2026-09-21):
- * Modell-ID `cohere.embed-v4:0`, Bild-Input ueber `images: ["data:<mime>;base64,..."]`.
+ * Modell-ID `cohere.embed-v4:0`, Bild-Input ueber `images: ["data:<mime>;base64,..."]`. Das
+ * Response-Format wurde urspruenglich (Paket 6) anhand der AWS-Doku als
+ * `{ response_type: 'embeddings_floats', embeddings: number[][] }` angenommen - der erste echte
+ * Live-Aufruf (2026-09-22, nach Abschluss der AWS-Kontoverifizierung fuer Bedrock) zeigte das
+ * tatsaechliche Format: `{ response_type: 'embeddings_by_type', embeddings: { float: number[][] } }`
+ * - `embeddings` ist nach Embedding-Typ verschluesselt (`embedding_types: ['float']` steuert,
+ * welche Keys vorhanden sind), nicht direkt ein Array.
  */
 
 const EMBEDDING_MODEL_ID = process.env.RACEPIC_EMBEDDING_MODEL_ID ?? 'cohere.embed-v4:0';
@@ -18,8 +22,8 @@ export const EMBEDDING_DIMENSIONS = 1024; // muss zu vector(1024) in db/schema.t
 const getClient = () => new BedrockRuntimeClient({ region: process.env.RACEPIC_EMBEDDING_REGION ?? 'eu-west-1' });
 
 type CohereEmbedV4FloatResponse = {
-  response_type: 'embeddings_floats';
-  embeddings: number[][];
+  response_type: 'embeddings_by_type';
+  embeddings: { float?: number[][] };
 };
 
 /**
@@ -41,7 +45,7 @@ export const embedImage = async (jpegBuffer: Buffer): Promise<number[]> => {
     new InvokeModelCommand({ modelId: EMBEDDING_MODEL_ID, contentType: 'application/json', accept: 'application/json', body })
   );
   const parsed = JSON.parse(Buffer.from(result.body).toString('utf8')) as CohereEmbedV4FloatResponse;
-  const embedding = parsed.embeddings?.[0];
+  const embedding = parsed.embeddings?.float?.[0];
   if (!embedding || embedding.length !== EMBEDDING_DIMENSIONS) {
     throw new Error('RACEPIC_EMBEDDING_INVALID_RESPONSE');
   }

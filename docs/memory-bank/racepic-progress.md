@@ -231,7 +231,13 @@ Reste. Ergebnis und daraus folgende Anpassungen:
   Entwickler-Werkzeuge kann den Piloten in der Praxis so nicht durchführen. Empfehlung: ein
   zusätzliches Frontend-Paket (informell "Paket 11") in MSC-Event-Frontend, das diese vier Punkte
   in `/admin/racepic` und `/admin/racepic/review/:eventId` nachrüstet, bevor der echte Pilot
-  startet. Nicht in dieser Sitzung umgesetzt, siehe Rückfrage an den Verein.
+  startet. Nach Rückfrage vom Verein priorisiert und noch am selben Tag umgesetzt (siehe
+  `MSC-Event-Frontend/docs/memory-bank/racepic-progress.md`, „Paket 11 – Ergebnis"); zusätzlich
+  dabei ein fünfter, erst beim Bauen der UI entdeckter Fund behoben: es gab **keinen** Weg, ein
+  frisch hochgeladenes (`visibility=DRAFT`) Bild ohne bestehende Zuordnung admin-seitig zu
+  erreichen (Review-Queue zeigt nur `REVIEW_REQUIRED`, Fahrer-Ansicht nur bereits zugeordnete
+  Bilder) – neuer Endpunkt `GET /admin/racepic/events/{id}/images` (`adminEvents.ts`,
+  `listImagesForEvent`, paginiert, filterbar nach `visibility`/`processingStatus`) schließt das.
 
 ## Entscheidungen aus diesem Repo
 

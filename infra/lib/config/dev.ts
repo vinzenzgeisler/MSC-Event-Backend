@@ -49,10 +49,13 @@ const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrat
   // DEV_ENABLE_RACEPIC=true gezielt fuer den Test-Profil-Deploy einschaltbar.
   enableRacePic: (process.env.DEV_ENABLE_RACEPIC ?? '').trim().toLowerCase() === 'true',
   racepicMediaCorsAllowedOrigins: [...(devPublicBaseUrl ? [devPublicBaseUrl] : []), 'http://localhost:5173', 'http://localhost:4173'],
-  racepicPhotographerRelyingPartyId: (process.env.DEV_RACEPIC_RELYING_PARTY_ID ?? 'localhost').trim(),
+  // ACHTUNG: `??` faengt nur `undefined`/`null` ab, nicht einen von GitHub Actions gesetzten,
+  // aber leeren String - `${{ vars.X }}` liefert bei einer nicht gesetzten Environment-Variable
+  // IMMER einen leeren String (siehe Bug-Fund + ausfuehrlicher Kommentar in prod.ts).
+  racepicPhotographerRelyingPartyId: (process.env.DEV_RACEPIC_RELYING_PARTY_ID ?? '').trim() || 'localhost',
   racepicSigningPublicKeyPem: devRacePicSigningPublicKeyPem,
-  racepicWebsiteBaseUrl: (process.env.DEV_RACEPIC_WEBSITE_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, ''),
-  racepicMonthlyBudgetUsd: Number(process.env.DEV_RACEPIC_MONTHLY_BUDGET_USD ?? '20')
+  racepicWebsiteBaseUrl: ((process.env.DEV_RACEPIC_WEBSITE_BASE_URL ?? '').trim() || 'http://localhost:8080').replace(/\/$/, ''),
+  racepicMonthlyBudgetUsd: Number((process.env.DEV_RACEPIC_MONTHLY_BUDGET_USD ?? '').trim() || '20')
 };
 
 const devIdleConfig: StageConfig = {

@@ -255,6 +255,32 @@ gegen das Prod-Backend getestet werden. Dabei zwei weitere, bisher unentdeckte L
   `npm --workspace infra run build` (identisch zu `validate_common` in der CI) beide grün,
   `.github/workflows/ci-cd.yml` mit `js-yaml`/`@action-validator/cli` syntaktisch geprüft.
 
+### Hotfix nach dem ersten echten Prod-Deploy-Versuch (2026-09-22)
+
+Der erste echte `deploy_prod`-Lauf (GitHub Actions Run 35708419318, nach Freigabe durch den
+Pflicht-Reviewer) scheiterte im neuen "Deploy Prod RacePic stack"-Schritt:
+
+```
+«PasskeyRelyingPartyIdLength» passkeyRelyingPartyId length must be (inclusively) between 1 and 63, got 0
+```
+
+**Ursache:** `(process.env.PROD_RACEPIC_RELYING_PARTY_ID ?? 'msc-oberlausitz.de').trim()` in
+`prod.ts` – `??` fängt nur `undefined`/`null` ab. GitHub Actions liefert für eine **nicht
+gesetzte** `${{ vars.X }}`-Referenz aber immer einen **leeren String**, nie "gar nicht gesetzt"
+(nur `PROD_ENABLE_RACEPIC` wurde als Variable gesetzt, siehe „Muss gesetzt werden" oben – alle
+anderen `PROD_RACEPIC_*`-Variablen existieren als GitHub-Variable nicht und kommen deshalb leer
+an). Der Default griff also nie, der leere String landete direkt im Cognito-`UserPool`.
+
+**Fix:** in `prod.ts` und `dev.ts` durchgängig auf `(process.env.X ?? '').trim() || 'default'`
+umgestellt (erst trimmen, dann auf Leerheit prüfen, dann Default) – betrifft
+`racepicPhotographerRelyingPartyId`, `racepicWebsiteBaseUrl`, `racepicMonthlyBudgetUsd` in beiden
+Dateien (`racepicSigningPublicKeyPem` hatte dieses Muster bereits korrekt). Lokal mit exakt den
+CI-Bedingungen reproduziert (`PROD_ENABLE_RACEPIC=true`, alle übrigen `PROD_RACEPIC_*` als leerer
+String) – `cdk synth dreiecksrennen-prod-racepic-stack` lief danach sauber durch.
+
+Direkt auf `main` committed (Hotfix nach fehlgeschlagenem Prod-Deploy, kein Feature-Branch-Umweg
+nötig, da `feature/racepic-planning` bereits vollständig nach `main` gemergt war).
+
 ## Bestandsaufnahme aller Pakete (2026-09-22)
 
 Auf Bitte des Vereins wurde der gesamte bisherige Stand (Pakete 0–10) über alle drei Repos

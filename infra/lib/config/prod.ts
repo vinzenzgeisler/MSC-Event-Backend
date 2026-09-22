@@ -78,9 +78,16 @@ export const resolveProdConfig = (): StageConfig => {
     // Manifest-/Bild-CORS-Policy auf dem CloudFront-Verhalten (racepic-stack.ts), nicht fuer
     // direkten S3-Zugriff (der Browser spricht immer mit CloudFront/OAC).
     racepicMediaCorsAllowedOrigins: [prodPublicBaseUrl, 'https://www.msc-oberlausitz.de', 'https://msc-oberlausitz.de', 'http://localhost:8080'],
-    racepicPhotographerRelyingPartyId: (process.env.PROD_RACEPIC_RELYING_PARTY_ID ?? 'msc-oberlausitz.de').trim(),
+    // ACHTUNG: `??` faengt nur `undefined`/`null` ab, nicht einen von GitHub Actions gesetzten,
+    // aber leeren String - `${{ vars.X }}` liefert bei einer nicht gesetzten Environment-Variable
+    // IMMER einen leeren String, nie "unset" (siehe .github/workflows/ci-cd.yml). Deshalb hier
+    // durchgaengig erst trimmen und auf Leerheit pruefen, bevor der Default greift (Bug gefunden
+    // beim ersten echten Prod-Deploy am 2026-09-22: `racepicPhotographerRelyingPartyId` landete
+    // als leerer String im Cognito-Pool, was CDK mit "passkeyRelyingPartyId length must be
+    // between 1 and 63, got 0" quittiert hat).
+    racepicPhotographerRelyingPartyId: (process.env.PROD_RACEPIC_RELYING_PARTY_ID ?? '').trim() || 'msc-oberlausitz.de',
     racepicSigningPublicKeyPem: (process.env.PROD_RACEPIC_SIGNING_PUBLIC_KEY_PEM ?? '').trim() || undefined,
-    racepicWebsiteBaseUrl: (process.env.PROD_RACEPIC_WEBSITE_BASE_URL ?? 'https://www.msc-oberlausitz.de').replace(/\/$/, ''),
-    racepicMonthlyBudgetUsd: Number(process.env.PROD_RACEPIC_MONTHLY_BUDGET_USD ?? '50')
+    racepicWebsiteBaseUrl: ((process.env.PROD_RACEPIC_WEBSITE_BASE_URL ?? '').trim() || 'https://www.msc-oberlausitz.de').replace(/\/$/, ''),
+    racepicMonthlyBudgetUsd: Number((process.env.PROD_RACEPIC_MONTHLY_BUDGET_USD ?? '').trim() || '50')
   };
 };

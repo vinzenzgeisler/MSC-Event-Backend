@@ -286,7 +286,76 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
     'application/json'
   );
 
-  await invalidateCloudFront([`/manifests/${slug}/*`, '/manifests/events.json']);
+  await regenerateGlobalDiscoveryManifests(publishedEvents);
+  await invalidateCloudFront([`/manifests/${slug}/*`, '/manifests/events.json', '/manifests/discover.json', '/manifests/search-index.json']);
+};
+
+const DISCOVER_IMAGE_LIMIT = 60;
+
+/**
+ * Event-uebergreifende Manifeste fuer die Landingpage im Unsplash/Airbnb-Stil (Paket 17), siehe
+ * racepic-ux-redesign-plan.md. Bleibt konsistent mit dem Architekturprinzip "oeffentlicher
+ * Traffic trifft nie Lambda/DB" (weiterhin nur CDN-Fetch von der Website aus) - der Preis dafuer
+ * ist, dass hier bei **jeder** Publish-/Unpublish-Aktion **alle** veroeffentlichten Events neu
+ * abgefragt werden (kein periodischer Job, kein inkrementelles Update). Bei der in Abschnitt M
+ * angenommenen Groessenordnung (einzelne Events pro Jahr, jeweils einige hundert Teilnehmer)
+ * bleibt das unproblematisch; sollte RacePic auf sehr viele Events wachsen, muesste das
+ * inkrementell werden.
+ */
+const regenerateGlobalDiscoveryManifests = async (publishedEvents: (typeof racepicEvent.$inferSelect)[]): Promise<void> => {
+  const db = await getDb();
+
+  const discoverRows =
+    publishedEvents.length > 0
+      ? await db
+          .select({
+            imageId: racepicImage.id,
+            eventSlug: racepicEvent.slug,
+            eventTitle: racepicEvent.title,
+            capturedAt: racepicImage.capturedAt,
+            createdAt: racepicImage.createdAt
+          })
+          .from(racepicImage)
+          .innerJoin(racepicEvent, eq(racepicEvent.eventId, racepicImage.eventId))
+          .where(and(eq(racepicImage.visibility, 'PUBLISHED'), inArray(racepicEvent.eventId, publishedEvents.map((row) => row.eventId))))
+          .orderBy(desc(racepicImage.createdAt))
+          .limit(DISCOVER_IMAGE_LIMIT)
+      : [];
+
+  await putObject(
+    'manifests/discover.json',
+    Buffer.from(
+      JSON.stringify(
+        discoverRows.map((row) => ({
+          imageId: row.imageId,
+          thumbUrl: `/public/${row.imageId}/thumb.webp`,
+          previewUrl: `/public/${row.imageId}/preview.webp`,
+          eventSlug: row.eventSlug,
+          eventTitle: row.eventTitle,
+          capturedAt: row.capturedAt ? row.capturedAt.toISOString() : null
+        }))
+      )
+    ),
+    'application/json'
+  );
+
+  const searchEntries: { participantKey: string; eventSlug: string; eventTitle: string; startNumber: string; displayName: string; make: string | null; model: string | null; className: string }[] = [];
+  for (const eventRow of publishedEvents) {
+    const { participants } = await buildManifestData(eventRow.eventId);
+    for (const participant of participants) {
+      searchEntries.push({
+        participantKey: participant.participantKey,
+        eventSlug: eventRow.slug,
+        eventTitle: eventRow.title,
+        startNumber: participant.startNumber,
+        displayName: participant.displayName,
+        make: participant.make,
+        model: participant.model,
+        className: participant.className
+      });
+    }
+  }
+  await putObject('manifests/search-index.json', Buffer.from(JSON.stringify(searchEntries)), 'application/json');
 };
 
 /**
@@ -309,7 +378,13 @@ export const unpublishEventManifests = async (previousSlug: string): Promise<voi
     'application/json'
   );
 
-  await invalidateCloudFront([`/manifests/${previousSlug}/*`, '/manifests/events.json']);
+  await regenerateGlobalDiscoveryManifests(publishedEvents);
+  await invalidateCloudFront([
+    `/manifests/${previousSlug}/*`,
+    '/manifests/events.json',
+    '/manifests/discover.json',
+    '/manifests/search-index.json'
+  ]);
 };
 
 /**

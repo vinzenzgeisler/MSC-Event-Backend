@@ -24,6 +24,7 @@ Alle Arbeit läuft im Branch `feature/racepic-planning` (noch nicht nach `main` 
 | 13 | Entwicklungsumgebung: CORS, CI/CD-Deploy-Lücke für `RacePicStack` | **erledigt (ungedeployed)** | siehe „Paket 13 – Ergebnis" unten |
 | 15 | Studio-Redesign (Backend-Teil): Eigene-Bilder-Verwaltung | **erledigt (ungedeployed)** | siehe „Paket 15 – Ergebnis" unten; UI siehe msc-website |
 | 16 | Admin-Redesign (Backend-Teil): Zuordnungen je Bild | **erledigt (ungedeployed)** | siehe „Paket 16 – Ergebnis" unten; UI siehe MSC-Event-Frontend |
+| 17 | Landingpage (Backend-Teil): globale Discover-/Suchindex-Manifeste | **erledigt (ungedeployed)** | siehe „Paket 17 – Ergebnis" unten; UI siehe msc-website |
 
 Admin-Endpunkte für die Review-Queue (Abschnitt H) werden ebenfalls hier implementiert, auch wenn die UI dazu in MSC-Event-Frontend liegt (Paket 5/7 dort).
 
@@ -397,6 +398,28 @@ Backend-Ergänzung für das Admin-Redesign, siehe
   – `addAssignment` – bleibt unverändert, nur um `GET` erweitert).
 - **Verifiziert:** `tsc --noEmit` (`api/`, `infra/`) und `npm --workspace api test` grün. **Nicht
   deployed.**
+
+## Paket 17 – Ergebnis (Backend-Teil, 2026-09-22)
+
+Event-übergreifende Manifeste für die öffentliche Landingpage im Unsplash/Airbnb-Stil, siehe
+[racepic-ux-redesign-plan.md](./racepic-ux-redesign-plan.md). Auf `feature/racepic-ux-redesign`.
+
+- `api/src/racepic/publish.ts`: neue `regenerateGlobalDiscoveryManifests(publishedEvents)`,
+  aufgerufen am Ende von `regenerateManifestsForEvent` **und** `unpublishEventManifests`
+  (dieselben Stellen, die schon `manifests/events.json` schreiben):
+  - `manifests/discover.json`: die neuesten 60 veröffentlichten Bilder über **alle**
+    veröffentlichten Events (imageId, thumb-/previewUrl, eventSlug, eventTitle, capturedAt).
+  - `manifests/search-index.json`: flache Teilnehmerliste über **alle** veröffentlichten Events
+    (nutzt die bestehende `buildManifestData(eventId)` je Event, nur um `eventSlug`/`eventTitle`
+    ergänzt).
+  - Bewusster Kostenkompromiss (dokumentiert im Code): bei **jeder** Publish-/Unpublish-Aktion
+    werden **alle** veröffentlichten Events neu abgefragt (kein periodischer Job, kein
+    inkrementelles Update) – bei der angenommenen Größenordnung (einzelne Events pro Jahr, je
+    einige hundert Teilnehmer) unproblematisch, bleibt aber ein offener Punkt, falls RacePic auf
+    sehr viele Events wächst.
+  - Bleibt konsistent mit dem Architekturprinzip "öffentlicher Traffic trifft nie Lambda/DB" –
+    beide Dateien werden weiterhin nur per CDN-Fetch von der Website gelesen.
+- **Verifiziert:** `tsc --noEmit` (`api/`) und `npm --workspace api test` grün. **Nicht deployed.**
 
 ## Bestandsaufnahme aller Pakete (2026-09-22)
 

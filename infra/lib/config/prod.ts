@@ -38,7 +38,12 @@ export const resolveProdConfig = (): StageConfig => {
       'https://signing.event.msc-oberlausitz.de',
       'https://sim.event.msc-oberlausitz.de',
       'https://www.msc-oberlausitz.de',
-      'https://msc-oberlausitz.de'
+      'https://msc-oberlausitz.de',
+      // 2026-09-22: die oeffentliche RacePic-Website (msc-website) laeuft bewusst noch nicht auf
+      // der echten Domain (siehe racepic-progress.md), sondern nur lokal gegen das Prod-Backend -
+      // ohne diesen Origin wuerde `POST /public/racepic/images/{id}/download` per CORS blockiert.
+      // Entfernen, sobald die RacePic-Seiten auf www.msc-oberlausitz.de live sind.
+      'http://localhost:8080'
     ],
     devCleanupEnabled: false,
     env: {
@@ -69,7 +74,10 @@ export const resolveProdConfig = (): StageConfig => {
     // sind (siehe docs/memory-bank/racepic-progress.md). Aktivierung ueber PROD_ENABLE_RACEPIC=true
     // als bewusster, separater Schritt vor dem Piloten (Paket 10).
     enableRacePic: (process.env.PROD_ENABLE_RACEPIC ?? '').trim().toLowerCase() === 'true',
-    racepicMediaCorsAllowedOrigins: [prodPublicBaseUrl, 'https://www.msc-oberlausitz.de', 'https://msc-oberlausitz.de'],
+    // localhost:8080 siehe Kommentar bei assetsCorsAllowedOrigins oben - gilt hier fuer die
+    // Manifest-/Bild-CORS-Policy auf dem CloudFront-Verhalten (racepic-stack.ts), nicht fuer
+    // direkten S3-Zugriff (der Browser spricht immer mit CloudFront/OAC).
+    racepicMediaCorsAllowedOrigins: [prodPublicBaseUrl, 'https://www.msc-oberlausitz.de', 'https://msc-oberlausitz.de', 'http://localhost:8080'],
     racepicPhotographerRelyingPartyId: (process.env.PROD_RACEPIC_RELYING_PARTY_ID ?? 'msc-oberlausitz.de').trim(),
     racepicSigningPublicKeyPem: (process.env.PROD_RACEPIC_SIGNING_PUBLIC_KEY_PEM ?? '').trim() || undefined,
     racepicWebsiteBaseUrl: (process.env.PROD_RACEPIC_WEBSITE_BASE_URL ?? 'https://www.msc-oberlausitz.de').replace(/\/$/, ''),

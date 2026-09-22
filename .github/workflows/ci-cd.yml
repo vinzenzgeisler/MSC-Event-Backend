@@ -108,6 +108,7 @@ jobs:
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          DEV_ENABLE_RACEPIC: ${{ vars.DEV_ENABLE_RACEPIC }}
 
   deploy_dev:
     if: |
@@ -217,6 +218,30 @@ jobs:
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          DEV_ENABLE_RACEPIC: ${{ vars.DEV_ENABLE_RACEPIC }}
+
+      # RacePic ist ein eigener, optionaler Stack (infra/bin/app.ts), kein Teil der Basis- oder
+      # API-Stacks - fehlte bisher hier komplett, gefunden bei der Entwicklungsumgebungs-
+      # Vorbereitung am 2026-09-22 (DEV_ENABLE_RACEPIC allein deployte also nie etwas). Muss vor
+      # dem API-Stack laufen, da dieser RacePicStack-Ressourcen referenziert (siehe api-stack.ts).
+      - name: Deploy Dev RacePic stack
+        if: env.DEV_PROFILE != 'idle' && vars.DEV_ENABLE_RACEPIC == 'true'
+        run: >
+          npx cdk deploy
+          ${STACK_PREFIX}-racepic-stack
+          -c stage=dev
+          -c devProfile=${DEV_PROFILE}
+          --require-approval never
+        working-directory: infra
+        env:
+          DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
+          ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          DEV_ENABLE_RACEPIC: ${{ vars.DEV_ENABLE_RACEPIC }}
+          DEV_RACEPIC_WEBSITE_BASE_URL: ${{ vars.DEV_RACEPIC_WEBSITE_BASE_URL }}
+          DEV_RACEPIC_RELYING_PARTY_ID: ${{ vars.DEV_RACEPIC_RELYING_PARTY_ID }}
+          DEV_RACEPIC_MONTHLY_BUDGET_USD: ${{ vars.DEV_RACEPIC_MONTHLY_BUDGET_USD }}
 
       - name: Run Dev database migrations
         if: env.DEV_PROFILE != 'idle'
@@ -250,6 +275,10 @@ jobs:
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          DEV_ENABLE_RACEPIC: ${{ vars.DEV_ENABLE_RACEPIC }}
+          DEV_RACEPIC_WEBSITE_BASE_URL: ${{ vars.DEV_RACEPIC_WEBSITE_BASE_URL }}
+          DEV_RACEPIC_RELYING_PARTY_ID: ${{ vars.DEV_RACEPIC_RELYING_PARTY_ID }}
+          DEV_RACEPIC_MONTHLY_BUDGET_USD: ${{ vars.DEV_RACEPIC_MONTHLY_BUDGET_USD }}
 
   destroy_dev:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.dev_action == 'destroy'
@@ -308,10 +337,56 @@ jobs:
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
 
-      - name: Destroy all Dev CloudFormation stacks
+      - name: Check for Dev RacePic stack
+        id: racepic
+        run: |
+          set -euo pipefail
+          exists="$(
+            aws cloudformation describe-stacks --stack-name "${STACK_PREFIX}-racepic-stack" \
+              --query "Stacks[0].StackId" --output text 2>/dev/null || true
+          )"
+          echo "exists=$([ -n "${exists}" ] && [ "${exists}" != "None" ] && echo true || echo false)" >> "${GITHUB_OUTPUT}"
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Destroy Dev API stack
+        # Muss vor dem RacePic-Stack laufen (der API-Stack referenziert dessen Ressourcen, siehe
+        # api-stack.ts) - CDK/CloudFormation kann einen exportierenden Stack sonst nicht loeschen.
         run: >
           npx cdk destroy
           ${STACK_PREFIX}-api-stack
+          -c stage=dev
+          -c devProfile=test
+          --force
+        working-directory: infra
+        env:
+          DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          DEV_ENABLE_RACEPIC: ${{ vars.DEV_ENABLE_RACEPIC }}
+
+      # RacePic ist ein eigener, optionaler Stack (siehe "Deploy Dev RacePic stack" oben) - ohne
+      # diesen Schritt wuerde er bei aktiviertem RacePic als verwaister Stack zurueckbleiben.
+      # Existenzpruefung statt `vars.DEV_ENABLE_RACEPIC`, weil das Flag zwischenzeitlich
+      # zurueckgesetzt worden sein koennte, ohne den Stack manuell zu loeschen.
+      - name: Destroy Dev RacePic stack
+        if: steps.racepic.outputs.exists == 'true'
+        run: >
+          npx cdk destroy
+          ${STACK_PREFIX}-racepic-stack
+          -c stage=dev
+          -c devProfile=test
+          --force
+        working-directory: infra
+        env:
+          DEV_PUBLIC_BASE_URL: ${{ vars.DEV_PUBLIC_BASE_URL }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          DEV_ENABLE_RACEPIC: "true"
+
+      - name: Destroy remaining Dev CloudFormation stacks
+        run: >
+          npx cdk destroy
           ${STACK_PREFIX}-storage-stack
           ${STACK_PREFIX}-data-stack
           ${STACK_PREFIX}-auth-stack
@@ -403,6 +478,7 @@ jobs:
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          PROD_ENABLE_RACEPIC: ${{ vars.PROD_ENABLE_RACEPIC }}
 
       - name: Deploy Prod base stacks
         run: >
@@ -418,6 +494,30 @@ jobs:
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          PROD_ENABLE_RACEPIC: ${{ vars.PROD_ENABLE_RACEPIC }}
+
+      # RacePic ist ein eigener, optionaler Stack (infra/bin/app.ts), kein Teil der Basis- oder
+      # API-Stacks - fehlte bisher hier komplett, gefunden bei der Entwicklungsumgebungs-
+      # Vorbereitung am 2026-09-22 (PROD_ENABLE_RACEPIC allein deployte also nie etwas). Muss vor
+      # dem API-Stack laufen, da dieser RacePicStack-Ressourcen referenziert (siehe api-stack.ts).
+      - name: Deploy Prod RacePic stack
+        if: vars.PROD_ENABLE_RACEPIC == 'true'
+        run: >
+          npx cdk deploy
+          ${STACK_PREFIX}-racepic-stack
+          -c stage=prod
+          --require-approval never
+        working-directory: infra
+        env:
+          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          PROD_ENABLE_RACEPIC: ${{ vars.PROD_ENABLE_RACEPIC }}
+          PROD_RACEPIC_WEBSITE_BASE_URL: ${{ vars.PROD_RACEPIC_WEBSITE_BASE_URL }}
+          PROD_RACEPIC_RELYING_PARTY_ID: ${{ vars.PROD_RACEPIC_RELYING_PARTY_ID }}
+          PROD_RACEPIC_SIGNING_PUBLIC_KEY_PEM: ${{ vars.PROD_RACEPIC_SIGNING_PUBLIC_KEY_PEM }}
+          PROD_RACEPIC_MONTHLY_BUDGET_USD: ${{ vars.PROD_RACEPIC_MONTHLY_BUDGET_USD }}
 
       - name: Run Prod database migrations
         run: node scripts/run-stack-db-migrations.js
@@ -436,3 +536,8 @@ jobs:
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          PROD_ENABLE_RACEPIC: ${{ vars.PROD_ENABLE_RACEPIC }}
+          PROD_RACEPIC_WEBSITE_BASE_URL: ${{ vars.PROD_RACEPIC_WEBSITE_BASE_URL }}
+          PROD_RACEPIC_RELYING_PARTY_ID: ${{ vars.PROD_RACEPIC_RELYING_PARTY_ID }}
+          PROD_RACEPIC_SIGNING_PUBLIC_KEY_PEM: ${{ vars.PROD_RACEPIC_SIGNING_PUBLIC_KEY_PEM }}
+          PROD_RACEPIC_MONTHLY_BUDGET_USD: ${{ vars.PROD_RACEPIC_MONTHLY_BUDGET_USD }}

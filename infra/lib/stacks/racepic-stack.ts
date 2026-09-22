@@ -110,6 +110,30 @@ export class RacePicStack extends Stack {
 
     const oacOrigin = origins.S3BucketOrigin.withOriginAccessControl(this.mediaBucket);
 
+    // CORS-Antwort-Header fuer die oeffentlichen Manifest-/Bild-Pfade (Luecke, gefunden bei der
+    // Entwicklungsumgebungs-Vorbereitung am 2026-09-22): der Website-Client liest Manifeste per
+    // `fetch()` (siehe publicClient.ts im msc-website-Repo) - das ist ein Cross-Origin-Request
+    // (die Website laeuft auf einer anderen Domain als das CDN), Browser verlangen dafuer
+    // `Access-Control-Allow-Origin` in der CloudFront-Antwort. `<img>`-Tags fuer `public/*`
+    // brauchen das eigentlich nicht, bekommen die Policy hier aber ebenfalls (kein Mehraufwand,
+    // zukunftssicher falls Bilder einmal per fetch/canvas verarbeitet werden). Nutzt dieselbe
+    // Origin-Liste wie das S3-Bucket-CORS oben (`racepicMediaCorsAllowedOrigins`), auch wenn die
+    // beiden technisch unabhaengig sind (S3-CORS gilt nur bei direktem S3-Zugriff, hier geht der
+    // Browser aber immer ueber CloudFront/OAC).
+    const manifestCorsResponseHeadersPolicy =
+      corsOrigins.length > 0
+        ? new cloudfront.ResponseHeadersPolicy(this, 'ManifestCorsPolicy', {
+            responseHeadersPolicyName: `${props.config.prefix}-racepic-manifest-cors`,
+            corsBehavior: {
+              accessControlAllowOrigins: corsOrigins,
+              accessControlAllowMethods: ['GET', 'HEAD'],
+              accessControlAllowHeaders: ['*'],
+              accessControlAllowCredentials: false,
+              originOverride: true
+            }
+          })
+        : undefined;
+
     this.distribution = new cloudfront.Distribution(this, 'MediaDistribution', {
       comment: `${props.config.prefix}-racepic-media`,
       // Default: alles, was nicht explizit als oeffentlich gelistet ist (u.a. originals/, derived/,
@@ -130,13 +154,15 @@ export class RacePicStack extends Stack {
             defaultTtl: Duration.seconds(60),
             minTtl: Duration.seconds(0),
             maxTtl: Duration.minutes(5)
-          })
+          }),
+          responseHeadersPolicy: manifestCorsResponseHeadersPolicy
         },
         // Veroeffentlichte Thumbnails/Previews: oeffentlich, lange Cache-TTL.
         'public/*': {
           origin: oacOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
-          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+          responseHeadersPolicy: manifestCorsResponseHeadersPolicy
         }
       }
     });

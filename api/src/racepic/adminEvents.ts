@@ -1,6 +1,6 @@
 import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { event, racepicEvent, racepicImage, racepicPhotographer, racepicPhotographerEvent } from '../db/schema';
+import { event, racepicAssignment, racepicEvent, racepicImage, racepicPhotographer, racepicPhotographerEvent } from '../db/schema';
 import { RacePicError } from './repository';
 import { presignGetObject } from './s3';
 
@@ -98,8 +98,18 @@ export type RacepicEventStats = {
   photographerCount: number;
   imagesByStatus: Record<string, number>;
   imagesByVisibility: Record<string, number>;
+  assignmentsByStatus: Record<string, number>;
 };
 
+/**
+ * KI-Pipeline- und Zuordnungs-Status pro Event (Bestandsaufnahme 2026-09-22: "einen besseren
+ * Status der KI-Analyse" bzw. der Zuordnungs-Tab war "immer nur ein Button, der zu Review
+ * führt" ohne jede Übersicht). `assignmentsByStatus` ergänzt die schon vorhandenen
+ * `imagesByStatus` (Ingest/Analyze/Match-Pipeline pro Bild) um die Zuordnungs-Ergebnisse
+ * (AUTO_MATCHED/REVIEW_REQUIRED/MANUALLY_CONFIRMED/MANUALLY_CORRECTED/REJECTED) - beides
+ * zusammen macht sichtbar, ob ein frisch hochgeladenes Bild noch verarbeitet wird oder ob es
+ * bereits eine Zuordnung braucht, die auf eine Entscheidung wartet.
+ */
 export const getEventStats = async (eventId: string): Promise<RacepicEventStats> => {
   const db = await getDb();
 
@@ -120,10 +130,18 @@ export const getEventStats = async (eventId: string): Promise<RacepicEventStats>
     .where(eq(racepicImage.eventId, eventId))
     .groupBy(racepicImage.visibility);
 
+  const assignmentRows = await db
+    .select({ status: racepicAssignment.status, value: count() })
+    .from(racepicAssignment)
+    .innerJoin(racepicImage, eq(racepicImage.id, racepicAssignment.imageId))
+    .where(eq(racepicImage.eventId, eventId))
+    .groupBy(racepicAssignment.status);
+
   return {
     photographerCount,
     imagesByStatus: Object.fromEntries(statusRows.map((row) => [row.status, row.value])),
-    imagesByVisibility: Object.fromEntries(visibilityRows.map((row) => [row.visibility, row.value]))
+    imagesByVisibility: Object.fromEntries(visibilityRows.map((row) => [row.visibility, row.value])),
+    assignmentsByStatus: Object.fromEntries(assignmentRows.map((row) => [row.status, row.value]))
   };
 };
 

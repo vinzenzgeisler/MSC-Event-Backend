@@ -29,19 +29,20 @@ import {
   completeUpload,
   createBatch,
   createUpload,
-  deleteOwnDraftImage,
   getBatchForPhotographer,
   getUploadForPhotographer,
   hideOwnImage,
   listMyImages,
   listPartsForResume,
   presignRemainingParts,
+  removeOwnImage,
   updateOwnImageDetails
 } from './uploads';
 import { sendAnalyzeMessage, sendIngestMessage, sendMatchMessage } from './queues';
 import {
   getImageEventId,
   getImagePhotographerId,
+  hardDeleteImage,
   hideImage,
   publishImage,
   regenerateManifestsForEvent,
@@ -136,6 +137,8 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 409, message: 'Paid offers remain private until checkout is available' };
     case 'RACEPIC_IMAGE_ALREADY_REMOVED':
       return { status: 409, message: 'Image was already removed' };
+    case 'RACEPIC_IMAGE_NOT_REMOVED':
+      return { status: 409, message: 'Image must be removed before it can be permanently deleted' };
     case 'RACEPIC_IMAGE_NOT_DELETABLE':
       return { status: 409, message: 'Image can only be deleted while still a draft (not yet published)' };
     case 'RACEPIC_IMAGE_LICENSE_LOCKED':
@@ -922,6 +925,22 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return json(200, { ok: true, images: images.map(imageDto) });
     }
 
+    // Read-only Einsicht in die (auch automatischen) Zuordnungen des eigenen Bildes (Feedback
+    // 2026-09-22: "als Fotograf will ich auch die automatischen Zuordnungen sehen können" - bisher
+    // gab es diese Info nur im Admin-Bereich). Kein racepic.review noetig, Ownership-Check statt
+    // Berechtigungspruefung; abgelehnte Zuordnungen werden ausgeblendet, die interessieren als
+    // Fotograf nicht mehr.
+    const ownImageAssignmentsMatch = path.match(/^\/photographer\/images\/([^/]+)\/assignments$/);
+    if (method === 'GET' && ownImageAssignmentsMatch) {
+      const result = await requireActivePhotographer(event);
+      if (!result.ok) return result.error;
+      const imageId = decodeURIComponent(ownImageAssignmentsMatch[1]);
+      const photographerId = await getImagePhotographerId(imageId);
+      if (!photographerId || photographerId !== result.photographer.id) return errorJson(404, 'Image not found');
+      const assignments = (await listAssignmentsForImage(imageId)).filter((assignment) => assignment.status !== 'REJECTED');
+      return json(200, { ok: true, assignments });
+    }
+
     // Fotograf-Selbstverwaltung (Paket 15), siehe uploads.ts hideOwnImage/deleteOwnDraftImage fuer
     // die Begruendung der Einschraenkungen (nur verbergen, nur vor Veroeffentlichung loeschen).
     const ownImageMatch = path.match(/^\/photographer\/images\/([^/]+)$/);
@@ -976,7 +995,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!result.ok) return result.error;
       try {
         const imageId = decodeURIComponent(ownImageMatch[1]);
-        await deleteOwnDraftImage(result.photographer.id, imageId);
+        // Nimmt ein eigenes Bild komplett raus, egal ob DRAFT (Hart-Loeschung) oder bereits
+        // veroeffentlicht/verborgen (Soft-Remove wie beim Admin-Weg) - siehe removeOwnImage in
+        // uploads.ts (Feedback 2026-09-22: "auch als Fotograf will ich mal Fotos rausnehmen können").
+        const { eventId } = await removeOwnImage(result.photographer.id, imageId);
+        await regeneratePhotographerManifest(result.photographer.id);
+        await regenerateManifestsForEvent(eventId);
         const db = await getDb();
         await writeAuditLog(db, {
           actorUserId: result.photographer.cognitoSub,
@@ -1037,6 +1061,37 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       } catch (error) {
         if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
         if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    // Loescht ein bereits entferntes (visibility='REMOVED') Bild endgueltig aus der Datenbank
+    // (Feedback 2026-09-22: "ich will es komplett entfernen können mit der Prämisse dass
+    // natürlich kein Kauf dahinter hängt" - im MVP ohne echten Checkout immer erfuellt). Bewusst
+    // ein eigener Endpunkt statt eines dritten PATCH-visibility-Werts, weil die Aktion irreversibel
+    // ist und racepic.manage-Rechte auch fuer das simple "Entfernen" ausreichen wuerden.
+    const imageHardDeleteMatch = path.match(/^\/admin\/racepic\/images\/([^/]+)\/permanent$/);
+    if (method === 'DELETE' && imageHardDeleteMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
+      const imageId = decodeURIComponent(imageHardDeleteMatch[1]);
+      try {
+        await hardDeleteImage(imageId);
+        const db = await getDb();
+        await writeAuditLog(db, {
+          actorUserId: auth.sub,
+          action: 'racepic_image_hard_deleted',
+          entityType: 'racepic_image',
+          entityId: imageId,
+          payload: {}
+        });
+        return json(200, { ok: true });
+      } catch (error) {
         if (error instanceof RacePicError) {
           const { status, message } = racePicErrorStatus(error);
           return errorJson(status, message, undefined, error.code);

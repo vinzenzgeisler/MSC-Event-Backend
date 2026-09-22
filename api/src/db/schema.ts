@@ -1784,9 +1784,11 @@ export const racepicImage = pgTable('racepic_image', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
 }, (table) => ({
+  // Bug gefunden 2026-09-22: REMOVED-Bilder muessen den Hash wieder freigeben, sonst blockiert ein
+  // entferntes Bild den Re-Upload derselben Datei fuer immer - siehe migrations/0101_racepic_removed_images_free_sha256.sql.
   eventSha256Unique: uniqueIndex('racepic_image_event_sha256_unique')
     .on(table.eventId, table.sha256)
-    .where(sql`${table.sha256} is not null and ${table.processingStatus} <> 'DUPLICATE'`),
+    .where(sql`${table.sha256} is not null and ${table.processingStatus} <> 'DUPLICATE' and ${table.visibility} <> 'REMOVED'`),
   eventStatusIndex: index('racepic_image_event_status_idx').on(table.eventId, table.processingStatus),
   photographerIndex: index('racepic_image_photographer_idx').on(table.photographerId),
   visibilityIndex: index('racepic_image_visibility_idx').on(table.eventId, table.visibility),

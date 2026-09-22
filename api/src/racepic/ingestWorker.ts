@@ -65,11 +65,19 @@ const processOneImage = async (imageId: string): Promise<void> => {
 
   const sha256 = computeSha256(originalBuffer);
 
-  // Dedup innerhalb desselben Events (Abschnitt Image: eventSha256Unique-Index).
+  // Dedup innerhalb desselben Events (Abschnitt Image: eventSha256Unique-Index). REMOVED-Bilder
+  // zaehlen bewusst nicht mit (Bug gefunden 2026-09-22: sonst blockiert ein entferntes Bild den
+  // Re-Upload derselben Datei fuer immer, siehe migrations/0101_racepic_removed_images_free_sha256.sql).
   const [existingWithSameHash] = await db
     .select({ id: racepicImage.id })
     .from(racepicImage)
-    .where(and(eq(racepicImage.eventId, image.eventId), eq(racepicImage.sha256, sha256), ne(racepicImage.id, imageId), isNotNull(racepicImage.sha256)))
+    .where(and(
+      eq(racepicImage.eventId, image.eventId),
+      eq(racepicImage.sha256, sha256),
+      ne(racepicImage.id, imageId),
+      isNotNull(racepicImage.sha256),
+      ne(racepicImage.visibility, 'REMOVED')
+    ))
     .limit(1);
   if (existingWithSameHash) {
     await db

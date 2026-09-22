@@ -125,6 +125,24 @@ export const removeImage = async (imageId: string): Promise<void> => {
   await db.update(racepicImage).set({ visibility: 'REMOVED', updatedAt: new Date() }).where(eq(racepicImage.id, imageId));
 };
 
+/**
+ * Loescht ein bereits entferntes Bild endgueltig aus der Datenbank (Feedback 2026-09-22: "ich
+ * will es komplett entfernen können mit der Prämisse dass natürlich kein Kauf dahinter hängt" -
+ * im MVP gibt es noch keinen echten Checkout, die Praemisse ist also fuer jedes RacePic-Bild
+ * erfuellt). Setzt `visibility='REMOVED'` voraus (kein Direkt-Hard-Delete aus PUBLISHED/HIDDEN,
+ * damit `removeImage` immer zuerst die S3-Objekte aufraeumt). Kaskadiert per FK auch
+ * `racepic_assignment`/`racepic_assignment_event` fuer dieses Bild weg - bewusster Bruch mit der
+ * sonst geltenden Architekturregel "Das Audit bleibt ohne Bilddaten erhalten" (Abschnitt G), aber
+ * hier vom Nutzer explizit so gewollt ("komplett entfernen"); die allgemeine Admin-Audit-Log-Zeile
+ * fuer die Loeschaktion selbst (writeAuditLog, siehe handler.ts) bleibt unabhaengig davon erhalten.
+ */
+export const hardDeleteImage = async (imageId: string): Promise<void> => {
+  const image = await loadImageOrThrow(imageId);
+  if (image.visibility !== 'REMOVED') throw new RacePicError('RACEPIC_IMAGE_NOT_REMOVED');
+  const db = await getDb();
+  await db.delete(racepicImage).where(eq(racepicImage.id, imageId));
+};
+
 export type ManifestParticipant = {
   participantKey: string;
   startNumber: string;

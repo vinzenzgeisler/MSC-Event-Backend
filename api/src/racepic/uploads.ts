@@ -12,7 +12,7 @@ import {
   racepicUploadBatch
 } from '../db/schema';
 import { RacePicError } from './repository';
-import { hideImage } from './publish';
+import { hideImage, removeImage } from './publish';
 import { renderWatermarkedPreview } from './imageProcessing';
 import {
   abortMultipartUpload,
@@ -424,4 +424,27 @@ export const deleteOwnDraftImage = async (photographerId: string, imageId: strin
 
   await db.delete(racepicImageVariant).where(eq(racepicImageVariant.imageId, imageId));
   await db.delete(racepicImage).where(eq(racepicImage.id, imageId));
+};
+
+/**
+ * Nimmt ein eigenes Bild komplett raus, unabhaengig vom Status (Feedback 2026-09-22: "auch als
+ * Fotograf will ich mal Fotos rausnehmen können wieder" - bisher konnte ein Fotograf ein bereits
+ * veroeffentlichtes eigenes Bild nur verbergen (`hideOwnImage`), nie wirklich entfernen; das blieb
+ * bislang Admin-Moderation vorbehalten). Ein DRAFT-Bild (noch nie oeffentlich) wird weiterhin
+ * hart geloescht wie bisher (`deleteOwnDraftImage`, kein Audit-Wert); alles andere laeuft ueber
+ * denselben `removeImage` wie beim Admin-"Entfernen" (S3 aufraeumen, visibility='REMOVED', Audit
+ * bleibt) - der Aufrufer (handler.ts) muss danach wie beim Admin-Pfad die Manifeste neu erzeugen.
+ */
+export const removeOwnImage = async (photographerId: string, imageId: string): Promise<{ eventId: string }> => {
+  const db = await getDb();
+  const [image] = await db.select().from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
+  if (!image || image.photographerId !== photographerId) throw new RacePicError('RACEPIC_IMAGE_NOT_FOUND');
+  if (image.visibility === 'REMOVED') throw new RacePicError('RACEPIC_IMAGE_ALREADY_REMOVED');
+
+  if (image.visibility === 'DRAFT') {
+    await deleteOwnDraftImage(photographerId, imageId);
+  } else {
+    await removeImage(imageId);
+  }
+  return { eventId: image.eventId };
 };

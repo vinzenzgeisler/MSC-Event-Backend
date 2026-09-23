@@ -176,7 +176,33 @@ export const listReviewQueue = async (eventId: string, offset: number, limit: nu
       // orphane Zeilen, falls vorhanden, explizit der echte Top-Kandidat samt seinem tatsaechlichen
       // Score verwendet - immer noch klar als "unterhalb der Schwelle" markiert (assignmentId
       // bleibt null, kein Bestaetigen/Ablehnen moeglich), aber mit ehrlicher Zahl.
-      const topCandidate = row.assignmentId === null ? candidates[0] : undefined;
+      //
+      // Bug gefunden 2026-09-23 (Nutzer-Feedback: "#5 Ronny Wunderlich, 78% Konfidenz" ohne
+      // Bestaetigen-Button, obwohl 78% weit ueber der reviewThreshold liegt): das Bild hatte zwei
+      // Detections (zwei Fahrzeuge/Motorraeder im selben Foto); Ronny Wunderlich war fuer die ANDERE
+      // Detection bereits manuell zugeordnet (racepic_assignment_image_entry_unique erlaubt einen
+      // Fahrer nur einmal pro Bild) - der Top-Kandidat dieser zweiten, verwaisten Detection zeigte
+      // trotzdem unveraendert Ronny als "Vorschlag", obwohl eine Bestaetigung fuer ihn in diesem
+      // Bild gar nicht mehr moeglich war (Unique-Constraint wuerde das verhindern). Kandidaten, die
+      // im selben Bild schon (nicht abgelehnt) zugeordnet sind, werden fuer den Vorschlag
+      // uebersprungen.
+      const assignedElsewhereEntryIds = row.assignmentId === null
+        ? new Set(
+            (await db
+              .select({ entryId: racepicAssignment.entryId })
+              .from(racepicAssignment)
+              .where(and(eq(racepicAssignment.imageId, row.imageId), ne(racepicAssignment.status, 'REJECTED')))
+            ).map((r) => r.entryId)
+          )
+        : null;
+      // Das Frontend faellt beim Anzeigen selbst auf `candidates[0]` zurueck, wenn `suggestedEntryId`
+      // keinen Treffer in `candidates` hat - die zurueckgegebene Liste muss die bereits
+      // ausgeschlossenen Kandidaten deshalb ebenfalls nicht mehr enthalten, sonst greift genau
+      // dieser Fallback wieder auf den ausgeschlossenen Top-Kandidaten zurueck.
+      const visibleCandidates = assignedElsewhereEntryIds
+        ? candidates.filter((c) => !assignedElsewhereEntryIds.has(c.entryId))
+        : candidates;
+      const topCandidate = row.assignmentId === null ? visibleCandidates[0] : undefined;
       return {
         assignmentId: row.assignmentId,
         imageId: row.imageId,
@@ -184,7 +210,7 @@ export const listReviewQueue = async (eventId: string, offset: number, limit: nu
         detection: row.detectionId ? { id: row.detectionId, label: row.detectionLabel!, bbox: row.detectionBbox } : null,
         confidence: topCandidate ? topCandidate.score : row.confidence,
         suggestedEntryId: topCandidate ? topCandidate.entryId : row.entryId,
-        candidates
+        candidates: visibleCandidates
       };
     })
   );

@@ -116,23 +116,28 @@ export class RacePicStack extends Stack {
     // (die Website laeuft auf einer anderen Domain als das CDN), Browser verlangen dafuer
     // `Access-Control-Allow-Origin` in der CloudFront-Antwort. `<img>`-Tags fuer `public/*`
     // brauchen das eigentlich nicht, bekommen die Policy hier aber ebenfalls (kein Mehraufwand,
-    // zukunftssicher falls Bilder einmal per fetch/canvas verarbeitet werden). Nutzt dieselbe
-    // Origin-Liste wie das S3-Bucket-CORS oben (`racepicMediaCorsAllowedOrigins`), auch wenn die
-    // beiden technisch unabhaengig sind (S3-CORS gilt nur bei direktem S3-Zugriff, hier geht der
-    // Browser aber immer ueber CloudFront/OAC).
-    const manifestCorsResponseHeadersPolicy =
-      corsOrigins.length > 0
-        ? new cloudfront.ResponseHeadersPolicy(this, 'ManifestCorsPolicy', {
-            responseHeadersPolicyName: `${props.config.prefix}-racepic-manifest-cors`,
-            corsBehavior: {
-              accessControlAllowOrigins: corsOrigins,
-              accessControlAllowMethods: ['GET', 'HEAD'],
-              accessControlAllowHeaders: ['*'],
-              accessControlAllowCredentials: false,
-              originOverride: true
-            }
-          })
-        : undefined;
+    // zukunftssicher falls Bilder einmal per fetch/canvas verarbeitet werden).
+    //
+    // Bug gefunden 2026-09-23 (Nutzer-Feedback: "Access to fetch at '.../manifests/discover.json'
+    // ... has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present"):
+    // die feste Origin-Liste (`racepicMediaCorsAllowedOrigins`, nur die Produktionsdomain(s) +
+    // localhost) erlaubte keine Vercel-Preview-URL - die aendert sich bei jedem Deploy
+    // (`msc-website-<hash>-msc-projects.vercel.app`), eine feste Liste kann das grundsaetzlich nie
+    // abdecken. Diese beiden Pfade (`manifests/*`, `public/*`) sind rein oeffentliche, nicht
+    // authentifizierte Lesedaten (keine Cookies/Credentials, `accessControlAllowCredentials:
+    // false` unveraendert) - dafuer ist ein generisches `*` sicher und zukunftsfest, statt jede
+    // neue Preview-URL manuell nachzutragen. Bewusst NICHT auf das S3-Bucket-CORS oben angewendet
+    // (das betrifft den authentifizierten Upload-Flow, bleibt auf der festen Origin-Liste).
+    const manifestCorsResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'ManifestCorsPolicy', {
+      responseHeadersPolicyName: `${props.config.prefix}-racepic-manifest-cors`,
+      corsBehavior: {
+        accessControlAllowOrigins: ['*'],
+        accessControlAllowMethods: ['GET', 'HEAD'],
+        accessControlAllowHeaders: ['*'],
+        accessControlAllowCredentials: false,
+        originOverride: true
+      }
+    });
 
     this.distribution = new cloudfront.Distribution(this, 'MediaDistribution', {
       comment: `${props.config.prefix}-racepic-media`,

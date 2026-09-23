@@ -99,11 +99,13 @@ export const ensureVehicleReference = async (vehicleId: string): Promise<Vehicle
 
   const sourceKeyHash = hashKey(vehicleRow.imageS3Key);
   const [existing] = await db.select().from(racepicVehicleReference).where(eq(racepicVehicleReference.vehicleId, vehicleId)).limit(1);
-  if (existing && existing.sourceKeyHash === sourceKeyHash && existing.embedding) {
+  const cachedColor = (existing?.dominantColors as unknown as { color: RgbColor | null } | null)?.color ?? null;
+  const canReuseEmbedding = Boolean(existing && existing.sourceKeyHash === sourceKeyHash && existing.embedding);
+  if (canReuseEmbedding && cachedColor) {
     return {
-      embedding: existing.embedding as unknown as number[],
-      dominantColor: (existing.dominantColors as unknown as { color: RgbColor | null } | null)?.color ?? null,
-      vehicleType: existing.vehicleType
+      embedding: existing!.embedding as unknown as number[],
+      dominantColor: cachedColor,
+      vehicleType: existing!.vehicleType
     };
   }
 
@@ -130,11 +132,18 @@ export const ensureVehicleReference = async (vehicleId: string): Promise<Vehicle
   // Signal auszulassen - dasselbe Prinzip wie schon in analyzeWorker.ts). Zuerst nur
   // `embedImage` abgesichert (Bedrock-Kontoverifizierung), dann live in Prod festgestellt: auch
   // `approximateDominantColor` (sharp-Dekodierung) kann an einem defekten Referenzfoto scheitern.
+  //
+  // Bug gefunden 2026-09-23 (Farbgewichtungs-Fix in rekognition.ts macht alte gecachte
+  // Referenzfarben veraltet): ein bereits vorhandenes, gueltiges Embedding ist von diesem Fix
+  // unberuehrt - nur weil die Farbe neu berechnet werden muss, muss nicht auch das teure
+  // Bedrock-Embedding erneut berechnet werden (spart Kontingent, vermeidet erneute Drosselung).
   const [embedding, dominantColor] = await Promise.all([
-    embedImage(imageBuffer).catch((error) => {
-      logOperationalEvent('error', 'racepic_vehicle_reference.embedding_failed', { errorCode: errorCodeOf(error) });
-      return null;
-    }),
+    canReuseEmbedding
+      ? Promise.resolve(existing!.embedding as unknown as number[])
+      : embedImage(imageBuffer).catch((error) => {
+          logOperationalEvent('error', 'racepic_vehicle_reference.embedding_failed', { errorCode: errorCodeOf(error) });
+          return null;
+        }),
     detectReferenceDominantColor(imageBuffer).catch((error) => {
       logOperationalEvent('error', 'racepic_vehicle_reference.color_failed', { errorCode: errorCodeOf(error) });
       return null;
@@ -197,9 +206,10 @@ export const warmEventVehicleReferences = async (
     if (Date.now() - startedAt > timeBudgetMs) {
       return { processed, skipped, total: eligibleRows.length, done: false };
     }
-    const [existing] = await db.select({ id: racepicVehicleReference.id, embedding: racepicVehicleReference.embedding })
+    const [existing] = await db.select({ id: racepicVehicleReference.id, embedding: racepicVehicleReference.embedding, dominantColors: racepicVehicleReference.dominantColors })
       .from(racepicVehicleReference).where(eq(racepicVehicleReference.vehicleId, row.vehicleId)).limit(1);
-    if (existing?.embedding) {
+    const existingColor = (existing?.dominantColors as unknown as { color: RgbColor | null } | null)?.color ?? null;
+    if (existing?.embedding && existingColor) {
       skipped += 1;
       continue;
     }

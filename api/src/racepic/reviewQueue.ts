@@ -152,15 +152,28 @@ export const listReviewQueue = async (eventId: string, offset: number, limit: nu
   const page = merged.slice(offset, offset + limit);
 
   const items = await Promise.all(
-    page.map(async (row) => ({
-      assignmentId: row.assignmentId,
-      imageId: row.imageId,
-      imagePreviewUrl: await presignGetObject(previewKey(row.imageId), PREVIEW_URL_TTL_SECONDS),
-      detection: row.detectionId ? { id: row.detectionId, label: row.detectionLabel!, bbox: row.detectionBbox } : null,
-      confidence: row.confidence,
-      suggestedEntryId: row.entryId,
-      candidates: row.detectionId ? await loadCandidateDisplays(row.imageId, row.detectionId) : []
-    }))
+    page.map(async (row) => {
+      const candidates = row.detectionId ? await loadCandidateDisplays(row.imageId, row.detectionId) : [];
+      // Bug gefunden 2026-09-23 (Nutzer-Feedback: eine orphane Detection zeigte "#147 Hagen
+      // Tzschoppe - BMW 318ti, 0% Konfidenz" an - ein irrefuehrend konkreter, aber komplett
+      // erfundener "Treffer"): fuer orphane Detections (assignmentId=null) stand suggestedEntryId
+      // fest auf null und confidence fest auf 0, das Frontend fiel beim Anzeigen aber still auf
+      // candidates[0] zurueck - den bestbewerteten *gespeicherten* Kandidaten (der die
+      // reviewThreshold eben NICHT erreicht hat), gepaart mit der erfundenen 0%. Jetzt wird fuer
+      // orphane Zeilen, falls vorhanden, explizit der echte Top-Kandidat samt seinem tatsaechlichen
+      // Score verwendet - immer noch klar als "unterhalb der Schwelle" markiert (assignmentId
+      // bleibt null, kein Bestaetigen/Ablehnen moeglich), aber mit ehrlicher Zahl.
+      const topCandidate = row.assignmentId === null ? candidates[0] : undefined;
+      return {
+        assignmentId: row.assignmentId,
+        imageId: row.imageId,
+        imagePreviewUrl: await presignGetObject(previewKey(row.imageId), PREVIEW_URL_TTL_SECONDS),
+        detection: row.detectionId ? { id: row.detectionId, label: row.detectionLabel!, bbox: row.detectionBbox } : null,
+        confidence: topCandidate ? topCandidate.score : row.confidence,
+        suggestedEntryId: topCandidate ? topCandidate.entryId : row.entryId,
+        candidates
+      };
+    })
   );
 
   return { items, total };

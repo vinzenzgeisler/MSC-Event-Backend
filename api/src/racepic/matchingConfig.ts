@@ -52,11 +52,16 @@ const FALLBACK_CONFIG: MatchingConfig = {
   version: 0,
   weights: DEFAULT_WEIGHTS,
   // Konservativ gewaehlt: lieber REVIEW_REQUIRED als ein falsches AUTO_MATCHED, siehe Prinzip 6
-  // im Architekturplan ("KI-Zuordnungen muessen nachvollziehbar und korrigierbar sein").
+  // im Architekturplan ("KI-Zuordnungen muessen nachvollziehbar und korrigierbar sein"). Durch den
+  // ersten echten Qualitaetsreport (2026-09-23, 28 geprueft/22 mit bestaetigtem Treffer) bestaetigt:
+  // bei 0.85/0.9 100% Precision (2/2 bzw. 1/1) - kein Grund zur Aenderung.
   autoThreshold: 0.85,
-  // Gesenkt 2026-09-23 zusammen mit den Gewichten oben (siehe Begruendung dort) - 0.55 war fuer
-  // rein visuelle Treffer (ohne Startnummer) mathematisch unerreichbar.
-  reviewThreshold: 0.4,
+  // Auf 0.5 angehoben (2026-09-23, datenbasiert statt geraten - siehe Qualitaetsreport oben): bei
+  // 0.4 lag die Precision nur bei 58% (24 Vorschlaege, 14 richtig) - fast jeder zweite Vorschlag in
+  // der Review-Queue war falsch. Bei 0.5 steigt die Precision auf 82% (17 Vorschlaege, 14 richtig)
+  // bei UNVERAENDERTEM Recall (64% in beiden Faellen) - kein einziger echter Treffer geht verloren,
+  // es werden nur die falschen rausgefiltert. Bleibt bis 0.65 stabil, erst ab 0.7 sinkt der Recall.
+  reviewThreshold: 0.5,
   minMargin: 0.08
 };
 

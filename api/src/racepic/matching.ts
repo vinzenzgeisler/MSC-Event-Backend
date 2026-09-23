@@ -12,6 +12,20 @@ import type { MatchingWeights } from './matchingConfig';
  * die Kombinationsform selbst (noch) simpel ist.
  */
 
+// Bug gefunden 2026-09-23 (per Live-Test gegen Rekognition bestaetigt): eine gut lesbare "5" auf
+// einem Rennstartnummern-Schild wurde mit 93.2% Konfidenz als Buchstabe "S" erkannt - in der dort
+// verwendeten Blockschrift sehen sich beide Zeichen fast identisch (flache Oberkante, aehnliche
+// Kurve). `normalizeStartNumberCandidate` (rekognition.ts) behaelt Buchstaben unveraendert, ein
+// exakter String-Vergleich gegen die numerische Startnummer scheitert dadurch komplett - das
+// Signal ging nicht etwa schwaecher, sondern ganz verloren. Bekannte OCR-Verwechslungen zwischen
+// Ziffern und aehnlich aussehenden Buchstaben werden vor dem Vergleich auf eine gemeinsame Form
+// abgebildet; echte Startnummern sind praktisch immer rein numerisch, das Risiko einer dadurch neu
+// entstehenden Fehlzuordnung ist gering und wird ohnehin durch reviewThreshold/minMargin und
+// menschliche Pruefung abgefangen.
+const OCR_DIGIT_CONFUSION: Record<string, string> = { S: '5', O: '0', B: '8', Z: '2', I: '1', G: '6', D: '0' };
+export const canonicalizeOcrNumber = (value: string): string =>
+  value.split('').map((char) => OCR_DIGIT_CONFUSION[char] ?? char).join('');
+
 export type CandidateFeatures = {
   ocrExact: boolean;
   ocrConfidence: number; // 0..1

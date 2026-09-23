@@ -14,7 +14,7 @@ import {
   vehicle
 } from '../db/schema';
 import { logOperationalEvent, errorCodeOf } from '../observability/logger';
-import { colorSimilarity, embeddingSimilarity, scoreCandidate, vehicleTypeMatches, type CandidateFeatures } from './matching';
+import { canonicalizeOcrNumber, colorSimilarity, embeddingSimilarity, scoreCandidate, vehicleTypeMatches, type CandidateFeatures } from './matching';
 import { getActiveMatchingConfig } from './matchingConfig';
 import { ensureVehicleReference } from './vehicleReference';
 import type { RgbColor } from './rekognition';
@@ -124,7 +124,7 @@ const processOneImage = async (imageId: string): Promise<void> => {
 
     const scored = await mapWithConcurrencyLimit(eligible, CANDIDATE_SCORING_CONCURRENCY, async (candidateEntry) => {
       const textMatches = candidateEntry.startNumberNorm
-        ? linkedTexts.filter((text) => text.normalized === candidateEntry.startNumberNorm)
+        ? linkedTexts.filter((text) => canonicalizeOcrNumber(text.normalized) === canonicalizeOcrNumber(candidateEntry.startNumberNorm!))
         : [];
       const reference = await getReference(candidateEntry.vehicleId);
 

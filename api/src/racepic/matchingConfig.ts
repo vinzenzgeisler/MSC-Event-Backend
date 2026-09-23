@@ -19,12 +19,22 @@ export type MatchingWeights = {
   ambiguityPenalty: number;
 };
 
+// Rebalanciert 2026-09-23 (Bug gefunden: ein Foto ganz ohne sichtbare Startnummer konnte mit den
+// urspruenglichen Gewichten rechnerisch NIE reviewThreshold erreichen - selbst bei rechnerisch
+// perfekter embeddingSimilarity/colorSimilarity (je 1.0) lag das Maximum bei
+// 0.1 (vehicleTypeMatch) + 0.2 + 0.1 = 0.4, unter dem alten reviewThreshold von 0.55. Erst mit dem
+// Bedrock-Fix (siehe bedrock.ts) liefert embeddingSimilarity ueberhaupt echte Werte statt immer
+// neutral 0.5 - diese Neugewichtung ist der naechste noetige Schritt, damit ein rein visueller
+// Treffer wenigstens in die Review-Queue kommt (nicht automatisch zugeordnet wird - dafuer bleibt
+// weiterhin praktisch immer eine erkannte Startnummer noetig, autoThreshold ist unveraendert 0.85).
+// Grobe Erstkalibrierung ohne echte Pilotdaten - ueber den "Qualitätsreport" (KI-Konfiguration-Tab)
+// mit echten Review-Entscheidungen nachjustieren, sobald mehr Bilder durchgelaufen sind.
 export const DEFAULT_WEIGHTS: MatchingWeights = {
-  ocrExact: 0.5,
-  ocrConfidence: 0.1,
+  ocrExact: 0.45,
+  ocrConfidence: 0.05,
   vehicleTypeMatch: 0.1,
-  embeddingSimilarity: 0.2,
-  colorSimilarity: 0.1,
+  embeddingSimilarity: 0.25,
+  colorSimilarity: 0.15,
   ambiguityPenalty: 0.15
 };
 
@@ -44,7 +54,9 @@ const FALLBACK_CONFIG: MatchingConfig = {
   // Konservativ gewaehlt: lieber REVIEW_REQUIRED als ein falsches AUTO_MATCHED, siehe Prinzip 6
   // im Architekturplan ("KI-Zuordnungen muessen nachvollziehbar und korrigierbar sein").
   autoThreshold: 0.85,
-  reviewThreshold: 0.55,
+  // Gesenkt 2026-09-23 zusammen mit den Gewichten oben (siehe Begruendung dort) - 0.55 war fuer
+  // rein visuelle Treffer (ohne Startnummer) mathematisch unerreichbar.
+  reviewThreshold: 0.4,
   minMargin: 0.08
 };
 

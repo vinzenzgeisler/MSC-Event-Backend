@@ -66,13 +66,42 @@ export const detectVehicles = async (jpegBuffer: Buffer): Promise<VehicleDetecti
         label: label.Name as 'Car' | 'Motorcycle',
         confidence: instance.Confidence ?? label.Confidence ?? 0,
         bbox: { width: box.Width!, height: box.Height!, left: box.Left!, top: box.Top! },
-        dominantColors: (instance.DominantColors ?? [])
-          .filter((color) => color.Red !== undefined && color.Green !== undefined && color.Blue !== undefined)
-          .map((color) => ({ red: color.Red!, green: color.Green!, blue: color.Blue! }))
+        dominantColors: averageInstanceColor(instance.DominantColors ?? [])
       });
     }
   }
   return detections;
+};
+
+// Bug gefunden 2026-09-23 (Nutzer-Feedback: zwei Kandidaten mit sehr unterschiedlicher
+// tatsaechlicher Fahrzeugfarbe bekamen fast dieselbe Konfidenz): `dominantColors[0]` war schlicht
+// die von Rekognition am hoechsten gerankte Einzelfarbe *innerhalb der Instanz-BBox* - bei
+// Motorraedern nimmt der Fahrer (Lederkombi, Helm, Handschuhe) oft mehr Bildflaeche ein als die
+// sichtbare Verkleidung, wodurch zufaellig mal Fahrer- statt Fahrzeugfarbe "gewann" und der
+// Farbvergleich je nach Fotoausschnitt kaum reproduzierbar war. Rekognition liefert pro Instanz
+// mehrere Farben mit `PixelPercent` - ein nach Flaechenanteil gewichteter Mittelwert ueber alle
+// gelieferten Farben ist robuster als eine einzelne "Sieger"-Farbe (loest die Fahrer/Fahrzeug-
+// Vermischung nicht vollstaendig, daempft aber die Instabilitaet spuerbar ab).
+const averageInstanceColor = (colors: { Red?: number; Green?: number; Blue?: number; PixelPercent?: number }[]): RgbColor[] => {
+  const usable = colors.filter((color) => color.Red !== undefined && color.Green !== undefined && color.Blue !== undefined);
+  if (usable.length === 0) return [];
+
+  const totalWeight = usable.reduce((sum, color) => sum + (color.PixelPercent ?? 1), 0);
+  if (totalWeight <= 0) return [];
+
+  const weighted = usable.reduce(
+    (acc, color) => {
+      const weight = color.PixelPercent ?? 1;
+      return {
+        red: acc.red + color.Red! * weight,
+        green: acc.green + color.Green! * weight,
+        blue: acc.blue + color.Blue! * weight
+      };
+    },
+    { red: 0, green: 0, blue: 0 }
+  );
+
+  return [{ red: weighted.red / totalWeight, green: weighted.green / totalWeight, blue: weighted.blue / totalWeight }];
 };
 
 export type TextDetectionResult = { text: string; normalized: string; confidence: number; bbox: BoundingBoxRatio };

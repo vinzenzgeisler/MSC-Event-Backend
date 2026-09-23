@@ -43,7 +43,14 @@ export const resolveProdConfig = (): StageConfig => {
       // der echten Domain (siehe racepic-progress.md), sondern nur lokal gegen das Prod-Backend -
       // ohne diesen Origin wuerde `POST /public/racepic/images/{id}/download` per CORS blockiert.
       // Entfernen, sobald die RacePic-Seiten auf www.msc-oberlausitz.de live sind.
-      'http://localhost:8080'
+      'http://localhost:8080',
+      // 2026-09-23: Vercel-Preview-Deployment fuer eine erste, herumschickbare Vorschau (siehe
+      // msc-website-Repo). Bewusst nur DIESE eine Deployment-URL, nicht generell alle
+      // `*.vercel.app` (API Gateway CORS unterstuetzt ohnehin keine Teil-Wildcards) - Nutzerwunsch
+      // war explizit "nur diese eine Preview-URL erlauben" statt die ganze API per `*` zu oeffnen.
+      // Wird bei jedem neuen Preview-Deploy (neue URL) erneut stumpf brechen, bis die Website auf
+      // der echten Domain live ist - dann faellt dieser Eintrag ohnehin weg.
+      'https://msc-website-rl4gw5gag-msc-projects.vercel.app'
     ],
     devCleanupEnabled: false,
     env: {

@@ -2,10 +2,12 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
 
 /**
  * Bedrock-Zugriff fuer die visuelle Aehnlichkeit (Paket 6: KI-Pipeline), siehe
- * docs/memory-bank/racepic-architecture.md Abschnitt F. Region **eu-west-1** (Irland), nicht
- * eu-central-1: Titan/Nova Multimodal Embeddings sind nur in den USA verfuegbar (siehe
- * Region-Check in Paket 1), Cohere Embed v4 laeuft dagegen in Irland - einer EU-Region. Die
- * Analyze-Worker-Lambda selbst bleibt in eu-central-1 und ruft hier per Cross-Region-Aufruf.
+ * docs/memory-bank/racepic-architecture.md Abschnitt F. Region **eu-central-1** - dieselbe Region
+ * wie der Rest von RacePic (Analyze-/Match-Worker, DB, S3). Urspruenglich lief das per
+ * Cross-Region-Aufruf gegen eu-west-1 (Irland), da Cohere Embed v4 dort zuerst verfuegbar war;
+ * Bug gefunden 2026-09-23: das Modell ist inzwischen auch in eu-central-1 gelistet, der
+ * Cross-Region-Umweg (und die separate Bedrock-Modellzugriffsfreigabe in einer zweiten Region)
+ * war nicht mehr noetig.
  *
  * Modell-ID `cohere.embed-v4:0`, Bild-Input ueber `images: ["data:<mime>;base64,..."]`. Das
  * Response-Format wurde urspruenglich (Paket 6) anhand der AWS-Doku als
@@ -19,7 +21,7 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
 const EMBEDDING_MODEL_ID = process.env.RACEPIC_EMBEDDING_MODEL_ID ?? 'cohere.embed-v4:0';
 export const EMBEDDING_DIMENSIONS = 1024; // muss zu vector(1024) in db/schema.ts passen.
 
-const getClient = () => new BedrockRuntimeClient({ region: process.env.RACEPIC_EMBEDDING_REGION ?? 'eu-west-1' });
+const getClient = () => new BedrockRuntimeClient({ region: process.env.RACEPIC_EMBEDDING_REGION ?? 'eu-central-1' });
 
 type CohereEmbedV4FloatResponse = {
   response_type: 'embeddings_by_type';

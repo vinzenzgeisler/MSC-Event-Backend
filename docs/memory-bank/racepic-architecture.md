@@ -57,7 +57,7 @@ flowchart LR
     Q1[[SQS ingest]] --> W1["Ingest-Worker<br/>sharp, EXIF, Varianten"]
     W1 --> Q2[[SQS analyze]] --> W2["Analyze-Worker"]
     W2 --> REK["Rekognition<br/>DetectText · DetectLabels"]
-    W2 --> BR["Bedrock Cohere Embed v4<br/>(eu-west-1, cross-region)"]
+    W2 --> BR["Bedrock Cohere Embed v4<br/>(eu-central-1)"]
     W2 --> Q3[[SQS match]] --> W3["Match-Worker"]
     SCH["EventBridge 1/min"] --> W4["Publish-Worker<br/>Manifeste, Publikation"]
     DB[("RDS Postgres (bestehend)<br/>+ racepic_* Tabellen")]
@@ -259,11 +259,10 @@ Image ─► Ingest ─► Analyze ───────────────
 **Dienste und Begründung:**
 - **Rekognition DetectText:** OCR für Szenentext (Startnummern auf Fahrzeugen). Liefert Konfidenz und BBox. Textract ist für Dokumente gedacht und hier ungeeignet.
 - **Rekognition DetectLabels mit `IMAGE_PROPERTIES`:** Fahrzeuginstanzen mit Bounding Boxes (Grundlage für mehrere Fahrzeuge pro Bild), Fahrzeugtyp Auto/Motorrad als Abgleich mit `class.vehicle_type`, dominante Farben je Instanz.
-- **Bedrock Cohere Embed v4 (multimodal), Region eu-west-1 (Irland):** visuelle Ähnlichkeit zwischen Fahrzeug-Crop und Nennungsfoto. Rekognition hat keine generischen Embeddings.
-  - **Region-Check (2026-09-21, erledigt):** Titan Multimodal Embeddings G1 und Amazon Nova Multimodal Embeddings sind nur in us-east-1/us-west-2 verfügbar – ungeeignet, da Fahrzeugbilder personenbezogene Daten sind und ein Transfer in die USA vermieden werden soll. **Cohere Embed v4** (multimodal, Bild+Text) läuft dagegen produktiv in **eu-west-1 (Irland)**, einer EU-Region. Die Analyze-Worker-Lambda bleibt in eu-central-1 und ruft Bedrock in eu-west-1 per Cross-Region-API-Aufruf auf (Daten bleiben innerhalb der EU, kein Drittlandtransfer). Bei Verfügbarkeit von Titan/Nova-Embeddings in eu-central-1 oder eu-west-1 zu einem späteren Zeitpunkt kann migriert werden.
+- **Bedrock Cohere Embed v4 (multimodal), Region eu-central-1:** visuelle Ähnlichkeit zwischen Fahrzeug-Crop und Nennungsfoto. Rekognition hat keine generischen Embeddings.
+  - **Region-Check (2026-09-21, erledigt; korrigiert 2026-09-23):** Titan Multimodal Embeddings G1 und Amazon Nova Multimodal Embeddings sind nur in us-east-1/us-west-2 verfügbar – ungeeignet, da Fahrzeugbilder personenbezogene Daten sind und ein Transfer in die USA vermieden werden soll. **Cohere Embed v4** (multimodal, Bild+Text) lief anfangs nur in **eu-west-1 (Irland)** produktiv, ist inzwischen aber auch in **eu-central-1** verfügbar - Analyze-/Match-Worker rufen Bedrock seitdem in derselben Region auf wie den Rest von RacePic (kein Cross-Region-Aufruf mehr, keine separate Bedrock-Modellzugriffsfreigabe in einer zweiten Region nötig).
   - Die Vektoren liegen in Postgres (pgvector auf RDS PG16).
   - Bei einigen hundert Nennungen pro Event reicht ein Brute-Force-Vergleich, es braucht keine Vektor-DB.
-  - Cross-Region-Aufruf nach eu-west-1 (Irland) für Cohere Embed v4, siehe Region-Check oben. Vor Go-Live erneut die dann aktuelle Modellverfügbarkeit prüfen.
 - **Verworfen:**
   - Rekognition Custom Labels: Inference-Stunden teuer, Trainingsdaten fehlen.
   - Make/Model-Erkennung über Labels: unzuverlässig, höchstens schwaches Signal.
@@ -454,7 +453,7 @@ Szenario: 20.000 Bilder à 12 MB, 5.000 Besucher, 3.000 Downloads.
 |---|---|---|
 | Rekognition DetectLabels + Image Properties | ca. 0,001 + 0,00075 $ pro Bild | ca. 35 $ einmalig |
 | Rekognition DetectText | 0,001 $ pro Bild (plus Crops optional, ca. +50 %) | 20–30 $ einmalig |
-| Bedrock Cohere Embed v4 (eu-west-1) | ca. 0,0001 $ pro Crop, ca. 2 Crops/Bild | < 5 $ |
+| Bedrock Cohere Embed v4 (eu-central-1) | ca. 0,0001 $ pro Crop, ca. 2 Crops/Bild | < 5 $ |
 | Lambda (sharp, Worker) | ca. 1,5 s × 2 GB pro Bild | ca. 1–2 $ |
 | S3 Originale | 240 GB; Standard 30 Tage, dann Glacier IR | ca. 6 $ im ersten Monat, dann ca. 1,2 $/Monat |
 | S3 Varianten | ca. 40 GB | ca. 0,5–1 $/Monat |

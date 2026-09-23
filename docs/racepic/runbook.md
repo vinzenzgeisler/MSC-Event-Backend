@@ -113,7 +113,9 @@ Kalibrierung müssen die Rohdaten aus `racepic_match_candidate` separat ausgewer
    verifizierbar).
 3. Rechtstexte (`docs/privacy/racepic-legal-texts-v1.md`, `docs/racepic/licenses.md`) durch
    Datenschutzbeauftragten/Vorstand freigeben lassen (Paket 0).
-4. Bedrock-Aufruf gegen `cohere.embed-v4:0` in eu-west-1 einmal live testen (Paket 6 – Format
-   ist gegen die aktuelle Doku verifiziert, aber nicht live getestet).
+4. Bedrock-Modellzugriff fuer `cohere.embed-v4:0` in **eu-central-1** (nicht mehr eu-west-1,
+   siehe Bug 2026-09-23) in der Bedrock-Konsole freigeben - live gegen prod getestet, schlaegt
+   aktuell mit `AccessDeniedException` fehl (IAM-Policy ist korrekt, es fehlt die separate
+   Bedrock-Modellzugriffsfreigabe). Ohne das faellt Matching komplett auf OCR/Startnummer zurueck.
 5. Rate-Limiting für `POST /public/racepic/images/{id}/download` ergänzen (Paket 8, offener
    Punkt).

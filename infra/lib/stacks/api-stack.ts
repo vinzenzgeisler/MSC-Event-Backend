@@ -2232,9 +2232,11 @@ export class ApiStack extends Stack {
           DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
           RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
           RACEPIC_MATCH_QUEUE_URL: racePicStack.matchQueue.queueUrl,
-          // Cross-Region-Aufruf (Abschnitt F/Region-Check Paket 1): Cohere Embed v4 laeuft nur in
-          // eu-west-1 (Irland), nicht in eu-central-1.
-          RACEPIC_EMBEDDING_REGION: 'eu-west-1'
+          // Cohere Embed v4 ist inzwischen auch in eu-central-1 verfuegbar (Bug gefunden
+          // 2026-09-23: die urspruengliche eu-west-1-Annahme war veraltet und noetigte einen
+          // unnoetigen Cross-Region-Aufruf sowie eine zusaetzliche Bedrock-Modellzugriffsfreigabe
+          // in einer zweiten Region) - gleiche Region wie der Rest von RacePic, siehe bedrock.ts.
+          RACEPIC_EMBEDDING_REGION: 'eu-central-1'
         },
         ...(props.config.apiInVpc ? lambdaVpcConfig : {})
       });
@@ -2253,7 +2255,7 @@ export class ApiStack extends Stack {
       racePicAnalyzeWorker.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['bedrock:InvokeModel'],
-          resources: ['arn:aws:bedrock:eu-west-1::foundation-model/cohere.*']
+          resources: ['arn:aws:bedrock:eu-central-1::foundation-model/cohere.*']
         })
       );
       racePicStack.matchQueue.grantSendMessages(racePicAnalyzeWorker);
@@ -2291,7 +2293,7 @@ export class ApiStack extends Stack {
           DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
           DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
           ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName,
-          RACEPIC_EMBEDDING_REGION: 'eu-west-1'
+          RACEPIC_EMBEDDING_REGION: 'eu-central-1'
         },
         ...(props.config.apiInVpc ? lambdaVpcConfig : {})
       });
@@ -2305,7 +2307,7 @@ export class ApiStack extends Stack {
       racePicMatchWorker.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['bedrock:InvokeModel'],
-          resources: ['arn:aws:bedrock:eu-west-1::foundation-model/cohere.*']
+          resources: ['arn:aws:bedrock:eu-central-1::foundation-model/cohere.*']
         })
       );
       racePicMatchWorker.addEventSource(

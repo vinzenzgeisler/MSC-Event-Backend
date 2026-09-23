@@ -107,8 +107,23 @@ export const ensureVehicleReference = async (vehicleId: string): Promise<Vehicle
     };
   }
 
-  const imageBuffer = await findVehicleImageObject(vehicleRow.imageS3Key);
-  if (!imageBuffer) return null;
+  const rawImageBuffer = await findVehicleImageObject(vehicleRow.imageS3Key);
+  if (!rawImageBuffer) return null;
+
+  // Bug gefunden 2026-09-23 (17-19 Rekognition ValidationException/InvalidImageFormatException in
+  // 15 Minuten): Nennungsfotos kommen unbearbeitet aus dem Assets-Bucket des Nennungstools - anders
+  // als RacePics eigene Bilder (immer JPEG/PNG, sharp-normalisiert) koennen das beliebige Formate,
+  // Groessen oder Farbraeume sein. Rekognitions synchrone API verlangt JPEG/PNG unter 5 MB;
+  // ueberschreitet ein Foto das, schlaegt detectVehicles fehl (Fallback greift dann auf das grobe
+  // Ganzbild-Mittel zurueck statt die eigentlich bessere Instanz-Farbe zu liefern). Einmal auf JPEG
+  // unter einer sicheren Groesse normalisieren, fuer beide KI-Aufrufe (Rekognition + Bedrock)
+  // gemeinsam - schlaegt auch das fehl, bleibt der Rohbuffer als letzter Fallback.
+  const imageBuffer = await sharp(rawImageBuffer, { limitInputPixels: 50_000_000 })
+    .rotate()
+    .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 85 })
+    .toBuffer()
+    .catch(() => rawImageBuffer);
 
   // Beide Aufrufe einzeln abgefangen (Bug gefunden 2026-09-22: ein einzelner Fehler in einem von
   // beiden liess vorher den kompletten Match-Lauf fuer das Bild abstuerzen, statt nur dieses eine

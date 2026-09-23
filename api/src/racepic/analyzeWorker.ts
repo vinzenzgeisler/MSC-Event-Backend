@@ -96,6 +96,15 @@ const processOneImage = async (imageId: string): Promise<void> => {
     finishedAt: new Date(), rawResultKey, summary: { vehicleCount: vehicles.length, textCount: texts.length, cropOcrAttempts }
   });
 
+  // Bug gefunden 2026-09-23 (Nutzer-Feedback: dieselbe Detection tauchte dreifach mit
+  // unterschiedlichen Scores in der Review-Queue auf): ohne diesen Delete konnten zwei
+  // ueberlappende Ausfuehrungen fuer dasselbe Bild (SQS liefert mindestens einmal, aber nicht
+  // exakt einmal zu; die Idempotenz-Pruefung oben ist ein Check-then-Act ohne echten Lock)
+  // unabhaengig voneinander racepic_detection-Zeilen anlegen. Vor dem Einfuegen der frischen
+  // Detections erst die alten fuer dieses Bild entfernen (cascadiert auf text_detection/
+  // match_candidate), damit am Ende immer nur ein Satz Detections fuer den aktuellen Lauf existiert.
+  await db.delete(racepicDetection).where(eq(racepicDetection.imageId, imageId));
+
   const detectionIds: { id: string; bbox: { left: number; top: number; width: number; height: number } }[] = [];
   let embeddingSuccessCount = 0;
   let embeddingFailureCount = 0;

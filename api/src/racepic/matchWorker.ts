@@ -32,7 +32,11 @@ const MAX_STORED_CANDIDATES = 5;
 // davon laedt bei einem Cache-Miss ein volles Fahrzeugfoto herunter und dekodiert es mit sharp.
 // Bei einem groesseren Event (mehrere Dutzend/hundert Nennungen) fuehrte das zu
 // `Runtime.OutOfMemory`. Begrenzt die Parallelitaet stattdessen auf einen festen Wert.
-const CANDIDATE_SCORING_CONCURRENCY = 5;
+// Gesenkt 2026-09-23 (Bug gefunden: 154 Bedrock-ThrottlingExceptions in 2h, weiterhin dutzende
+// selbst mit Retry/Backoff in bedrock.ts) - das frisch freigeschaltete Inference-Profile hat
+// offenbar ein niedriges TPS-Kontingent; 5 gleichzeitige embedImage-Aufrufe ueberfordern das
+// zuverlaessig. Auf Kosten etwas laengerer Match-Laufzeit.
+const CANDIDATE_SCORING_CONCURRENCY = 2;
 
 async function mapWithConcurrencyLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
@@ -142,6 +146,19 @@ const processOneImage = async (imageId: string): Promise<void> => {
 
     const top = scored[0];
     const margin = scored.length > 1 ? top.score - scored[1].score : top.score;
+
+    // Bug gefunden 2026-09-23 (Nutzer-Feedback: die Review-Queue zeigte einen "Top-Kandidaten" mit
+    // 88%/76% Konfidenz an, obwohl fuer dieses Bild gar keine Zuordnung existierte - deutlich ueber
+    // reviewThreshold haette das eine echte racepic_assignment-Zeile erzeugen muessen): alte
+    // racepic_match_candidate-Zeilen fuer diese Detection wurden nie geloescht, nur neue rangiert
+    // eingefuegt. Bei mehreren Laeufen fuer dieselbe Detection (Re-Match, oder ein zweiter
+    // Match-Versuch nach einem teilweise fehlgeschlagenen vorherigen) sammelten sich so Kandidaten
+    // aus verschiedenen Config-/Pipeline-Versionen an, und `loadCandidateDisplays`
+    // (reviewQueue.ts) zeigte einfach irgendeine der mehreren "rank=1"-Zeilen - moeglicherweise aus
+    // einem alten Lauf mit anderen Gewichten/Schwellen. Vor dem Einfuegen der frischen Kandidaten
+    // erst die alten fuer diese Detection entfernen, damit die Tabelle immer nur den aktuellen Lauf
+    // widerspiegelt (die eigentliche Historie ist racepic_assignment_event, nicht diese Tabelle).
+    await db.delete(racepicMatchCandidate).where(eq(racepicMatchCandidate.detectionId, detection.id));
 
     const storedCandidateIds: string[] = [];
     for (const [index, candidate] of scored.slice(0, MAX_STORED_CANDIDATES).entries()) {

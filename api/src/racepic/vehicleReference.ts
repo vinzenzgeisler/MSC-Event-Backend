@@ -1,6 +1,6 @@
 import { GetObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import sharp from 'sharp';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { entry, eventClass, racepicVehicleReference, vehicle } from '../db/schema';
 import { embedImage } from './bedrock';
@@ -199,6 +199,23 @@ export const warmEventVehicleReferences = async (
       isNull(entry.deletedAt)
     ));
 
+  // Bug gefunden 2026-09-23 (Nutzer-Feedback: Fortschrittsanzeige lief unbegrenzt weiter, "skipped"
+  // wuchs weit ueber die Gesamtzahl der Fahrzeuge hinaus): eine einzelne Select-Abfrage PRO
+  // Fahrzeug innerhalb der Schleife bedeutet 267 sequentielle DB-Roundtrips nur fuer den
+  // Cache-Check - bei ueblicher RDS-Latenz reicht das allein schon fast das komplette 22s-
+  // Zeitbudget aus. Jeder folgende Aufruf begann wieder bei Fahrzeug 1 (kein Cursor), scannte
+  // dieselben laengst gecachten Fahrzeuge erneut komplett durch und kam dadurch nie ueber den
+  // immer gleichen Anfangsabschnitt hinaus - "done" wurde praktisch nie true. Ein einziger
+  // Bulk-Select vor der Schleife (IN-Liste statt einer Abfrage je Fahrzeug) macht den Scan-Teil
+  // nahezu kostenlos.
+  const cachedRows = eligibleRows.length
+    ? await db
+        .select({ vehicleId: racepicVehicleReference.vehicleId, embedding: racepicVehicleReference.embedding, dominantColors: racepicVehicleReference.dominantColors })
+        .from(racepicVehicleReference)
+        .where(inArray(racepicVehicleReference.vehicleId, eligibleRows.map((row) => row.vehicleId)))
+    : [];
+  const cachedByVehicleId = new Map(cachedRows.map((row) => [row.vehicleId, row]));
+
   const startedAt = Date.now();
   let processed = 0;
   let skipped = 0;
@@ -206,8 +223,7 @@ export const warmEventVehicleReferences = async (
     if (Date.now() - startedAt > timeBudgetMs) {
       return { processed, skipped, total: eligibleRows.length, done: false };
     }
-    const [existing] = await db.select({ id: racepicVehicleReference.id, embedding: racepicVehicleReference.embedding, dominantColors: racepicVehicleReference.dominantColors })
-      .from(racepicVehicleReference).where(eq(racepicVehicleReference.vehicleId, row.vehicleId)).limit(1);
+    const existing = cachedByVehicleId.get(row.vehicleId);
     const existingColor = (existing?.dominantColors as unknown as { color: RgbColor | null } | null)?.color ?? null;
     if (existing?.embedding && existingColor) {
       skipped += 1;

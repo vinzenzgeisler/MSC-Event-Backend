@@ -91,6 +91,12 @@ export type ReviewQueueItem = {
 export const listReviewQueue = async (eventId: string, offset: number, limit: number): Promise<{ items: ReviewQueueItem[]; total: number }> => {
   const db = await getDb();
 
+  // Bug gefunden 2026-09-23 (Nutzer-Feedback: "komische Duplikate mit und ohne Bild"): removeImage()
+  // loescht die S3-Objekte und setzt visibility='REMOVED', laesst processingStatus aber auf
+  // 'MATCHED' und die Assignment-/Detection-Zeilen unangetastet - beide Queries unten filterten
+  // bislang nicht auf visibility. Ein entferntes Bild blieb dadurch als (dann permanent kaputter,
+  // bildloser) Eintrag in der Queue stehen, parallel zum frisch hochgeladenen Ersatzbild.
+
   // 1) Von der KI vorgeschlagene, aber noch nicht entschiedene Zuordnungen.
   const reviewRows = await db
     .select({
@@ -105,7 +111,7 @@ export const listReviewQueue = async (eventId: string, offset: number, limit: nu
     .from(racepicAssignment)
     .innerJoin(racepicImage, eq(racepicImage.id, racepicAssignment.imageId))
     .leftJoin(racepicDetection, eq(racepicDetection.id, racepicAssignment.detectionId))
-    .where(and(eq(racepicImage.eventId, eventId), eq(racepicAssignment.status, 'REVIEW_REQUIRED')));
+    .where(and(eq(racepicImage.eventId, eventId), eq(racepicAssignment.status, 'REVIEW_REQUIRED'), ne(racepicImage.visibility, 'REMOVED')));
 
   // 2) Erkannte Fahrzeuge ganz ohne Zuordnung (Bug gefunden 2026-09-22, Nutzer-Feedback: "wenn gar
   // kein Match gibt, dass es dann zur Queue-Ansicht geht" und "wenn zwei oder mehr Fahrzeuge im
@@ -125,7 +131,7 @@ export const listReviewQueue = async (eventId: string, offset: number, limit: nu
     .from(racepicDetection)
     .innerJoin(racepicImage, eq(racepicImage.id, racepicDetection.imageId))
     .leftJoin(racepicAssignment, eq(racepicAssignment.detectionId, racepicDetection.id))
-    .where(and(eq(racepicImage.eventId, eventId), eq(racepicImage.processingStatus, 'MATCHED'), isNull(racepicAssignment.id)));
+    .where(and(eq(racepicImage.eventId, eventId), eq(racepicImage.processingStatus, 'MATCHED'), isNull(racepicAssignment.id), ne(racepicImage.visibility, 'REMOVED')));
 
   const merged = [
     ...reviewRows.map((row) => ({

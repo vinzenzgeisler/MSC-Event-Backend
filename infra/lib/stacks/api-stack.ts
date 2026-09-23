@@ -1915,6 +1915,10 @@ export class ApiStack extends Stack {
         authorizer: jwtAuthorizer
       });
       this.api.addRoutes({ path: '/admin/racepic/photographers/{photographerId}/review', methods: [apigwv2.HttpMethod.POST], integration: racePicIntegration, authorizer: jwtAuthorizer });
+      // Bug gefunden 2026-09-23: Route fehlte in API Gateway, obwohl handler.ts sie schon
+      // beantwortete - der Browser sah dadurch nur einen (irrefuehrenden) CORS-Fehler statt eines
+      // 404, weil eine unbekannte Route in HttpApi keine CORS-Header traegt.
+      this.api.addRoutes({ path: '/admin/racepic/photographers/{photographerId}', methods: [apigwv2.HttpMethod.DELETE], integration: racePicIntegration, authorizer: jwtAuthorizer });
 
       // Paket 5 (Admin-Basis): Event-Konfiguration und Statistik.
       this.api.addRoutes({
@@ -2079,6 +2083,13 @@ export class ApiStack extends Stack {
         integration: racePicIntegration,
         authorizer: photographerJwtAuthorizer
       });
+      // Bug gefunden 2026-09-23: Route fehlte in API Gateway (siehe Kommentar bei .../photographers/{photographerId} oben).
+      this.api.addRoutes({
+        path: '/photographer/images/{imageId}/assignments',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
       // Paket 15 (Studio-Redesign): Fotograf-Selbstverwaltung, siehe api/src/racepic/uploads.ts.
       this.api.addRoutes({
         path: '/photographer/images/{imageId}',
@@ -2101,6 +2112,8 @@ export class ApiStack extends Stack {
         authorizer: jwtAuthorizer
       });
       this.api.addRoutes({ path: '/admin/racepic/images/{imageId}/status', methods: [apigwv2.HttpMethod.GET], integration: racePicIntegration, authorizer: jwtAuthorizer });
+      // Bug gefunden 2026-09-23: Route fehlte in API Gateway (siehe Kommentar bei .../photographers/{photographerId} oben).
+      this.api.addRoutes({ path: '/admin/racepic/images/{imageId}/permanent', methods: [apigwv2.HttpMethod.DELETE], integration: racePicIntegration, authorizer: jwtAuthorizer });
 
       // Paket 3: Upload-Reconciler (haengengebliebene Presign-Fenster), siehe
       // api/src/racepic/reconcileUploads.ts. Laeuft alle 15 Minuten - lang genug, um den

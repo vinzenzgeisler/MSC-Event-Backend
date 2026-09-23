@@ -24,8 +24,16 @@ import type { RgbColor } from './rekognition';
  * docs/memory-bank/racepic-architecture.md Abschnitt F "Matching-Strategie". Idempotent ueber
  * `racepic_processing_step` (step='match'), aber die Pipeline-Version schliesst die verwendete
  * Matching-Config-Version ein - ein Rematch mit neuer Config ist damit **kein** No-Op.
+ *
+ * Bug gefunden 2026-09-23 (Nutzer-Feedback: manuell ausgeloester Rematch aenderte nichts an einem
+ * Bild mit fehlender Assignment-Zeile trotz 78% Score): der Idempotenz-Check
+ * (`existingStep?.status === 'DONE'`) haengt an dieser Konstante plus der Matching-Config-Version -
+ * blieb beides unveraendert, ueberspringt ein "Rematch" die Verarbeitung komplett, obwohl sich die
+ * eigentliche Zuordnungslogik (das atomare Upsert oben) geaendert hat. Bei jeder Aenderung an
+ * dieser Datei, die das Ergebnis fuer bereits verarbeitete Bilder beeinflussen kann, muss diese
+ * Versionsnummer mit hochgezaehlt werden, sonst bleibt ein Rematch wirkungslos.
  */
-export const PIPELINE_VERSION = '2026-09-21.1';
+export const PIPELINE_VERSION = '2026-09-23.1';
 const MAX_STORED_CANDIDATES = 5;
 // Bug gefunden 2026-09-22: `eligible.map(...)` in `Promise.all` feuerte pro Detection so viele
 // gleichzeitige `ensureVehicleReference`-Aufrufe wie es zulaessige Nennungen im Event gibt - jeder

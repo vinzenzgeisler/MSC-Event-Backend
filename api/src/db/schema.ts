@@ -1868,6 +1868,9 @@ export const racepicDetection = pgTable('racepic_detection', {
   confidence: numeric('confidence', { precision: 7, scale: 4 }),
   dominantColors: jsonb('dominant_colors'),
   embedding: vector('embedding', { dimensions: 1024 }),
+  // Nutzerwunsch 2026-09-23: manche Fahrzeuge sind auch fuer einen Menschen nicht identifizierbar -
+  // "wegklicken" statt fuer immer offen in der Zuordnungs-Queue haengen zu bleiben, siehe reviewQueue.ts.
+  reviewedNoMatch: boolean('reviewed_no_match').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 }, (table) => ({
   imageIndex: index('racepic_detection_image_idx').on(table.imageId),

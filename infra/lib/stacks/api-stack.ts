@@ -2019,6 +2019,12 @@ export class ApiStack extends Stack {
         authorizer: jwtAuthorizer
       });
       this.api.addRoutes({
+        path: '/admin/racepic/detections/{detectionId}/dismiss',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
         path: '/admin/racepic/participants/{entryId}/images',
         methods: [apigwv2.HttpMethod.GET],
         integration: racePicIntegration,

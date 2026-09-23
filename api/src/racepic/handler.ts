@@ -59,6 +59,7 @@ import {
   addAssignment,
   confirmAssignment,
   correctAssignment,
+  dismissDetection,
   hideParticipant,
   listAssignmentsForImage,
   listImagesForEntry,
@@ -166,6 +167,8 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 404, message: 'Entry not found' };
     case 'RACEPIC_PHOTOGRAPHER_NOT_FOUND':
       return { status: 404, message: 'Photographer not found' };
+    case 'RACEPIC_DETECTION_NOT_FOUND':
+      return { status: 404, message: 'Detection not found' };
     default:
       return { status: 500, message: 'RacePic operation failed' };
   }
@@ -1364,6 +1367,26 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       } catch (error) {
         if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
         if (isInvalidJson(error)) return errorJson(400, 'Invalid JSON body');
+        if (error instanceof RacePicError) {
+          const { status, message } = racePicErrorStatus(error);
+          return errorJson(status, message, undefined, error.code);
+        }
+        throw error;
+      }
+    }
+
+    // "Wegklicken" einer Detection ohne Zuordnung (Nutzerwunsch 2026-09-23: manche Fahrzeuge sind
+    // auch fuer einen Menschen nicht identifizierbar - das Bild soll trotzdem regulaer verfuegbar
+    // bleiben, siehe reviewQueue.ts dismissDetection).
+    const dismissDetectionMatch = path.match(/^\/admin\/racepic\/detections\/([^/]+)\/dismiss$/);
+    if (method === 'POST' && dismissDetectionMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.review')) return errorJson(403, 'Forbidden');
+      try {
+        await dismissDetection(decodeURIComponent(dismissDetectionMatch[1]), auth.sub);
+        return json(200, { ok: true });
+      } catch (error) {
         if (error instanceof RacePicError) {
           const { status, message } = racePicErrorStatus(error);
           return errorJson(status, message, undefined, error.code);

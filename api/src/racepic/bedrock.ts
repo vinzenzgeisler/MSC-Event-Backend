@@ -37,10 +37,26 @@ type CohereEmbedV4FloatResponse = {
   embeddings: { float?: number[][] };
 };
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isThrottling = (error: unknown): boolean =>
+  error instanceof Error && (error.name === 'ThrottlingException' || /throttl/i.test(error.message));
+
+const MAX_THROTTLE_RETRIES = 4;
+
 /**
  * Embeddet ein einzelnes Bild (Fahrzeug-Crop oder Referenzfoto). `input_type: search_document`
  * wird fuer beide Seiten (Referenz und Kandidat) verwendet, damit sie im selben Vektorraum liegen
  * und per Kosinus-Aehnlichkeit vergleichbar sind (kein Query/Dokument-Verhaeltnis wie bei Textsuche).
+ *
+ * Retry mit Backoff bei ThrottlingException (Bug gefunden 2026-09-23: 154 ThrottlingExceptions in
+ * 2h im Match-Worker allein - das frisch freigeschaltete Inference-Profile hat offenbar ein
+ * niedriges TPS-Kontingent, `matchWorker.ts` ruft aber pro Match-Lauf ein Embedding je noch nicht
+ * gecachtem Fahrzeug auf, mit bis zu 5 gleichzeitigen Aufrufen. Ohne Retry wurde ein gedrosselter
+ * Aufruf einfach als "kein Embedding" gewertet (`matching.ts` setzt dafuer neutral 0.5 ein) - bei
+ * vielen gleichzeitigen Drosselungen bekam so praktisch jeder Kandidat denselben neutralen Bonus,
+ * unabhaengig von echter visueller Aehnlichkeit, was Fehltreffer mit unplausibel hoher Konfidenz
+ * begsuenstigte.
  */
 export const embedImage = async (jpegBuffer: Buffer): Promise<number[]> => {
   const client = getClient();
@@ -52,15 +68,28 @@ export const embedImage = async (jpegBuffer: Buffer): Promise<number[]> => {
     output_dimension: EMBEDDING_DIMENSIONS
   });
 
-  const result = await client.send(
-    new InvokeModelCommand({ modelId: EMBEDDING_MODEL_ID, contentType: 'application/json', accept: 'application/json', body })
-  );
-  const parsed = JSON.parse(Buffer.from(result.body).toString('utf8')) as CohereEmbedV4FloatResponse;
-  const embedding = parsed.embeddings?.float?.[0];
-  if (!embedding || embedding.length !== EMBEDDING_DIMENSIONS) {
-    throw new Error('RACEPIC_EMBEDDING_INVALID_RESPONSE');
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= MAX_THROTTLE_RETRIES; attempt += 1) {
+    if (attempt > 0) {
+      const backoffMs = 300 * 2 ** (attempt - 1) + Math.round(Math.random() * 200);
+      await sleep(backoffMs);
+    }
+    try {
+      const result = await client.send(
+        new InvokeModelCommand({ modelId: EMBEDDING_MODEL_ID, contentType: 'application/json', accept: 'application/json', body })
+      );
+      const parsed = JSON.parse(Buffer.from(result.body).toString('utf8')) as CohereEmbedV4FloatResponse;
+      const embedding = parsed.embeddings?.float?.[0];
+      if (!embedding || embedding.length !== EMBEDDING_DIMENSIONS) {
+        throw new Error('RACEPIC_EMBEDDING_INVALID_RESPONSE');
+      }
+      return embedding;
+    } catch (error) {
+      lastError = error;
+      if (!isThrottling(error)) throw error;
+    }
   }
-  return embedding;
+  throw lastError;
 };
 
 export const cosineSimilarity = (a: number[], b: number[]): number => {

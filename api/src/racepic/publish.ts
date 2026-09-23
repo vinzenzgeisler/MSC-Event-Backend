@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { getDb } from '../db/client';
 import {
@@ -295,6 +295,77 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
   return { participants, imagesByParticipantKey };
 };
 
+/**
+ * Veroeffentlichte Bilder ohne (aktive) Fahrer-Zuordnung (Nutzerwunsch 2026-09-23: "es gibt auch
+ * Fahrzeuge, die ich wirklich nicht erkenne, nicht mal manuell - diese sollen auch einfach ohne
+ * Fahrer-Zuordnung im RacePic herunterladbar sein"). `requestImageDownload` (download.ts) prueft
+ * ohnehin keine Zuordnung, das Bild war also technisch schon laenger herunterladbar - nur *finden*
+ * konnte man es nirgendwo, weil `buildManifestData` oben ausschliesslich ueber Zuordnungen
+ * (racepic_assignment -> entry) geht. Diese Bilder tauchen deshalb NICHT auf einer
+ * Teilnehmer-Seite auf (es gibt ja keinen Fahrer dazu), aber im globalen Discover-Feed und mit
+ * eigener Bild-Detailseite (`i/{imageId}.json`), siehe regenerateManifestsForEvent/
+ * regenerateGlobalDiscoveryManifests unten.
+ */
+const listUnassignedPublishedImages = async (eventId: string): Promise<ManifestImage[]> => {
+  const db = await getDb();
+  const activeAssignments = await db
+    .selectDistinct({ imageId: racepicAssignment.imageId })
+    .from(racepicAssignment)
+    .innerJoin(racepicImage, eq(racepicImage.id, racepicAssignment.imageId))
+    .where(and(eq(racepicImage.eventId, eventId), inArray(racepicAssignment.status, ['AUTO_MATCHED', 'MANUALLY_CONFIRMED', 'MANUALLY_CORRECTED'])));
+  const assignedImageIds = activeAssignments.map((row) => row.imageId);
+
+  const rows = await db
+    .select({
+      imageId: racepicImage.id,
+      imageWidth: racepicImage.width,
+      imageHeight: racepicImage.height,
+      imageTitle: racepicImage.title,
+      imageDescription: racepicImage.description,
+      imageTags: racepicImage.tags,
+      imageCamera: racepicImage.camera,
+      imageCapturedAt: racepicImage.capturedAt,
+      imageCreatedAt: racepicImage.createdAt,
+      photographerDisplayName: racepicPhotographer.displayName,
+      photographerWebsite: racepicPhotographer.website,
+      photographerSlug: racepicPhotographer.slug,
+      licenseCode: racepicLicense.code,
+      licenseTitle: racepicLicense.title,
+      licenseAttributionRequired: racepicLicense.attributionRequired,
+      licenseAttributionTemplate: racepicLicense.attributionTemplate
+    })
+    .from(racepicImage)
+    .innerJoin(racepicPhotographer, eq(racepicPhotographer.id, racepicImage.photographerId))
+    .innerJoin(racepicLicense, eq(racepicLicense.id, racepicImage.licenseId))
+    .where(and(
+      eq(racepicImage.eventId, eventId),
+      eq(racepicImage.visibility, 'PUBLISHED'),
+      eq(racepicImage.offerMode, 'FREE'),
+      assignedImageIds.length > 0 ? notInArray(racepicImage.id, assignedImageIds) : undefined
+    ));
+
+  return rows.map((row) => ({
+    imageId: row.imageId,
+    thumbUrl: `/public/${row.imageId}/thumb.webp`,
+    previewUrl: `/public/${row.imageId}/preview.webp`,
+    width: row.imageWidth,
+    height: row.imageHeight,
+    title: row.imageTitle,
+    description: row.imageDescription,
+    tags: Array.isArray(row.imageTags) ? row.imageTags as string[] : [],
+    camera: row.imageCamera,
+    capturedAt: row.imageCapturedAt ? row.imageCapturedAt.toISOString() : null,
+    createdAt: row.imageCreatedAt.toISOString(),
+    photographer: { displayName: row.photographerDisplayName, website: row.photographerWebsite, slug: row.photographerSlug },
+    license: {
+      code: row.licenseCode,
+      title: row.licenseTitle,
+      attributionRequired: row.licenseAttributionRequired,
+      attributionTemplate: row.licenseAttributionTemplate
+    }
+  }));
+};
+
 export const regenerateManifestsForEvent = async (eventId: string): Promise<void> => {
   const db = await getDb();
   const [racepicEventRow] = await db.select().from(racepicEvent).where(eq(racepicEvent.eventId, eventId)).limit(1);
@@ -303,6 +374,7 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
   }
 
   const { participants, imagesByParticipantKey } = await buildManifestData(eventId);
+  const unassignedImages = await listUnassignedPublishedImages(eventId);
   const slug = racepicEventRow.slug;
 
   // Entfernte Zuordnungen duerfen nicht ueber alte direkte CDN-Links erreichbar bleiben.
@@ -332,6 +404,11 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
       detail.participants.push(participant);
       imageDetails.set(image.imageId, detail);
     }
+  }
+  // Bilder ohne Fahrer-Zuordnung bekommen ebenfalls eine Detailseite (leere `participants`), damit
+  // die Discover-Lightbox sie oeffnen kann (siehe listUnassignedPublishedImages oben).
+  for (const image of unassignedImages) {
+    if (!imageDetails.has(image.imageId)) imageDetails.set(image.imageId, { image, participants: [] });
   }
   const allImages = Array.from(imageDetails.values()).map((detail) => detail.image);
   for (const [imageId, detail] of imageDetails) {
@@ -372,6 +449,21 @@ const regenerateGlobalDiscoveryManifests = async (publishedEvents: (typeof racep
   const searchEntries: { participantKey: string; eventSlug: string; eventTitle: string; startNumber: string; displayName: string; make: string | null; model: string | null; className: string }[] = [];
   for (const eventRow of publishedEvents) {
     const { participants, imagesByParticipantKey } = await buildManifestData(eventRow.eventId);
+    const unassignedImages = await listUnassignedPublishedImages(eventRow.eventId);
+    // Auch ohne Fahrer-Zuordnung im globalen Discover-Feed sichtbar (siehe
+    // listUnassignedPublishedImages) - kein Suchindex-Eintrag dafuer, da es keinen Teilnehmer gibt,
+    // nach dem gesucht werden koennte.
+    for (const image of unassignedImages) {
+      discoverById.set(image.imageId, {
+        imageId: image.imageId,
+        thumbUrl: image.thumbUrl,
+        previewUrl: image.previewUrl,
+        eventSlug: eventRow.slug,
+        eventTitle: eventRow.title,
+        capturedAt: image.capturedAt,
+        createdAt: image.createdAt
+      });
+    }
     for (const participant of participants) {
       for (const image of imagesByParticipantKey.get(participant.participantKey) ?? []) {
         discoverById.set(image.imageId, {

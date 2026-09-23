@@ -13,6 +13,7 @@ import {
 } from '../db/schema';
 import { RacePicError } from './repository';
 import { presignGetObject } from './s3';
+import { logOperationalEvent } from '../observability/logger';
 
 /**
  * Review-Queue (Paket 7), siehe docs/memory-bank/racepic-architecture.md Abschnitt H/18. Die
@@ -131,7 +132,13 @@ export const listReviewQueue = async (eventId: string, offset: number, limit: nu
     .from(racepicDetection)
     .innerJoin(racepicImage, eq(racepicImage.id, racepicDetection.imageId))
     .leftJoin(racepicAssignment, eq(racepicAssignment.detectionId, racepicDetection.id))
-    .where(and(eq(racepicImage.eventId, eventId), eq(racepicImage.processingStatus, 'MATCHED'), isNull(racepicAssignment.id), ne(racepicImage.visibility, 'REMOVED')));
+    .where(and(
+      eq(racepicImage.eventId, eventId),
+      eq(racepicImage.processingStatus, 'MATCHED'),
+      isNull(racepicAssignment.id),
+      ne(racepicImage.visibility, 'REMOVED'),
+      eq(racepicDetection.reviewedNoMatch, false)
+    ));
 
   const merged = [
     ...reviewRows.map((row) => ({
@@ -432,4 +439,20 @@ export const hideParticipant = async (entryId: string, actorId: string): Promise
   }
 
   return { eventIds: [entryRow.eventId], rejectedCount: activeAssignments.length };
+};
+
+/**
+ * "Wegklicken" einer Detection ohne Zuordnung (Nutzerwunsch 2026-09-23: "es gibt auch Bilder wo
+ * ich selbst manuell nicht den Fahrer erkenn ... die sollen auch so im RacePic zur Verfügung
+ * stehen und daher muss man die bei der Zuordnung auch wegklicken können"). Es gibt hier bewusst
+ * keine racepic_assignment-Zeile zum Ablehnen (die braucht eine echte entry_id) - stattdessen ein
+ * eigenes Flag direkt auf der Detection. Das Bild selbst bleibt unangetastet (visibility/
+ * processingStatus), der Download-Endpunkt (download.ts) braucht ohnehin keine Zuordnung.
+ */
+export const dismissDetection = async (detectionId: string, actorId: string): Promise<void> => {
+  const db = await getDb();
+  const [detection] = await db.select({ id: racepicDetection.id }).from(racepicDetection).where(eq(racepicDetection.id, detectionId)).limit(1);
+  if (!detection) throw new RacePicError('RACEPIC_DETECTION_NOT_FOUND');
+  await db.update(racepicDetection).set({ reviewedNoMatch: true }).where(eq(racepicDetection.id, detectionId));
+  logOperationalEvent('info', 'racepic_detection.dismissed', { detectionId, actorId });
 };

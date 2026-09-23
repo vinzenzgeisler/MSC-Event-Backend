@@ -9,16 +9,25 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
  * Cross-Region-Umweg (und die separate Bedrock-Modellzugriffsfreigabe in einer zweiten Region)
  * war nicht mehr noetig.
  *
- * Modell-ID `cohere.embed-v4:0`, Bild-Input ueber `images: ["data:<mime>;base64,..."]`. Das
- * Response-Format wurde urspruenglich (Paket 6) anhand der AWS-Doku als
- * `{ response_type: 'embeddings_floats', embeddings: number[][] }` angenommen - der erste echte
- * Live-Aufruf (2026-09-22, nach Abschluss der AWS-Kontoverifizierung fuer Bedrock) zeigte das
- * tatsaechliche Format: `{ response_type: 'embeddings_by_type', embeddings: { float: number[][] } }`
- * - `embeddings` ist nach Embedding-Typ verschluesselt (`embedding_types: ['float']` steuert,
- * welche Keys vorhanden sind), nicht direkt ein Array.
+ * Modell-ID `eu.cohere.embed-v4:0` - **Inference-Profile-ID**, nicht die rohe Modell-ID
+ * `cohere.embed-v4:0` (Bug gefunden 2026-09-23, per Live-Test verifiziert: ein direkter Aufruf
+ * der rohen Modell-ID schlaegt mit `ValidationException: ... isn't supported with on-demand
+ * throughput` fehl - dieses Modell verlangt in diesem Account ein systemdefiniertes
+ * Cross-Region-Inference-Profile. `eu.*` routet dabei weiterhin nur innerhalb der EU
+ * (eu-central-1/eu-west-1/eu-west-3/eu-north-1/eu-south-1/eu-south-2), kein Drittlandtransfer -
+ * die IAM-Policy braucht deshalb Rechte auf die Profil-ARN UND alle sechs zugrundeliegenden
+ * Foundation-Model-ARNs, siehe api-stack.ts.
+ *
+ * Bild-Input ueber `images: ["data:<mime>;base64,..."]`. Das Response-Format wurde urspruenglich
+ * (Paket 6) anhand der AWS-Doku als `{ response_type: 'embeddings_floats', embeddings: number[][] }`
+ * angenommen - der erste echte Live-Aufruf (2026-09-22, nach Abschluss der AWS-Kontoverifizierung
+ * fuer Bedrock) zeigte das tatsaechliche Format:
+ * `{ response_type: 'embeddings_by_type', embeddings: { float: number[][] } }` - `embeddings` ist
+ * nach Embedding-Typ verschluesselt (`embedding_types: ['float']` steuert, welche Keys vorhanden
+ * sind), nicht direkt ein Array.
  */
 
-const EMBEDDING_MODEL_ID = process.env.RACEPIC_EMBEDDING_MODEL_ID ?? 'cohere.embed-v4:0';
+const EMBEDDING_MODEL_ID = process.env.RACEPIC_EMBEDDING_MODEL_ID ?? 'eu.cohere.embed-v4:0';
 export const EMBEDDING_DIMENSIONS = 1024; // muss zu vector(1024) in db/schema.ts passen.
 
 const getClient = () => new BedrockRuntimeClient({ region: process.env.RACEPIC_EMBEDDING_REGION ?? 'eu-central-1' });

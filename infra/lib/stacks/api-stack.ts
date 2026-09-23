@@ -2206,6 +2206,23 @@ export class ApiStack extends Stack {
       new CfnOutput(this, 'RacePicApiHandlerName', { value: racePicApiHandler.functionName });
       new CfnOutput(this, 'RacePicIngestWorkerName', { value: racePicIngestWorker.functionName });
 
+      // Bug gefunden 2026-09-23 (per Live-Test verifiziert): cohere.embed-v4:0 laesst sich in
+      // diesem Account nicht mehr direkt per Modell-ID aufrufen ("isn't supported with on-demand
+      // throughput"), sondern nur ueber das systemdefinierte Cross-Region-Inference-Profile
+      // eu.cohere.embed-v4:0 (siehe bedrock.ts) - IAM braucht dafuer Rechte sowohl auf die
+      // Profil-ARN als auch auf alle sechs EU-Foundation-Model-ARNs, an die das Profil routen
+      // kann (eu-central-1/eu-west-1/eu-west-3/eu-north-1/eu-south-1/eu-south-2 - weiterhin
+      // ausschliesslich EU, kein Drittlandtransfer).
+      const racePicBedrockResources = [
+        `arn:aws:bedrock:eu-central-1:${this.account}:inference-profile/eu.cohere.*`,
+        'arn:aws:bedrock:eu-central-1::foundation-model/cohere.*',
+        'arn:aws:bedrock:eu-west-1::foundation-model/cohere.*',
+        'arn:aws:bedrock:eu-west-3::foundation-model/cohere.*',
+        'arn:aws:bedrock:eu-north-1::foundation-model/cohere.*',
+        'arn:aws:bedrock:eu-south-1::foundation-model/cohere.*',
+        'arn:aws:bedrock:eu-south-2::foundation-model/cohere.*'
+      ];
+
       // Paket 6: Analyze-Worker (Rekognition DetectText/DetectLabels + Bedrock-Embedding je
       // Fahrzeug-Crop), konsumiert die Analyze-Queue.
       const racePicAnalyzeWorker = new NodejsFunction(this, 'RacePicAnalyzeWorker', {
@@ -2255,7 +2272,7 @@ export class ApiStack extends Stack {
       racePicAnalyzeWorker.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['bedrock:InvokeModel'],
-          resources: ['arn:aws:bedrock:eu-central-1::foundation-model/cohere.*']
+          resources: racePicBedrockResources
         })
       );
       racePicStack.matchQueue.grantSendMessages(racePicAnalyzeWorker);
@@ -2307,7 +2324,7 @@ export class ApiStack extends Stack {
       racePicMatchWorker.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['bedrock:InvokeModel'],
-          resources: ['arn:aws:bedrock:eu-central-1::foundation-model/cohere.*']
+          resources: racePicBedrockResources
         })
       );
       racePicMatchWorker.addEventSource(

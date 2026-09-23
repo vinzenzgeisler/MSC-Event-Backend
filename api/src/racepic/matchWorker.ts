@@ -1,5 +1,5 @@
 import { SQSEvent, SQSBatchResponse } from 'aws-lambda';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import {
   entry,
@@ -184,21 +184,41 @@ const processOneImage = async (imageId: string): Promise<void> => {
     else if (top.score >= config.reviewThreshold) desiredStatus = 'REVIEW_REQUIRED';
     if (!desiredStatus) continue;
 
-    const [existingAssignment] = await db
-      .select()
+    // Bug gefunden 2026-09-23 (Nutzer-Feedback: Kandidat mit 78% Konfidenz - deutlich ueber der
+    // reviewThreshold - hatte trotzdem keinen "Bestaetigen"-Button, weil `assignmentId` null blieb):
+    // Select-dann-Insert-oder-Update ist kein echter Lock. SQS liefert mindestens einmal, aber nicht
+    // exakt einmal zu, und die Idempotenz-Pruefung ueber racepic_processing_step ist selbst nur
+    // Check-then-Act (siehe deren Kommentar oben) - zwei ueberlappende Laeufe fuer dasselbe Bild
+    // konnten beide `existingAssignment` als "nicht vorhanden" lesen, beide versuchten dieselbe
+    // (image_id, entry_id)-Zeile einzufuegen, einer davon warf einen Unique-Constraint-Fehler und
+    // brach dadurch komplett ab, bevor die Assignment-Zeile fuer diese Detection entstand - die
+    // Kandidaten (racepic_match_candidate) waren trotzdem schon gespeichert, dadurch die
+    // widerspruechliche Anzeige "78%, aber kein Kandidat ueber der Schwelle". Ein einziges atomares
+    // Upsert statt Select+Insert/Update schliesst dieses Rennen: der DB-Unique-Index entscheidet,
+    // nicht ein Read davor. `setWhere` erhaelt das Architekturprinzip "manuelle Entscheidungen werden
+    // nie ueberschrieben" - bei einer bestehenden MANUAL-Zeile greift die Update-Klausel gar nicht,
+    // RETURNING liefert dann keine Zeile (gleichbedeutend mit dem fruehen `continue` vorher).
+    const [previousAssignment] = await db
+      .select({ id: racepicAssignment.id, status: racepicAssignment.status })
       .from(racepicAssignment)
       .where(and(eq(racepicAssignment.imageId, imageId), eq(racepicAssignment.entryId, top.entryId)))
       .limit(1);
 
-    if (existingAssignment?.source === 'MANUAL') {
-      // Architekturprinzip (Abschnitt F): "Manuelle Entscheidungen werden durch Re-Runs nie ueberschrieben."
-      continue;
-    }
-
-    if (existingAssignment) {
-      await db
-        .update(racepicAssignment)
-        .set({
+    const [assignmentRow] = await db
+      .insert(racepicAssignment)
+      .values({
+        imageId,
+        entryId: top.entryId,
+        detectionId: detection.id,
+        candidateId: topCandidateId,
+        status: desiredStatus,
+        source: 'AI',
+        confidence: top.score.toFixed(5),
+        decidedByType: 'system'
+      })
+      .onConflictDoUpdate({
+        target: [racepicAssignment.imageId, racepicAssignment.entryId],
+        set: {
           status: desiredStatus,
           detectionId: detection.id,
           candidateId: topCandidateId,
@@ -207,39 +227,19 @@ const processOneImage = async (imageId: string): Promise<void> => {
           decidedByType: 'system',
           decidedById: null,
           decidedAt: new Date()
-        })
-        .where(eq(racepicAssignment.id, existingAssignment.id));
-      await db.insert(racepicAssignmentEvent).values({
-        assignmentId: existingAssignment.id,
-        fromStatus: existingAssignment.status,
-        toStatus: desiredStatus,
-        actorType: 'system',
-        reason: `rematch:${pipelineVersion}`
-      });
-    } else {
-      const [created] = await db
-        .insert(racepicAssignment)
-        .values({
-          imageId,
-          entryId: top.entryId,
-          detectionId: detection.id,
-          candidateId: topCandidateId,
-          status: desiredStatus,
-          source: 'AI',
-          confidence: top.score.toFixed(5),
-          decidedByType: 'system'
-        })
-        .returning();
-      if (created) {
-        await db.insert(racepicAssignmentEvent).values({
-          assignmentId: created.id,
-          fromStatus: null,
-          toStatus: desiredStatus,
-          actorType: 'system',
-          reason: `match:${pipelineVersion}`
-        });
-      }
-    }
+        },
+        setWhere: sql`${racepicAssignment.source} != 'MANUAL'`
+      })
+      .returning();
+    if (!assignmentRow) continue; // bestehende Zeile war MANUAL - unveraendert gelassen.
+
+    await db.insert(racepicAssignmentEvent).values({
+      assignmentId: assignmentRow.id,
+      fromStatus: previousAssignment?.status ?? null,
+      toStatus: desiredStatus,
+      actorType: 'system',
+      reason: previousAssignment ? `rematch:${pipelineVersion}` : `match:${pipelineVersion}`
+    });
   }
 
   await db.update(racepicImage).set({ processingStatus: 'MATCHED', updatedAt: new Date() }).where(eq(racepicImage.id, imageId));

@@ -2330,7 +2330,14 @@ export class ApiStack extends Stack {
         // gleichzeitigen Fahrzeugbild-Downloads/-Dekodierungen) - zusaetzliche Absicherung neben
         // der jetzt begrenzten Parallelitaet in matchWorker.ts, kein Ersatz dafuer.
         memorySize: 1536,
-        timeout: cdk.Duration.seconds(90),
+        // Von 90s auf 280s erhoeht (Bug gefunden 2026-09-23: mit leerem Referenz-Cache - z.B. direkt
+        // nach einem bewussten Reset wie in Migration 0107 - muss ein Match-Lauf fuer ein Bild
+        // potenziell viele noch nicht gecachte Fahrzeugreferenzen live berechnen; bei Bedrock-
+        // Drosselung reichte der alte 90s-Timeout dafuer nicht, das Bild landete nach 5 Versuchen
+        // in der Dead-Letter-Queue statt fertig zu werden. 280s bleibt unter der 300s-Visibility-
+        // Timeout der Match-Queue (racepic-stack.ts), sonst wuerde SQS dieselbe Nachricht ein
+        // zweites Mal zustellen, bevor der erste Versuch abgelaufen ist.
+        timeout: cdk.Duration.seconds(280),
         depsLockFilePath,
         bundling: { nodeModules: ['sharp'] },
         environment: {

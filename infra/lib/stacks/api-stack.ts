@@ -1797,7 +1797,14 @@ export class ApiStack extends Stack {
           RACEPIC_PHOTOGRAPHER_POOL_ID: racePicStack.photographerUserPool.userPoolId,
           RACEPIC_PHOTOGRAPHER_POOL_CLIENT_ID: racePicStack.photographerUserPoolClientId,
           RACEPIC_PHOTOGRAPHER_POOL_ISSUER: racePicStack.photographerUserPoolIssuerUrl,
-          RACEPIC_WEBSITE_BASE_URL: props.config.racepicWebsiteBaseUrl
+          RACEPIC_WEBSITE_BASE_URL: props.config.racepicWebsiteBaseUrl,
+          // Nutzerwunsch 2026-09-23: warmEventVehicleReferences (vehicleReference.ts) liest
+          // Nennungsfotos direkt aus dem Assets-Bucket des Nennungstools, genau wie der
+          // Match-Worker (siehe dort) - ohne diese Variable wirft getAssetsBucket() sofort
+          // "ASSETS_BUCKET is not set", bevor ueberhaupt ein S3-/Rekognition-Aufruf stattfindet.
+          // Fiel beim urspruenglichen Anlegen des Warm-up-Endpunkts nicht auf, weil der Aufruf
+          // fast immer nur bereits gecachte Referenzen traf (fruehe Rueckgabe ohne S3-Zugriff).
+          ASSETS_BUCKET: props.storageStack.assetsBucket.bucketName
         },
         ...(props.config.apiInVpc ? lambdaVpcConfig : {})
       });
@@ -1865,6 +1872,9 @@ export class ApiStack extends Stack {
       );
       racePicApiHandler.addToRolePolicy(
         new iam.PolicyStatement({ actions: ['rekognition:DetectLabels'], resources: ['*'] })
+      );
+      racePicApiHandler.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['s3:GetObject'], resources: [`${props.storageStack.assetsBucket.bucketArn}/*`] })
       );
 
       const racePicIntegration = new SharedPermissionHttpLambdaIntegration('RacePicApiIntegration', racePicApiHandler);

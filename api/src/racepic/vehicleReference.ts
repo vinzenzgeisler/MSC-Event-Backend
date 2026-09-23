@@ -213,13 +213,9 @@ export const warmEventVehicleReferences = async (
       skipped += 1;
       continue;
     }
-    await ensureVehicleReference(row.vehicleId).catch((error) => {
-      // TEMP diagnostics 2026-09-23: errorCodeOf() strips anything that isn't a short code, which
-      // hid the real cause of a mass failure right after deploying the color-reuse change - log the
-      // raw message/stack straight to CloudWatch (bypasses the SAFE_KEYS sanitizer) to find it.
-      console.error('racepic_vehicle_reference.warm_failed raw', error instanceof Error ? error.stack ?? error.message : error);
-      logOperationalEvent('error', 'racepic_vehicle_reference.warm_failed', { vehicleId: row.vehicleId, errorCode: errorCodeOf(error) });
-    });
+    await ensureVehicleReference(row.vehicleId).catch((error) =>
+      logOperationalEvent('error', 'racepic_vehicle_reference.warm_failed', { vehicleId: row.vehicleId, errorCode: errorCodeOf(error) })
+    );
     processed += 1;
     // Nutzer-Feedback 2026-09-23 ("das kann ruhig eine Weile dauern"): bewusste Pause zwischen
     // Fahrzeugen, damit Bedrock-Aufrufe von vornherein gleichmaessig statt in Bursts ankommen -

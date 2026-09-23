@@ -2340,6 +2340,12 @@ export class ApiStack extends Stack {
           resources: racePicBedrockResources
         })
       );
+      // Bug gefunden 2026-09-23: ensureVehicleReference (vehicleReference.ts) ruft jetzt Rekognition
+      // fuers Referenzfoto auf (praezise Instanz-Farbe statt naivem Ganzbild-Mittel), brauchte diese
+      // Permission bisher nicht.
+      racePicMatchWorker.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['rekognition:DetectLabels'], resources: ['*'] })
+      );
       racePicMatchWorker.addEventSource(
         new lambdaEventSources.SqsEventSource(racePicStack.matchQueue, { batchSize: 1, reportBatchItemFailures: true })
       );

@@ -5,7 +5,7 @@ import { getDb } from '../db/client';
 import { racepicVehicleReference, vehicle } from '../db/schema';
 import { embedImage } from './bedrock';
 import { errorCodeOf, logOperationalEvent } from '../observability/logger';
-import type { RgbColor } from './rekognition';
+import { detectVehicles, type RgbColor } from './rekognition';
 
 /**
  * Referenzdaten aus dem bei der Nennung hochgeladenen Fahrzeugfoto (Paket 6: KI-Pipeline), siehe
@@ -44,10 +44,31 @@ const findVehicleImageObject = async (s3Key: string): Promise<Buffer | null> => 
   return null;
 };
 
-/** Schneller Naeherungswert fuer die dominante Farbe: 1x1-Resize mit sharp mittelt alle Pixel. */
+/** Grober Fallback, falls Rekognition im Referenzfoto gar kein Fahrzeug findet: 1x1-Resize mit sharp mittelt alle Pixel. */
 const approximateDominantColor = async (jpegOrPngBuffer: Buffer): Promise<RgbColor> => {
   const { data } = await sharp(jpegOrPngBuffer).resize(1, 1, { fit: 'fill' }).raw().toBuffer({ resolveWithObject: true });
   return { red: data[0], green: data[1], blue: data[2] };
+};
+
+/**
+ * Bug gefunden 2026-09-23 (Nutzer-Feedback: ein komplett gelbes Referenzfahrzeug wurde als 40%
+ * "aehnlich" zu einem weiss/rot/schwarzen Auto vorgeschlagen): `approximateDominantColor` mittelt
+ * *das gesamte Referenzfoto* (Hintergrund inklusive) auf einen einzigen Pixel - bei viel Gras/
+ * Asphalt/Himmel im Bild dominiert der Hintergrund die "Fahrzeugfarbe" komplett, unabhaengig von
+ * der tatsaechlichen Lackierung. Das analysierte Foto bekommt seine Farbe dagegen schon laenger
+ * praezise aus Rekognitions Instanz-BBox (`detectVehicles` -> `instance.DominantColors`,
+ * rekognition.ts) - hier jetzt derselbe Weg fuers Referenzfoto, mit dem alten 1x1-Mittel nur noch
+ * als Fallback, falls Rekognition kein Fahrzeug im Referenzfoto erkennt.
+ */
+const detectReferenceDominantColor = async (imageBuffer: Buffer): Promise<RgbColor> => {
+  try {
+    const detections = await detectVehicles(imageBuffer);
+    const best = [...detections].sort((a, b) => b.confidence - a.confidence).find((d) => d.dominantColors.length > 0);
+    if (best) return best.dominantColors[0];
+  } catch (error) {
+    logOperationalEvent('error', 'racepic_vehicle_reference.color_detect_failed', { errorCode: errorCodeOf(error) });
+  }
+  return approximateDominantColor(imageBuffer);
 };
 
 const hashKey = (value: string): string => {
@@ -99,7 +120,7 @@ export const ensureVehicleReference = async (vehicleId: string): Promise<Vehicle
       logOperationalEvent('error', 'racepic_vehicle_reference.embedding_failed', { errorCode: errorCodeOf(error) });
       return null;
     }),
-    approximateDominantColor(imageBuffer).catch((error) => {
+    detectReferenceDominantColor(imageBuffer).catch((error) => {
       logOperationalEvent('error', 'racepic_vehicle_reference.color_failed', { errorCode: errorCodeOf(error) });
       return null;
     })

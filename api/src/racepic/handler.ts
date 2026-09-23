@@ -53,6 +53,7 @@ import {
   unpublishEventManifests
 } from './publish';
 import { getEventStats, getImagePipelineStatus, listEventsWithRacepicConfig, listImagesForEvent, listPhotographersWithEventAccess, upsertRacepicEventConfig } from './adminEvents';
+import { warmEventVehicleReferences } from './vehicleReference';
 import { createMatchingConfig, listMatchingConfigs } from './matchingConfig';
 import { computeMatchQualityReport } from './matchQuality';
 import {
@@ -1191,6 +1192,20 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         payload: { queued }
       });
       return json(200, { ok: true, queued });
+    }
+
+    // Nutzerwunsch 2026-09-23: alle Fahrzeugreferenzen eines Events kontrolliert vorab
+    // berechnen/aktualisieren, statt sie nur beilaeufig (verteilt auf mehrere Bilder, dadurch
+    // unvorhersehbar) waehrend eines Match-Laufs zu bekommen - siehe warmEventVehicleReferences
+    // (vehicleReference.ts). Sequentiell mit Zeitbudget statt fester Batchgroesse (Lambda-Timeout
+    // 29s) - das Frontend ruft einfach erneut auf, bis `done: true`.
+    const warmReferencesMatch = path.match(/^\/admin\/racepic\/events\/([^/]+)\/warm-vehicle-references$/);
+    if (method === 'POST' && warmReferencesMatch) {
+      const auth = getAuthContext(event);
+      if (!auth.sub) return errorJson(401, 'Unauthorized');
+      if (!hasPermission(auth, 'racepic.manage')) return errorJson(403, 'Forbidden');
+      const result = await warmEventVehicleReferences(decodeURIComponent(warmReferencesMatch[1]));
+      return json(200, { ok: true, ...result });
     }
 
     const reanalyzeImageMatch = path.match(/^\/admin\/racepic\/images\/([^/]+)\/reanalyze$/);

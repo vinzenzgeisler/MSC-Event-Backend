@@ -1739,6 +1739,24 @@ export class ApiStack extends Stack {
     if (props.racePicStack) {
       const racePicStack = props.racePicStack;
 
+      // Bug gefunden 2026-09-23 (per Live-Test verifiziert): cohere.embed-v4:0 laesst sich in
+      // diesem Account nicht mehr direkt per Modell-ID aufrufen ("isn't supported with on-demand
+      // throughput"), sondern nur ueber das systemdefinierte Cross-Region-Inference-Profile
+      // eu.cohere.embed-v4:0 (siehe bedrock.ts) - IAM braucht dafuer Rechte sowohl auf die
+      // Profil-ARN als auch auf alle sechs EU-Foundation-Model-ARNs, an die das Profil routen
+      // kann (eu-central-1/eu-west-1/eu-west-3/eu-north-1/eu-south-1/eu-south-2 - weiterhin
+      // ausschliesslich EU, kein Drittlandtransfer). Vor RacePicApiHandler deklariert, weil der
+      // Admin-Handler (warmEventVehicleReferences) diese Rechte inzwischen ebenfalls braucht.
+      const racePicBedrockResources = [
+        `arn:aws:bedrock:eu-central-1:${this.account}:inference-profile/eu.cohere.*`,
+        'arn:aws:bedrock:eu-central-1::foundation-model/cohere.*',
+        'arn:aws:bedrock:eu-west-1::foundation-model/cohere.*',
+        'arn:aws:bedrock:eu-west-3::foundation-model/cohere.*',
+        'arn:aws:bedrock:eu-north-1::foundation-model/cohere.*',
+        'arn:aws:bedrock:eu-south-1::foundation-model/cohere.*',
+        'arn:aws:bedrock:eu-south-2::foundation-model/cohere.*'
+      ];
+
       const racePicApiHandler = new NodejsFunction(this, 'RacePicApiHandler', {
         runtime: lambda.Runtime.NODEJS_24_X,
         architecture: lambda.Architecture.X86_64, // gleiche Begruendung wie RacePicIngestWorker (sharp).
@@ -1837,6 +1855,16 @@ export class ApiStack extends Stack {
           actions: ['cloudfront:CreateInvalidation'],
           resources: [`arn:aws:cloudfront::${this.account}:distribution/${racePicStack.distribution.distributionId}`]
         })
+      );
+      // Nutzerwunsch 2026-09-23: kontrolliertes Vorab-Berechnen aller Fahrzeugreferenzen eines
+      // Events (warmEventVehicleReferences, vehicleReference.ts) direkt aus dem Admin-Handler,
+      // statt nur beilaeufig waehrend eines Match-Laufs - braucht dieselben Rechte wie der
+      // Match-Worker fuer denselben Zweck.
+      racePicApiHandler.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['bedrock:InvokeModel'], resources: racePicBedrockResources })
+      );
+      racePicApiHandler.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['rekognition:DetectLabels'], resources: ['*'] })
       );
 
       const racePicIntegration = new SharedPermissionHttpLambdaIntegration('RacePicApiIntegration', racePicApiHandler);
@@ -1962,6 +1990,12 @@ export class ApiStack extends Stack {
       });
       this.api.addRoutes({
         path: '/admin/racepic/events/{eventId}/rematch',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/events/{eventId}/warm-vehicle-references',
         methods: [apigwv2.HttpMethod.POST],
         integration: racePicIntegration,
         authorizer: jwtAuthorizer
@@ -2224,23 +2258,6 @@ export class ApiStack extends Stack {
 
       new CfnOutput(this, 'RacePicApiHandlerName', { value: racePicApiHandler.functionName });
       new CfnOutput(this, 'RacePicIngestWorkerName', { value: racePicIngestWorker.functionName });
-
-      // Bug gefunden 2026-09-23 (per Live-Test verifiziert): cohere.embed-v4:0 laesst sich in
-      // diesem Account nicht mehr direkt per Modell-ID aufrufen ("isn't supported with on-demand
-      // throughput"), sondern nur ueber das systemdefinierte Cross-Region-Inference-Profile
-      // eu.cohere.embed-v4:0 (siehe bedrock.ts) - IAM braucht dafuer Rechte sowohl auf die
-      // Profil-ARN als auch auf alle sechs EU-Foundation-Model-ARNs, an die das Profil routen
-      // kann (eu-central-1/eu-west-1/eu-west-3/eu-north-1/eu-south-1/eu-south-2 - weiterhin
-      // ausschliesslich EU, kein Drittlandtransfer).
-      const racePicBedrockResources = [
-        `arn:aws:bedrock:eu-central-1:${this.account}:inference-profile/eu.cohere.*`,
-        'arn:aws:bedrock:eu-central-1::foundation-model/cohere.*',
-        'arn:aws:bedrock:eu-west-1::foundation-model/cohere.*',
-        'arn:aws:bedrock:eu-west-3::foundation-model/cohere.*',
-        'arn:aws:bedrock:eu-north-1::foundation-model/cohere.*',
-        'arn:aws:bedrock:eu-south-1::foundation-model/cohere.*',
-        'arn:aws:bedrock:eu-south-2::foundation-model/cohere.*'
-      ];
 
       // Paket 6: Analyze-Worker (Rekognition DetectText/DetectLabels + Bedrock-Embedding je
       // Fahrzeug-Crop), konsumiert die Analyze-Queue.

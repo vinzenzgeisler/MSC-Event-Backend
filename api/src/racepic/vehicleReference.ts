@@ -1,8 +1,8 @@
 import { GetObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import sharp from 'sharp';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { racepicVehicleReference, vehicle } from '../db/schema';
+import { entry, eventClass, racepicVehicleReference, vehicle } from '../db/schema';
 import { embedImage } from './bedrock';
 import { errorCodeOf, logOperationalEvent } from '../observability/logger';
 import { detectVehicles, type RgbColor } from './rekognition';
@@ -157,4 +157,60 @@ export const ensureVehicleReference = async (vehicleId: string): Promise<Vehicle
     });
 
   return reference;
+};
+
+/**
+ * Bringt alle Fahrzeugreferenzen eines Events kontrolliert auf einen guten Stand, statt sie nur
+ * beilaeufig waehrend eines Match-Laufs (auf mehrere Bilder verteilt, unvorhersehbar) zu berechnen
+ * (Nutzerwunsch 2026-09-23: "sollten wir nicht schauen, dass wir kontrolliert alle Referenzbilder
+ * auf einem sicheren und guten Datenstand bringen"). Bewusst SEQUENTIELL (nicht mit
+ * CANDIDATE_SCORING_CONCURRENCY wie im Match-Worker) - genau das Gegenteil von "viele Bedrock-
+ * Aufrufe auf einmal" ist hier das Ziel, um das ohnehin knappe TPS-Kontingent zu schonen.
+ *
+ * Zeitbudget statt fester Batchgroesse: der Lambda-Timeout des Admin-Handlers ist 29s (siehe
+ * api-stack.ts); ein Aufruf bricht kontrolliert vor Ablauf ab und meldet den Fortschritt zurueck -
+ * das Frontend ruft einfach erneut auf, bis `done: true`. Bereits gecachte Referenzen (gueltiges
+ * Embedding, unveraenderter Quell-Schluessel) werden uebersprungen, ein Aufruf verarbeitet also
+ * nur, was wirklich fehlt oder beim letzten Versuch fehlgeschlagen ist.
+ */
+export const warmEventVehicleReferences = async (
+  eventId: string,
+  timeBudgetMs = 22_000
+): Promise<{ processed: number; skipped: number; total: number; done: boolean }> => {
+  const db = await getDb();
+  const eligibleRows = await db
+    .selectDistinct({ vehicleId: entry.vehicleId })
+    .from(entry)
+    .innerJoin(eventClass, eq(eventClass.id, entry.classId))
+    .innerJoin(vehicle, eq(vehicle.id, entry.vehicleId))
+    .where(and(
+      eq(entry.eventId, eventId),
+      eq(entry.acceptanceStatus, 'accepted'),
+      eq(entry.registrationStatus, 'submitted_verified'),
+      isNull(entry.deletedAt)
+    ));
+
+  const startedAt = Date.now();
+  let processed = 0;
+  let skipped = 0;
+  for (const row of eligibleRows) {
+    if (Date.now() - startedAt > timeBudgetMs) {
+      return { processed, skipped, total: eligibleRows.length, done: false };
+    }
+    const [existing] = await db.select({ id: racepicVehicleReference.id, embedding: racepicVehicleReference.embedding })
+      .from(racepicVehicleReference).where(eq(racepicVehicleReference.vehicleId, row.vehicleId)).limit(1);
+    if (existing?.embedding) {
+      skipped += 1;
+      continue;
+    }
+    await ensureVehicleReference(row.vehicleId).catch((error) =>
+      logOperationalEvent('error', 'racepic_vehicle_reference.warm_failed', { vehicleId: row.vehicleId, errorCode: errorCodeOf(error) })
+    );
+    processed += 1;
+    // Nutzer-Feedback 2026-09-23 ("das kann ruhig eine Weile dauern"): bewusste Pause zwischen
+    // Fahrzeugen, damit Bedrock-Aufrufe von vornherein gleichmaessig statt in Bursts ankommen -
+    // ergaenzt das Retry/Backoff in bedrock.ts (das nur reaktiv bei Drosselung greift).
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return { processed, skipped, total: eligibleRows.length, done: true };
 };

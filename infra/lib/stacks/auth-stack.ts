@@ -94,6 +94,9 @@ export class AuthStack extends Stack {
       { name: 'iam.write',             description: 'Manage IAM accounts' },
       { name: 'inspection.read',       description: 'Read technical inspection data' },
       { name: 'inspection.write',      description: 'Update technical inspection data' },
+      { name: 'marshals.read',          description: 'Read marshal management data' },
+      { name: 'marshals.write',         description: 'Change marshal management data' },
+      { name: 'marshals.export',        description: 'Create marshal exports' },
     ];
     const supportScopes = supportScopeDefinitions.map(
       (def) =>

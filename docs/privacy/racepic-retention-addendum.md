@@ -1,6 +1,6 @@
 # RacePic – Ergänzung zum Speicher- und Löschkonzept
 
-Stand: 2026-09-21
+Stand: 2026-09-25
 Ergänzt `docs/privacy/retention-policy.md` um die `racepic_*`-Tabellen und den Media-Bucket. Gleiche Grundsätze (Datenminimierung, Zweckbindung, Nachweisbarkeit) gelten unverändert.
 
 ## Fristen je Datenkategorie (RacePic)
@@ -10,7 +10,7 @@ Ergänzt `docs/privacy/retention-policy.md` um die `racepic_*`-Tabellen und den 
 | Rohupload (`incoming/` im Media-Bucket) | 7 Tage | Nur Verarbeitungspuffer | Hard delete (S3 Lifecycle) |
 | Unvollständige Multipart-Uploads | 3 Tage | Kein Nutzen nach Abbruch | `AbortIncompleteMultipartUpload` (S3 Lifecycle) |
 | `racepic_upload`, `racepic_upload_batch` (Status FAILED/EXPIRED) | 30 Tage | Nur Prozesssteuerung | Hard delete |
-| Veröffentlichte Bilder (`racepic_image`, Originale/Varianten) | Bis Löschung durch Fotograf oder Widerspruch eines Teilnehmers; sonst unbegrenzt (redaktioneller Wert der Veranstaltungsdokumentation) | Zentraler Zweck von RacePic | Auf Anfrage: Objekte in S3 löschen, CloudFront invalidieren, `visibility=REMOVED`, Manifeste neu erzeugen |
+| Veröffentlichte Bilder (`racepic_image`, Originale/Varianten) | Bis zur separaten Löschung durch Fotograf/Admin; sonst unbegrenzt (redaktioneller Wert der Veranstaltungsdokumentation) | Zentraler Zweck von RacePic | Bei Bildlöschung: Objekte in S3 löschen, CloudFront invalidieren, `visibility=REMOVED`, Manifeste neu erzeugen. Ein Zuordnungswiderspruch löscht nur das Assignment. |
 | KI-Rohantworten (`analysis/*.json`, `racepic_ai_analysis`) | Solange das zugehörige Bild existiert | Nachvollziehbarkeit der Zuordnung (Abschnitt I9 des Architekturplans) | Löschung zusammen mit dem Bild |
 | `racepic_match_candidate` (nicht gewählte Kandidaten) | 2 Jahre nach Erzeugung, danach nur Aggregatstatistik für die Matching-Qualität | Kalibrierung der Schwellenwerte, kein Dauerbedarf an Einzeldaten | Hard delete der Detaildaten, Aggregatmetriken bleiben |
 | `racepic_assignment_event` (Audit) | 24 Monate, analog `audit_log` | Nachvollziehbarkeit von Korrekturen | Hard delete nach Frist |
@@ -24,7 +24,7 @@ Ergänzt `docs/privacy/retention-policy.md` um die `racepic_*`-Tabellen und den 
 
 ## Trigger „Manifeste neu erzeugen“
 
-Jede Änderung, die die öffentliche Anzeige betrifft (Namensanonymisierung durch die bestehende Retention, Bild-Widerspruch, Profillöschung eines Fotografen), löst einen Re-Publish der betroffenen Event-Manifeste sowie eine CloudFront-Invalidation der betroffenen `/m/*`- und ggf. `/p/*`-Pfade aus. Technisch: der bestehende `privacyRetentionWorker` und die neuen RacePic-Admin-Aktionen (Bild verbergen, Fotograf sperren) rufen denselben Publish-Worker (Abschnitt B/F des Architekturplans) auf.
+Jede Änderung, die die öffentliche Anzeige betrifft (Namensanonymisierung, Zuordnungswiderspruch, Bildsichtbarkeit oder Profillöschung eines Fotografen), stellt einen zusammengeführten Manifest-Refresh ein. Ein Zuordnungswiderspruch entfernt Teilnehmerdaten aus den Manifesten, ändert aber weder Bildsichtbarkeit noch Downloadberechtigung.
 
 ## Offener Punkt: Namenssuche nach 365 Tagen
 

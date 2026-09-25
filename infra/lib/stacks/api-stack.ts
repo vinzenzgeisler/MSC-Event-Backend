@@ -1898,11 +1898,7 @@ export class ApiStack extends Stack {
 
       // Health-Check ohne Auth, damit Deploy/Monitoring den neuen Handler unabhaengig vom
       // Fotografen-/Staff-Login pruefen kann.
-      this.api.addRoutes({
-        path: '/racepic/health',
-        methods: [apigwv2.HttpMethod.GET],
-        integration: racePicIntegration
-      });
+      this.api.addRoutes({ path: '/public/racepic/config', methods: [apigwv2.HttpMethod.GET], integration: racePicIntegration });
 
       // Paket 2 (Identitaet): Einladung/Claim/Profil, siehe api/src/racepic/handler.ts.
       this.api.addRoutes({
@@ -2189,7 +2185,11 @@ export class ApiStack extends Stack {
           DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
           DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
           DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
-          RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName
+          RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
+          RACEPIC_CDN_DISTRIBUTION_ID: racePicStack.distribution.distributionId,
+          RACEPIC_INGEST_QUEUE_URL: racePicStack.ingestQueue.queueUrl,
+          RACEPIC_ANALYZE_QUEUE_URL: racePicStack.analyzeQueue.queueUrl,
+          RACEPIC_MATCH_QUEUE_URL: racePicStack.matchQueue.queueUrl
         },
         ...(props.config.apiInVpc ? lambdaVpcConfig : {})
       });
@@ -2203,8 +2203,30 @@ export class ApiStack extends Stack {
           resources: [`${racePicStack.mediaBucket.bucketArn}/*`]
         })
       );
+      racePicStack.ingestQueue.grantSendMessages(racePicUploadReconciler);
+      racePicStack.analyzeQueue.grantSendMessages(racePicUploadReconciler);
+      racePicStack.matchQueue.grantSendMessages(racePicUploadReconciler);
+      racePicUploadReconciler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:PutObject', 's3:DeleteObject'],
+          resources: [`${racePicStack.mediaBucket.bucketArn}/manifests/*`]
+        })
+      );
+      racePicUploadReconciler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:ListBucket'],
+          resources: [racePicStack.mediaBucket.bucketArn],
+          conditions: { StringLike: { 's3:prefix': ['manifests/*'] } }
+        })
+      );
+      racePicUploadReconciler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['cloudfront:CreateInvalidation'],
+          resources: [`arn:aws:cloudfront::${this.account}:distribution/${racePicStack.distribution.distributionId}`]
+        })
+      );
       new events.Rule(this, 'RacePicUploadReconcilerSchedule', {
-        schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+        schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
         targets: [new targets.LambdaFunction(racePicUploadReconciler)]
       });
 
@@ -2262,7 +2284,8 @@ export class ApiStack extends Stack {
       racePicIngestWorker.addEventSource(
         new lambdaEventSources.SqsEventSource(racePicStack.ingestQueue, {
           batchSize: 1,
-          reportBatchItemFailures: true
+          reportBatchItemFailures: true,
+          maxConcurrency: 2
         })
       );
 
@@ -2323,7 +2346,7 @@ export class ApiStack extends Stack {
       );
       racePicStack.matchQueue.grantSendMessages(racePicAnalyzeWorker);
       racePicAnalyzeWorker.addEventSource(
-        new lambdaEventSources.SqsEventSource(racePicStack.analyzeQueue, { batchSize: 1, reportBatchItemFailures: true })
+        new lambdaEventSources.SqsEventSource(racePicStack.analyzeQueue, { batchSize: 1, reportBatchItemFailures: true, maxConcurrency: 2 })
       );
 
       // Paket 6: Match-Worker (Kandidaten-Scoring, Assignment-Erzeugung), konsumiert die Match-Queue.
@@ -2387,7 +2410,7 @@ export class ApiStack extends Stack {
         new iam.PolicyStatement({ actions: ['rekognition:DetectLabels'], resources: ['*'] })
       );
       racePicMatchWorker.addEventSource(
-        new lambdaEventSources.SqsEventSource(racePicStack.matchQueue, { batchSize: 1, reportBatchItemFailures: true })
+        new lambdaEventSources.SqsEventSource(racePicStack.matchQueue, { batchSize: 1, reportBatchItemFailures: true, maxConcurrency: 1 })
       );
 
       new CfnOutput(this, 'RacePicAnalyzeWorkerName', { value: racePicAnalyzeWorker.functionName });

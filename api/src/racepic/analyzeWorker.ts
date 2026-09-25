@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { SQSEvent, SQSBatchResponse } from 'aws-lambda';
 import sharp from 'sharp';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { racepicAiAnalysis, racepicDetection, racepicImage, racepicProcessingStep, racepicTextDetection } from '../db/schema';
+import { racepicAiAnalysis, racepicDetection, racepicImage, racepicTextDetection } from '../db/schema';
 import { logOperationalEvent, errorCodeOf } from '../observability/logger';
 import { detectText, detectVehicles, isTextInsideVehicle, nearestContainingVehicleIndex, type TextDetectionResult } from './rekognition';
-import { embedImage } from './bedrock';
+import { EMBEDDING_MODEL_ID, embedImage } from './bedrock';
 import { getObject, putObject } from './s3';
 import { sendMatchMessage } from './queues';
+import { claimProcessingStep, failProcessingStep, finishProcessingStep } from './processingSteps';
 
 /**
  * RacePicAnalyzeWorker (Paket 6: KI-Pipeline), konsumiert die Analyze-Queue. Siehe
@@ -30,22 +31,15 @@ const toPixelBox = (bbox: { left: number; top: number; width: number; height: nu
 const processOneImage = async (imageId: string): Promise<void> => {
   const db = await getDb();
 
-  const [existingStep] = await db
-    .select()
-    .from(racepicProcessingStep)
-    .where(and(eq(racepicProcessingStep.imageId, imageId), eq(racepicProcessingStep.step, 'analyze'), eq(racepicProcessingStep.pipelineVersion, PIPELINE_VERSION)))
-    .limit(1);
-  if (existingStep?.status === 'DONE') return;
-  if (!existingStep) {
-    await db.insert(racepicProcessingStep).values({ imageId, step: 'analyze', pipelineVersion: PIPELINE_VERSION, status: 'IN_PROGRESS' }).onConflictDoNothing();
-  }
+  if (!(await claimProcessingStep(imageId, 'analyze', PIPELINE_VERSION))) return;
 
   const [image] = await db.select().from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
-  if (!image) return; // geloescht, bevor die Analyse dran war.
-  if (image.processingStatus !== 'DERIVED' && image.processingStatus !== 'ANALYZED') {
-    // Noch nicht durch den Ingest-Worker fertig verarbeitet (oder fehlgeschlagen) - ueberspringen,
-    // die Nachricht wird nicht erneut eingereiht.
+  if (!image) {
+    await finishProcessingStep(imageId, 'analyze', PIPELINE_VERSION);
     return;
+  }
+  if (image.processingStatus !== 'DERIVED' && image.processingStatus !== 'ANALYZED') {
+    throw new Error('RACEPIC_ANALYZE_IMAGE_NOT_READY');
   }
   if (!image.width || !image.height) {
     throw new Error('RACEPIC_ANALYZE_MISSING_DIMENSIONS');
@@ -157,7 +151,7 @@ const processOneImage = async (imageId: string): Promise<void> => {
       imageId,
       service: 'bedrock',
       operation: 'embed_image',
-      modelVersion: process.env.RACEPIC_EMBEDDING_MODEL_ID ?? 'cohere.embed-v4:0',
+      modelVersion: EMBEDDING_MODEL_ID,
       pipelineVersion: PIPELINE_VERSION,
       finishedAt: new Date(),
       summary: { attempted: vehicles.length, succeeded: embeddingSuccessCount, failed: embeddingFailureCount }
@@ -165,24 +159,21 @@ const processOneImage = async (imageId: string): Promise<void> => {
   }
 
   await db.update(racepicImage).set({ processingStatus: 'ANALYZED', updatedAt: new Date() }).where(eq(racepicImage.id, imageId));
-  await db
-    .update(racepicProcessingStep)
-    .set({ status: 'DONE', finishedAt: new Date() })
-    .where(and(eq(racepicProcessingStep.imageId, imageId), eq(racepicProcessingStep.step, 'analyze'), eq(racepicProcessingStep.pipelineVersion, PIPELINE_VERSION)));
-
-  await sendMatchMessage(imageId).catch((error) =>
-    logOperationalEvent('error', 'racepic_analyze.match_enqueue_failed', { errorCode: errorCodeOf(error) })
-  );
+  await sendMatchMessage(imageId);
+  await finishProcessingStep(imageId, 'analyze', PIPELINE_VERSION);
 };
 
 export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
   const batchItemFailures: { itemIdentifier: string }[] = [];
   for (const record of event.Records) {
+    let imageId: string | undefined;
     try {
       const body = JSON.parse(record.body) as { imageId?: string };
       if (!body.imageId) throw new Error('RACEPIC_ANALYZE_MISSING_IMAGE_ID');
-      await processOneImage(body.imageId);
+      imageId = body.imageId;
+      await processOneImage(imageId);
     } catch (error) {
+      if (imageId) await failProcessingStep(imageId, 'analyze', PIPELINE_VERSION, error).catch(() => undefined);
       logOperationalEvent('error', 'racepic_analyze.failed', { errorCode: errorCodeOf(error) });
       batchItemFailures.push({ itemIdentifier: record.messageId });
     }

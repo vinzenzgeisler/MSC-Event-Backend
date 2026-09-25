@@ -38,11 +38,11 @@ In der öffentlichen Galerie werden je zugeordnetem Bild angezeigt: Startnummer,
 Teilnehmer, die der Veröffentlichung widersprochen haben, ein eingeschränktes Verarbeitungsrecht (`processing_restricted`) geltend gemacht haben oder für die ein Veröffentlichungsname (Pseudonym) hinterlegt ist, erscheinen in der Namenssuche nicht bzw. nur mit dem Pseudonym. Bilder ohne Medieneinwilligung werden nicht öffentlich mit einem Teilnehmer verknüpft.
 
 ### 1.6 Widerspruchsrecht gegen die Bildzuordnung
-Jeder Teilnehmer kann jederzeit der Zuordnung von Bildern zu seiner Person widersprechen, auch nachträglich für bereits automatisiert zugeordnete Bilder. Der Widerspruch führt zur Entfernung der Zuordnung und zum Ausblenden der betroffenen Bilder aus der öffentlichen Galerie. Kontakt: info@msc-oberlausitzer-dreilaendereck.eu.
+Jeder Teilnehmer kann jederzeit der Zuordnung von Bildern zu seiner Person widersprechen, auch nachträglich für bereits automatisiert zugeordnete Bilder. Der Widerspruch entfernt die Zuordnung, den Teilnehmerbezug und die Auffindbarkeit über Teilnehmerdaten. Das Veranstaltungsbild selbst bleibt ohne diesen Bezug in der Galerie. Eine begründete Anfrage zur Entfernung eines konkreten Bildes wird separat geprüft. Kontakt: info@msc-oberlausitzer-dreilaendereck.eu.
 
 ### 1.7 Empfänger und Auftragsverarbeiter
 1. AWS als Auftragsverarbeiter (S3, CloudFront, Lambda, SQS, RDS, Cognito, Secrets Manager), primär Region eu-central-1,
-2. Amazon Rekognition (Texterkennung, Objekterkennung) und Amazon Bedrock/Cohere Embed v4 (Bildähnlichkeit), Region eu-west-1 für die Bildähnlichkeitsanalyse – beides innerhalb der EU, kein Drittlandtransfer,
+2. Amazon Rekognition (Texterkennung, Objekterkennung) und Amazon Bedrock/Cohere Embed v4 über das EU-Inference-Profile aus eu-central-1 (Bildähnlichkeit) – Verarbeitung ausschließlich in unterstützten EU-Regionen, kein Drittlandtransfer,
 3. hochladende Fotografen als eigenständig Verantwortliche für die von ihnen erstellten Aufnahmen.
 
 ### 1.8 Speicherdauer
@@ -76,7 +76,7 @@ Der Fotograf sichert zu, dass
 
 ### 2.3 Entfernung von Bildern
 Der MSC behält sich vor, Bilder zu verbergen oder zu entfernen, insbesondere bei
-1. Widerspruch eines abgebildeten Teilnehmers,
+1. separater, begründeter Anfrage zur Entfernung eines konkreten Bildes,
 2. Verdacht auf Rechtsverletzung,
 3. Verstoß gegen diese Bedingungen.
 

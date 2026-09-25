@@ -6,9 +6,17 @@
 
 # RacePic – Offene Punkte (konsolidiert)
 
-**Stand:** 2026-09-22. Code-seitig sind die Pakete 0–13 abgeschlossen und verifiziert (siehe die
-repo-spezifischen `racepic-progress.md`), aber noch **nicht deployed**. Dieses Dokument bündelt,
-was vor bzw. nach dem ersten echten Piloten (12. OLD 2026) noch zu tun ist.
+**Stand:** 2026-09-25. Die Code-Basis wurde repositoryübergreifend auf Verträge, Uploads,
+Pipeline-Idempotenz, Datenschutz und Feature-Freigabe geprüft und lokal gebaut/getestet. Sie ist
+weiterhin **nicht deployed**. Dieses Dokument enthält nur verbleibende operative oder fachliche
+Entscheidungen.
+
+## Geklärte Widerspruchsregel
+
+Bei einem Teilnehmer-Widerspruch wird nur die RacePic-Zuordnung entfernt: Die Nennung wird
+unterdrückt, aktive Assignments werden abgelehnt und Manifeste neu erzeugt. Das Bild selbst bleibt
+öffentlich und herunterladbar. Eine Bildlöschung ist ein separater Vorgang des Fotografen oder
+Admins und wird nicht aus einem Zuordnungswiderspruch abgeleitet.
 
 ## A. Blockierend vor dem ersten echten Piloten
 
@@ -26,17 +34,17 @@ AWS-Zugriff, den diese Sandbox nicht abschließend verifizieren kann.
    bestehen. Soll der Name stattdessen dauerhaft suchbar bleiben, braucht es eine zusätzliche
    Rechtsgrundlage (z. B. eine eigene RacePic-Einwilligung bei der Nennung). Entscheidung bei
    Vorstand/Datenschutz, technisch ist die aktuelle Variante bereits vollständig umgesetzt.
-3. **Bedrock live testen.** `cohere.embed-v4:0` in eu-west-1 – Format ist anhand der aktuellen
-   AWS-Doku verifiziert (Paket 6), aber noch nie live aufgerufen. Ein erster Versuch scheiterte am
-   2026-09-22 an einer AWS-Kontoverifizierung (`AccessDeniedException: Your account is currently
-   being verified`) – erneut versuchen, sobald diese abgeschlossen ist.
+3. **Bedrock im Ziel-Account erneut live testen.** Der Code verwendet das EU-Inference-Profile
+   `eu.cohere.embed-v4:0` aus eu-central-1. Vor Veröffentlichung mit einem echten Pilotbild
+   bestätigen, dass Modellzugriff und Foundation-Model-IAM-Rechte im Ziel-Account aktiv sind.
 4. **CloudFront-Deploy in der Linux-CI beobachten.** `sharp` (natives Modul im
    `RacePicIngestWorker`) wurde lokal auf Windows nur mit Windows-Binaries gebündelt; der echte
    Linux-Build in GitHub Actions muss einmal beobachtet werden, um zu bestätigen, dass er
    Linux-x64-Binaries verwendet und ein Bild tatsächlich verarbeitet werden kann.
-5. **CloudFront-Signing-Keypair erzeugen.** Bis dahin laufen Downloads über S3-Presigned-URLs
-   statt CloudFront Signed URLs (funktioniert, ist aber die in Paket 1/8 dokumentierte
-   Interimslösung).
+5. **Optional: Downloads auf CloudFront-Signed-URLs umstellen.** Der Pilot kann sicher mit
+   kurzlebigen S3-Presigned-URLs laufen; private CloudFront-Pfade sind ohne Key fail-closed. Für
+   die Umstellung müssen Public Key, privater Key in Secrets Manager und API-Signierung zusammen
+   ergänzt werden. Nur `*_RACEPIC_SIGNING_PUBLIC_KEY_PEM` zu setzen reicht nicht aus.
 
 ## B. Entwicklungsumgebung (Paket 13, 2026-09-22)
 

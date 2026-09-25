@@ -35,9 +35,9 @@ const getS3Client = () => new S3Client({});
 export const buildIncomingKey = (eventId: string, photographerId: string, uploadId: string): string =>
   `incoming/${eventId}/${photographerId}/${uploadId}`;
 
-export const presignPutObject = async (key: string, contentType: string, expiresInSeconds = 900): Promise<string> => {
+export const presignPutObject = async (key: string, contentType: string, contentLength: number, expiresInSeconds = 900): Promise<string> => {
   const client = getS3Client();
-  const command = new PutObjectCommand({ Bucket: getMediaBucket(), Key: key, ContentType: contentType });
+  const command = new PutObjectCommand({ Bucket: getMediaBucket(), Key: key, ContentType: contentType, ContentLength: contentLength });
   return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 };
 
@@ -123,7 +123,20 @@ export const headObject = async (key: string): Promise<{ sizeBytes: number; cont
 
 export const deleteObject = async (key: string): Promise<void> => {
   const client = getS3Client();
-  await client.send(new DeleteObjectCommand({ Bucket: getMediaBucket(), Key: key })).catch(() => undefined);
+  await client.send(new DeleteObjectCommand({ Bucket: getMediaBucket(), Key: key }));
+};
+
+export const listObjectKeys = async (prefix: string): Promise<string[]> => {
+  const client = getS3Client();
+  const bucket = getMediaBucket();
+  const keys: string[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const result = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken }));
+    keys.push(...(result.Contents ?? []).map((item) => item.Key).filter((key): key is string => Boolean(key)));
+    continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return keys;
 };
 
 /**

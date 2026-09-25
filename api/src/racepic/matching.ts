@@ -52,10 +52,15 @@ export const scoreCandidate = (features: CandidateFeatures, weights: MatchingWei
   if (features.ocrExact) score += weights.ocrExact;
   score += weights.ocrConfidence * features.ocrConfidence;
   if (features.vehicleTypeMatch) score += weights.vehicleTypeMatch;
-  // Fehlende Signale (kein Referenzfoto, kein Embedding) werden neutral behandelt (0.5), nicht als
-  // Ablehnung gewertet - ein Fahrzeug ohne Referenzfoto darf trotzdem ueber OCR gematcht werden.
-  score += weights.embeddingSimilarity * (features.embeddingSimilarity ?? 0.5);
-  score += weights.colorSimilarity * (features.colorSimilarity ?? 0.5);
+  // A registration photo may show an older livery or color. Once the race photo contains an exact
+  // official start-number match, weak reference-image signals must not reduce that strong event-
+  // specific evidence. Above-neutral visual matches still help distinguish duplicate numbers.
+  const referenceSignal = (value: number | null) => {
+    const normalized = value ?? 0.5;
+    return features.ocrExact ? Math.max(0.5, normalized) : normalized;
+  };
+  score += weights.embeddingSimilarity * referenceSignal(features.embeddingSimilarity);
+  score += weights.colorSimilarity * referenceSignal(features.colorSimilarity);
 
   const ambiguityFactor = Math.min(1, Math.max(0, features.ambiguityCount - 1) / 3);
   score -= weights.ambiguityPenalty * ambiguityFactor;

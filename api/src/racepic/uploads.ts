@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
-import { and, count, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import {
   racepicEvent,
@@ -54,6 +54,7 @@ export const createBatch = async (input: { photographerId: string; eventId: stri
   }
 
   const [racepicEventRow] = await db.select().from(racepicEvent).where(eq(racepicEvent.eventId, input.eventId)).limit(1);
+  if (!racepicEventRow?.enabled) throw new RacePicError('RACEPIC_EVENT_ACCESS_DENIED');
   const windowStart = access.uploadOpensAt ?? racepicEventRow?.uploadOpensAt ?? null;
   const windowEnd = access.uploadClosesAt ?? racepicEventRow?.uploadClosesAt ?? null;
   const now = new Date();
@@ -103,75 +104,88 @@ export const createUpload = async (input: {
 
   const db = await getDb();
 
-  if (input.clientFingerprint) {
-    const [existing] = await db
-      .select({ id: racepicUpload.id })
-      .from(racepicUpload)
-      .where(
-        and(
-          eq(racepicUpload.batchId, input.batch.id),
-          eq(racepicUpload.clientFingerprint, input.clientFingerprint),
-          ne(racepicUpload.status, 'ABORTED'),
-          ne(racepicUpload.status, 'EXPIRED')
-        )
-      )
-      .limit(1);
-    if (existing) {
-      throw new RacePicError('RACEPIC_UPLOAD_DUPLICATE_IN_BATCH');
-    }
-  }
-
-  // Quota wird pro Event-Zugang geprueft (racepic_photographer_event.quotaImages), nicht pro Batch -
-  // ein Fotograf kann mehrere Batches fuer dasselbe Event anlegen.
-  const [access] = await db
-    .select()
-    .from(racepicPhotographerEvent)
-    .where(and(eq(racepicPhotographerEvent.photographerId, input.batch.photographerId), eq(racepicPhotographerEvent.eventId, input.batch.eventId)))
-    .limit(1);
-  if (access?.quotaImages !== null && access?.quotaImages !== undefined) {
-    const [{ value: usedCount }] = await db
-      .select({ value: count() })
-      .from(racepicImage)
-      .where(and(eq(racepicImage.eventId, input.batch.eventId), eq(racepicImage.photographerId, input.batch.photographerId), ne(racepicImage.processingStatus, 'FAILED')));
-    if (usedCount >= access.quotaImages) {
-      throw new RacePicError('RACEPIC_UPLOAD_QUOTA_EXCEEDED');
-    }
-  }
-
   const uploadId = randomUUID();
   const key = buildIncomingKey(input.batch.eventId, input.batch.photographerId, uploadId);
   const expiresAt = new Date(Date.now() + PRESIGN_EXPIRES_SECONDS * 1000);
   const useMultipart = input.declaredSizeBytes > MULTIPART_THRESHOLD_BYTES;
 
-  const s3UploadId = useMultipart ? await createMultipartUpload(key, input.contentType) : null;
+  const reservation = await db.transaction(async (tx) => {
+    await tx.select({ id: racepicPhotographerEvent.id }).from(racepicPhotographerEvent)
+      .where(and(eq(racepicPhotographerEvent.photographerId, input.batch.photographerId), eq(racepicPhotographerEvent.eventId, input.batch.eventId)))
+      .for('update');
 
-  const [upload] = await db
-    .insert(racepicUpload)
-    .values({
+    if (input.clientFingerprint) {
+      const [existing] = await tx.select().from(racepicUpload).where(and(
+        eq(racepicUpload.batchId, input.batch.id),
+        eq(racepicUpload.clientFingerprint, input.clientFingerprint),
+        inArray(racepicUpload.status, ['INITIALIZING', 'INITIATED', 'MULTIPART_OPEN', 'COMPLETED'])
+      )).limit(1);
+      if (existing) {
+        if (existing.fileName !== input.fileName || existing.contentType !== input.contentType || existing.declaredSizeBytes !== input.declaredSizeBytes) {
+          throw new RacePicError('RACEPIC_UPLOAD_DUPLICATE_IN_BATCH');
+        }
+        return { existing } as const;
+      }
+    }
+
+    const [access] = await tx.select().from(racepicPhotographerEvent)
+      .where(and(eq(racepicPhotographerEvent.photographerId, input.batch.photographerId), eq(racepicPhotographerEvent.eventId, input.batch.eventId))).limit(1);
+    if (!access) throw new RacePicError('RACEPIC_EVENT_ACCESS_DENIED');
+    if (access.quotaImages !== null) {
+      const [{ value: imageCount }] = await tx.select({ value: count() }).from(racepicImage)
+        .where(and(eq(racepicImage.eventId, input.batch.eventId), eq(racepicImage.photographerId, input.batch.photographerId), ne(racepicImage.processingStatus, 'FAILED')));
+      const [{ value: openUploadCount }] = await tx.select({ value: count() }).from(racepicUpload)
+        .innerJoin(racepicUploadBatch, eq(racepicUploadBatch.id, racepicUpload.batchId))
+        .where(and(
+          eq(racepicUploadBatch.eventId, input.batch.eventId),
+          eq(racepicUploadBatch.photographerId, input.batch.photographerId),
+          inArray(racepicUpload.status, ['INITIALIZING', 'INITIATED', 'MULTIPART_OPEN'])
+        ));
+      if (imageCount + openUploadCount >= access.quotaImages) throw new RacePicError('RACEPIC_UPLOAD_QUOTA_EXCEEDED');
+    }
+
+    const [created] = await tx.insert(racepicUpload).values({
       id: uploadId,
       batchId: input.batch.id,
       s3Key: key,
-      s3UploadId,
       fileName: input.fileName,
       contentType: input.contentType,
       declaredSizeBytes: input.declaredSizeBytes,
       clientFingerprint: input.clientFingerprint,
-      status: useMultipart ? 'MULTIPART_OPEN' : 'INITIATED',
+      status: 'INITIALIZING',
       expiresAt
-    })
-    .returning();
-  if (!upload) throw new RacePicError('RACEPIC_UPLOAD_CREATE_FAILED');
+    }).returning();
+    if (!created) throw new RacePicError('RACEPIC_UPLOAD_CREATE_FAILED');
+    await tx.update(racepicUploadBatch).set({ fileCount: sql`${racepicUploadBatch.fileCount} + 1`, updatedAt: new Date() }).where(eq(racepicUploadBatch.id, input.batch.id));
+    return { created } as const;
+  });
 
-  await db
-    .update(racepicUploadBatch)
-    .set({ fileCount: input.batch.fileCount + 1, updatedAt: new Date() })
-    .where(eq(racepicUploadBatch.id, input.batch.id));
-
-  if (useMultipart) {
-    return { upload, uploadUrl: null as string | null };
+  if ('existing' in reservation) {
+    const existing = reservation.existing;
+    if (!existing) throw new RacePicError('RACEPIC_UPLOAD_CREATE_FAILED');
+    const uploadUrl = existing.status === 'INITIATED'
+      ? await presignPutObject(existing.s3Key, existing.contentType, existing.declaredSizeBytes, PRESIGN_EXPIRES_SECONDS)
+      : null;
+    return { upload: existing, uploadUrl, resumed: true, completed: existing.status === 'COMPLETED' };
   }
-  const uploadUrl = await presignPutObject(key, input.contentType, PRESIGN_EXPIRES_SECONDS);
-  return { upload, uploadUrl };
+
+  let s3UploadId: string | null = null;
+  try {
+    s3UploadId = useMultipart ? await createMultipartUpload(key, input.contentType) : null;
+    const [upload] = await db.update(racepicUpload).set({
+      s3UploadId,
+      status: useMultipart ? 'MULTIPART_OPEN' : 'INITIATED',
+      updatedAt: new Date()
+    }).where(eq(racepicUpload.id, uploadId)).returning();
+    if (!upload) throw new RacePicError('RACEPIC_UPLOAD_CREATE_FAILED');
+    const uploadUrl = useMultipart ? null : await presignPutObject(key, input.contentType, input.declaredSizeBytes, PRESIGN_EXPIRES_SECONDS);
+    return { upload, uploadUrl, resumed: false, completed: false };
+  } catch (error) {
+    if (s3UploadId) await abortMultipartUpload(key, s3UploadId).catch(() => undefined);
+    await db.update(racepicUpload).set({ status: 'FAILED', updatedAt: new Date() }).where(eq(racepicUpload.id, uploadId));
+    await db.update(racepicUploadBatch).set({ failedCount: sql`${racepicUploadBatch.failedCount} + 1`, updatedAt: new Date() }).where(eq(racepicUploadBatch.id, input.batch.id));
+    throw error;
+  }
 };
 
 export const getUploadForPhotographer = async (uploadId: string, photographerId: string) => {
@@ -224,16 +238,22 @@ export const completeUpload = async (
     if (!multipartParts || multipartParts.length === 0) {
       throw new RacePicError('RACEPIC_UPLOAD_PARTS_REQUIRED');
     }
-    await completeMultipartUpload(upload.s3Key, upload.s3UploadId, multipartParts);
+    const storedParts = await listUploadedParts(upload.s3Key, upload.s3UploadId);
+    const submitted = new Map(multipartParts.map((part) => [part.partNumber, part.eTag.replaceAll('"', '')]));
+    const contiguous = storedParts.every((part, index) => part.partNumber === index + 1);
+    const exactParts = storedParts.length === multipartParts.length && storedParts.every(
+      (part) => submitted.get(part.partNumber) === part.eTag.replaceAll('"', '')
+    );
+    const exactSize = storedParts.reduce((sum, part) => sum + part.size, 0) === upload.declaredSizeBytes;
+    if (!contiguous || !exactParts || !exactSize) throw new RacePicError('RACEPIC_UPLOAD_PARTS_INVALID');
+    await completeMultipartUpload(upload.s3Key, upload.s3UploadId, storedParts.map((part) => ({ partNumber: part.partNumber, eTag: part.eTag })));
   }
 
   const objectInfo = await headObject(upload.s3Key);
   if (!objectInfo) {
     throw new RacePicError('RACEPIC_UPLOAD_OBJECT_MISSING');
   }
-  if (objectInfo.sizeBytes > MAX_UPLOAD_BYTES) {
-    // Defensiv: sollte durch die Groessenpruefung in createUpload/Multipart-Teilgroessen nicht
-    // vorkommen, wird aber trotzdem hart abgelehnt statt ein zu grosses Original zu behalten.
+  if (objectInfo.sizeBytes !== upload.declaredSizeBytes || objectInfo.contentType !== upload.contentType) {
     await deleteObject(upload.s3Key);
     throw new RacePicError('RACEPIC_UPLOAD_SIZE_INVALID');
   }
@@ -241,7 +261,7 @@ export const completeUpload = async (
   return db.transaction(async (tx) => {
     const [completedUpload] = await tx
       .update(racepicUpload)
-      .set({ status: 'COMPLETED', completedAt: new Date() })
+      .set({ status: 'COMPLETED', completedAt: new Date(), updatedAt: new Date() })
       .where(and(eq(racepicUpload.id, upload.id), inArray(racepicUpload.status, ['INITIATED', 'MULTIPART_OPEN'])))
       .returning();
     if (!completedUpload) {
@@ -268,7 +288,7 @@ export const completeUpload = async (
 
     await tx
       .update(racepicUploadBatch)
-      .set({ completedCount: batch.completedCount + 1, updatedAt: new Date() })
+      .set({ completedCount: sql`${racepicUploadBatch.completedCount} + 1`, updatedAt: new Date() })
       .where(eq(racepicUploadBatch.id, batch.id));
 
     return { image, alreadyCompleted: false };
@@ -285,10 +305,10 @@ export const abortUpload = async (upload: typeof racepicUpload.$inferSelect, bat
     await deleteObject(upload.s3Key);
   }
   const db = await getDb();
-  await db.update(racepicUpload).set({ status: 'ABORTED' }).where(eq(racepicUpload.id, upload.id));
+  await db.update(racepicUpload).set({ status: 'ABORTED', updatedAt: new Date() }).where(eq(racepicUpload.id, upload.id));
   await db
     .update(racepicUploadBatch)
-    .set({ failedCount: batch.failedCount + 1, updatedAt: new Date() })
+    .set({ failedCount: sql`${racepicUploadBatch.failedCount} + 1`, updatedAt: new Date() })
     .where(eq(racepicUploadBatch.id, batch.id));
 };
 
@@ -389,7 +409,7 @@ export const listExpiredOpenUploads = async (limit: number) => {
     .select({ upload: racepicUpload, batch: racepicUploadBatch })
     .from(racepicUpload)
     .innerJoin(racepicUploadBatch, eq(racepicUploadBatch.id, racepicUpload.batchId))
-    .where(and(inArray(racepicUpload.status, ['INITIATED', 'MULTIPART_OPEN']), isNull(racepicUpload.completedAt)))
+    .where(and(inArray(racepicUpload.status, ['INITIALIZING', 'INITIATED', 'MULTIPART_OPEN']), isNull(racepicUpload.completedAt)))
     .limit(limit)
     .then((rows) => rows.filter((row) => row.upload.expiresAt.getTime() < now.getTime()));
 };

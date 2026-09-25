@@ -21,6 +21,7 @@ import {
   listMyEventAccess,
   listPhotographers,
   RacePicError,
+  RACEPIC_PHOTOGRAPHER_TERMS_VERSION,
   registerPhotographer,
   reviewPhotographerRegistration,
   updatePhotographerProfile
@@ -71,6 +72,7 @@ import {
 import { requestImageDownload } from './download';
 import { racepicAssignment, racepicAssignmentEvent, racepicDetection, racepicEvent, racepicImage, racepicProcessingStep } from '../db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
+import { buildPublicRateLimitKey, enforcePublicRateLimit } from '../http/publicRateLimit';
 
 /**
  * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet, Paket 3: Upload). Eigenstaendiger
@@ -92,6 +94,26 @@ const maskEmail = (email: string): string => {
   return `${visible}${'*'.repeat(Math.max(local.length - 1, 1))}@${domain}`;
 };
 
+const enforceRacePicPublicRateLimit = async (
+  event: APIGatewayProxyEventV2,
+  scope: string,
+  limit: number,
+  windowSeconds: number,
+  resourceKey: string
+) => {
+  const forwardedFor = event.headers['x-forwarded-for'] ?? event.headers['X-Forwarded-For'];
+  const clientIp = forwardedFor?.split(',')[0]?.trim() || event.requestContext.http.sourceIp?.trim() || 'unknown';
+  const result = await enforcePublicRateLimit({
+    scope,
+    key: buildPublicRateLimitKey([clientIp, resourceKey]),
+    limit,
+    windowSeconds
+  });
+  return result.allowed ? null : errorJson(429, 'Too many requests', { scope, limit: result.limit }, 'RATE_LIMITED', undefined, {
+    'retry-after': String(result.retryAfterSeconds)
+  });
+};
+
 const racePicErrorStatus = (error: RacePicError): { status: number; message: string } => {
   switch (error.code) {
     case 'RACEPIC_INVITATION_ALREADY_CONSUMED':
@@ -104,6 +126,8 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 409, message: 'A photographer profile already exists for this email' };
     case 'RACEPIC_REGISTRATION_NOT_PENDING':
       return { status: 409, message: 'Registration is not pending' };
+    case 'RACEPIC_TERMS_VERSION_REQUIRED':
+      return { status: 409, message: `Terms version ${RACEPIC_PHOTOGRAPHER_TERMS_VERSION} is required` };
     case 'RACEPIC_EVENT_NOT_FOUND':
       return { status: 400, message: 'One or more eventIds do not exist' };
     case 'RACEPIC_EVENT_ACCESS_DENIED':
@@ -128,6 +152,8 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 409, message: 'This upload is not in a completable state' };
     case 'RACEPIC_UPLOAD_PARTS_REQUIRED':
       return { status: 400, message: 'parts is required to complete a multipart upload' };
+    case 'RACEPIC_UPLOAD_PARTS_INVALID':
+      return { status: 409, message: 'Uploaded multipart parts do not match the declared file' };
     case 'RACEPIC_UPLOAD_OBJECT_MISSING':
       return { status: 409, message: 'The uploaded object could not be found in storage' };
     case 'RACEPIC_UPLOAD_ALREADY_COMPLETED':
@@ -136,6 +162,8 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 404, message: 'Image not found' };
     case 'RACEPIC_IMAGE_NOT_READY_TO_PUBLISH':
       return { status: 409, message: 'Image has not finished processing yet' };
+    case 'RACEPIC_IMAGE_NOT_PUBLICLY_ELIGIBLE':
+      return { status: 409, message: 'Image is blocked by participant privacy or eligibility rules' };
     case 'RACEPIC_PAID_OFFER_NOT_PUBLIC':
       return { status: 409, message: 'Paid offers remain private until checkout is available' };
     case 'RACEPIC_IMAGE_ALREADY_REMOVED':
@@ -156,6 +184,8 @@ const racePicErrorStatus = (error: RacePicError): { status: number; message: str
       return { status: 404, message: 'Assignment not found' };
     case 'RACEPIC_ASSIGNMENT_ALREADY_EXISTS':
       return { status: 409, message: 'This entry is already assigned to this image' };
+    case 'RACEPIC_ASSIGNMENT_TARGET_INVALID':
+      return { status: 409, message: 'The selected entry is not eligible for this image' };
     case 'RACEPIC_MATCHING_CONFIG_THRESHOLDS_INVALID':
       return { status: 400, message: 'reviewThreshold must not exceed autoThreshold' };
     case 'RACEPIC_IMAGE_NOT_PUBLISHED':
@@ -401,12 +431,19 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const path = event.requestContext.http.path;
 
   try {
+    const adminAuth = path.startsWith('/admin/') ? getAuthContext(event) : null;
+    const isAdminMutation = path.startsWith('/admin/') && !['GET', 'OPTIONS'].includes(method);
+    if (adminAuth && !adminAuth.sub) return errorJson(401, 'Unauthorized');
+    if (process.env.REQUIRE_ADMIN_MFA === 'true' && adminAuth?.sub && isAdminMutation && !adminAuth.mfaAuthenticated) {
+      return errorJson(403, 'MFA required', undefined, 'MFA_REQUIRED');
+    }
+
     if (method === 'OPTIONS') {
       return json(200, { ok: true });
     }
 
-    if (method === 'GET' && path === '/racepic/health') {
-      return json(200, { ok: true, service: 'racepic-api', stage: process.env.STAGE ?? 'dev' });
+    if (method === 'GET' && path === '/public/racepic/config') {
+      return json(200, { ok: true, enabled: true, photographerTermsVersion: RACEPIC_PHOTOGRAPHER_TERMS_VERSION });
     }
 
     // --- Admin: Fotografen einladen/auflisten (Abschnitt E) -----------------------------------
@@ -626,6 +663,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     const invitationPreviewMatch = path.match(/^\/public\/racepic\/invitations\/([^/]+)$/);
     if (method === 'GET' && invitationPreviewMatch) {
       const token = decodeURIComponent(invitationPreviewMatch[1]);
+      const rateLimited = await enforceRacePicPublicRateLimit(event, 'racepic_invitation_preview', 60, 300, hashToken(token));
+      if (rateLimited) return rateLimited;
       const preview = await getInvitationPreviewByToken(token);
       if (!preview) return errorJson(404, 'Invitation not found');
       return json(200, {
@@ -640,6 +679,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     const invitationStartMatch = path.match(/^\/public\/racepic\/invitations\/([^/]+)\/start$/);
     if (method === 'POST' && invitationStartMatch) {
       const token = decodeURIComponent(invitationStartMatch[1]);
+      const rateLimited = await enforceRacePicPublicRateLimit(event, 'racepic_invitation_start', 6, 3600, hashToken(token));
+      if (rateLimited) return rateLimited;
       try {
         const invitation = await getConsumableInvitationByToken(token);
         if (!invitation) return errorJson(404, 'Invitation not found');
@@ -662,8 +703,11 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     const publicDownloadMatch = path.match(/^\/public\/racepic\/images\/([^/]+)\/download$/);
     if (method === 'POST' && publicDownloadMatch) {
       try {
+        const imageId = decodeURIComponent(publicDownloadMatch[1]);
+        const rateLimited = await enforceRacePicPublicRateLimit(event, 'racepic_image_download', 30, 600, imageId);
+        if (rateLimited) return rateLimited;
         const input = requestDownloadSchema.parse(parseJsonBody(event));
-        const result = await requestImageDownload(decodeURIComponent(publicDownloadMatch[1]), input.variant);
+        const result = await requestImageDownload(imageId, input.variant);
         return json(200, { ok: true, ...result });
       } catch (error) {
         if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
@@ -751,6 +795,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!photographer) {
         return errorJson(404, 'Photographer profile not found - claim an invitation first', undefined, 'PROFILE_NOT_CLAIMED');
       }
+      if (photographer.status === 'DISABLED') return errorJson(403, 'Photographer account disabled');
       return json(200, { ok: true, photographer: photographerDto(photographer) });
     }
 
@@ -764,6 +809,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       if (!photographer) {
         return errorJson(404, 'Photographer profile not found - claim an invitation first', undefined, 'PROFILE_NOT_CLAIMED');
       }
+      if (photographer.status === 'DISABLED') return errorJson(403, 'Photographer account disabled');
       try {
         const input = patchPhotographerProfileSchema.parse(parseJsonBody(event));
         const updated = await updatePhotographerProfile(photographer.id, input);
@@ -846,7 +892,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         const batch = await getBatchForPhotographer(decodeURIComponent(createUploadMatch[1]), result.photographer.id);
         if (!batch) return errorJson(404, 'Batch not found');
         const input = createUploadSchema.parse(parseJsonBody(event));
-        const { upload, uploadUrl } = await createUpload({
+        const { upload, uploadUrl, resumed, completed } = await createUpload({
           batch,
           fileName: input.name,
           contentType: input.type,
@@ -857,6 +903,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
           ok: true,
           upload: uploadDto(upload),
           uploadUrl,
+          resumed,
+          completed,
           s3UploadId: upload.s3UploadId,
           requiredHeaders: { 'content-type': input.type }
         });
@@ -907,11 +955,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       try {
         const input = completeUploadSchema.parse(parseJsonBody(event));
         const { image, alreadyCompleted } = await completeUpload(found.upload, found.batch, input.parts);
-        if (image && !alreadyCompleted) {
-          await sendIngestMessage(image.id).catch((error) =>
-            logOperationalEvent('error', 'racepic_upload.ingest_enqueue_failed', { errorCode: errorCodeOf(error) })
-          );
-        }
+        if (image) await sendIngestMessage(image.id);
         return json(200, { ok: true, image: image ? imageDto(image) : null, alreadyCompleted });
       } catch (error) {
         if (error instanceof ZodError) return errorJson(400, 'Validation failed', { issues: error.issues });
@@ -1438,9 +1482,6 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       try {
         const entryId = decodeURIComponent(hideParticipantMatch[1]);
         const result = await hideParticipant(entryId, auth.sub);
-        for (const eventId of result.eventIds) {
-          await regenerateManifestsForEvent(eventId);
-        }
         const db = await getDb();
         await writeAuditLog(db, {
           actorUserId: auth.sub,

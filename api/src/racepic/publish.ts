@@ -14,8 +14,9 @@ import {
   vehicle
 } from '../db/schema';
 import { RacePicError } from './repository';
-import { copyObject, deleteObject, deleteObjectsByPrefix, putObject } from './s3';
+import { copyObject, deleteObject, deleteObjectsByPrefix, listObjectKeys, putObject } from './s3';
 import { slugify } from './slug';
+import { isImagePubliclyEligible, listPubliclyEligibleImageIds } from './eligibility';
 
 /**
  * Publish-Worker (Paket 4), siehe docs/memory-bank/racepic-architecture.md Abschnitt B/G/H.
@@ -45,17 +46,15 @@ const invalidateCloudFront = async (paths: string[]): Promise<void> => {
     return;
   }
   const client = new CloudFrontClient({});
-  await client
-    .send(
-      new CreateInvalidationCommand({
-        DistributionId: distributionId,
-        InvalidationBatch: {
-          CallerReference: `racepic-${Date.now()}`,
-          Paths: { Quantity: paths.length, Items: paths }
-        }
-      })
-    )
-    .catch(() => undefined); // Best-effort: eine fehlgeschlagene Invalidation blockiert nie die Publish-Aktion selbst.
+  await client.send(
+    new CreateInvalidationCommand({
+      DistributionId: distributionId,
+      InvalidationBatch: {
+        CallerReference: `racepic-${Date.now()}`,
+        Paths: { Quantity: paths.length, Items: paths }
+      }
+    })
+  );
 };
 
 const loadImageOrThrow = async (imageId: string) => {
@@ -82,6 +81,9 @@ export const publishImage = async (imageId: string): Promise<void> => {
   if (image.offerMode !== 'FREE') throw new RacePicError('RACEPIC_PAID_OFFER_NOT_PUBLIC');
   if (!['DERIVED', 'ANALYZED', 'MATCHED'].includes(image.processingStatus)) {
     throw new RacePicError('RACEPIC_IMAGE_NOT_READY_TO_PUBLISH');
+  }
+  if (!(await isImagePubliclyEligible(imageId, false))) {
+    throw new RacePicError('RACEPIC_IMAGE_NOT_PUBLICLY_ELIGIBLE');
   }
   const db = await getDb();
   const [event] = await db.select({ enabled: racepicEvent.enabled, published: racepicEvent.published })
@@ -182,6 +184,8 @@ type ManifestData = { participants: ManifestParticipant[]; imagesByParticipantKe
  */
 const buildManifestData = async (eventId: string): Promise<ManifestData> => {
   const db = await getDb();
+  const eligibleImageIds = await listPubliclyEligibleImageIds(eventId);
+  if (eligibleImageIds.size === 0) return { participants: [], imagesByParticipantKey: new Map() };
   const rows = await db
     .select({
       entryId: entry.id,
@@ -224,7 +228,10 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
       and(
         eq(entry.eventId, eventId),
         isNull(entry.deletedAt),
+        eq(entry.registrationStatus, 'submitted_verified'),
+        eq(entry.acceptanceStatus, 'accepted'),
         eq(entry.consentMediaAccepted, true),
+        inArray(racepicImage.id, Array.from(eligibleImageIds)),
         eq(racepicImage.visibility, 'PUBLISHED'),
         eq(racepicImage.offerMode, 'FREE'),
         inArray(racepicAssignment.status, ['AUTO_MATCHED', 'MANUALLY_CONFIRMED', 'MANUALLY_CORRECTED'])
@@ -308,6 +315,8 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
  */
 const listUnassignedPublishedImages = async (eventId: string): Promise<ManifestImage[]> => {
   const db = await getDb();
+  const eligibleImageIds = await listPubliclyEligibleImageIds(eventId);
+  if (eligibleImageIds.size === 0) return [];
   const activeAssignments = await db
     .selectDistinct({ imageId: racepicAssignment.imageId })
     .from(racepicAssignment)
@@ -341,6 +350,7 @@ const listUnassignedPublishedImages = async (eventId: string): Promise<ManifestI
       eq(racepicImage.eventId, eventId),
       eq(racepicImage.visibility, 'PUBLISHED'),
       eq(racepicImage.offerMode, 'FREE'),
+      inArray(racepicImage.id, Array.from(eligibleImageIds)),
       assignedImageIds.length > 0 ? notInArray(racepicImage.id, assignedImageIds) : undefined
     ));
 
@@ -376,12 +386,11 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
   const { participants, imagesByParticipantKey } = await buildManifestData(eventId);
   const unassignedImages = await listUnassignedPublishedImages(eventId);
   const slug = racepicEventRow.slug;
-
-  // Entfernte Zuordnungen duerfen nicht ueber alte direkte CDN-Links erreichbar bleiben.
-  await Promise.all([
-    deleteObjectsByPrefix(`manifests/${slug}/p/`),
-    deleteObjectsByPrefix(`manifests/${slug}/i/`)
-  ]);
+  const oldDetailKeys = await Promise.all([
+    listObjectKeys(`manifests/${slug}/p/`),
+    listObjectKeys(`manifests/${slug}/i/`)
+  ]).then((parts) => parts.flat());
+  const desiredDetailKeys = new Set<string>();
 
   await putObject(
     `manifests/${slug}/index.json`,
@@ -390,6 +399,7 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
   );
 
   for (const participant of participants) {
+    desiredDetailKeys.add(`manifests/${slug}/p/${participant.participantKey}.json`);
     await putObject(
       `manifests/${slug}/p/${participant.participantKey}.json`,
       Buffer.from(JSON.stringify({ participant, images: imagesByParticipantKey.get(participant.participantKey) ?? [] })),
@@ -412,6 +422,7 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
   }
   const allImages = Array.from(imageDetails.values()).map((detail) => detail.image);
   for (const [imageId, detail] of imageDetails) {
+    desiredDetailKeys.add(`manifests/${slug}/i/${imageId}.json`);
     const sameVehicle = detail.participants.flatMap((participant) => imagesByParticipantKey.get(participant.participantKey) ?? []);
     const related = Array.from(new Map([...sameVehicle, ...allImages].filter((image) => image.imageId !== imageId).map((image) => [image.imageId, image])).values()).slice(0, 12);
     await putObject(
@@ -420,6 +431,7 @@ export const regenerateManifestsForEvent = async (eventId: string): Promise<void
       'application/json'
     );
   }
+  await Promise.all(oldDetailKeys.filter((key) => !desiredDetailKeys.has(key)).map((key) => deleteObject(key)));
 
   const publishedEvents = await db.select().from(racepicEvent).where(and(eq(racepicEvent.enabled, true), eq(racepicEvent.published, true)));
   await putObject(
@@ -490,8 +502,10 @@ const regenerateGlobalDiscoveryManifests = async (publishedEvents: (typeof racep
   }
   const discover = Array.from(discoverById.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const pageCount = Math.ceil(discover.length / DISCOVER_PAGE_SIZE);
-  await deleteObjectsByPrefix('manifests/discover-pages/');
+  const previousPageKeys = await listObjectKeys('manifests/discover-pages/');
+  const desiredPageKeys = new Set<string>();
   for (let page = 0; page < pageCount; page += 1) {
+    desiredPageKeys.add(`manifests/discover-pages/${page + 1}.json`);
     await putObject(
       `manifests/discover-pages/${page + 1}.json`,
       Buffer.from(JSON.stringify(discover.slice(page * DISCOVER_PAGE_SIZE, (page + 1) * DISCOVER_PAGE_SIZE))),
@@ -501,6 +515,7 @@ const regenerateGlobalDiscoveryManifests = async (publishedEvents: (typeof racep
   await putObject('manifests/discover.json', Buffer.from(JSON.stringify(discover.slice(0, DISCOVER_PAGE_SIZE))), 'application/json');
   await putObject('manifests/discover-index.json', Buffer.from(JSON.stringify({ total: discover.length, pageCount, pageSize: DISCOVER_PAGE_SIZE })), 'application/json');
   await putObject('manifests/search-index.json', Buffer.from(JSON.stringify(searchEntries)), 'application/json');
+  await Promise.all(previousPageKeys.filter((key) => !desiredPageKeys.has(key)).map((key) => deleteObject(key)));
 };
 
 export const setEventPublicObjectAvailability = async (eventId: string, available: boolean): Promise<void> => {
@@ -569,6 +584,7 @@ export const regeneratePhotographerManifest = async (photographerId: string): Pr
   const imagesById = new Map<string, { imageId: string; thumbUrl: string; previewUrl: string; eventSlug: string; eventTitle: string; capturedAt: string | null; createdAt: string }>();
   for (const eventRow of publishedEvents) {
     const { imagesByParticipantKey } = await buildManifestData(eventRow.eventId);
+    const unassignedImages = await listUnassignedPublishedImages(eventRow.eventId);
     for (const images of imagesByParticipantKey.values()) {
       for (const image of images) {
         if (image.photographer.slug !== photographer.slug) continue;
@@ -582,6 +598,18 @@ export const regeneratePhotographerManifest = async (photographerId: string): Pr
           createdAt: image.createdAt
         });
       }
+    }
+    for (const image of unassignedImages) {
+      if (image.photographer.slug !== photographer.slug) continue;
+      imagesById.set(image.imageId, {
+        imageId: image.imageId,
+        thumbUrl: image.thumbUrl,
+        previewUrl: image.previewUrl,
+        eventSlug: eventRow.slug,
+        eventTitle: eventRow.title,
+        capturedAt: image.capturedAt,
+        createdAt: image.createdAt
+      });
     }
   }
   const images = Array.from(imagesById.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));

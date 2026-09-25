@@ -27,7 +27,7 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
  * sind), nicht direkt ein Array.
  */
 
-const EMBEDDING_MODEL_ID = process.env.RACEPIC_EMBEDDING_MODEL_ID ?? 'eu.cohere.embed-v4:0';
+export const EMBEDDING_MODEL_ID = process.env.RACEPIC_EMBEDDING_MODEL_ID ?? 'eu.cohere.embed-v4:0';
 export const EMBEDDING_DIMENSIONS = 1024; // muss zu vector(1024) in db/schema.ts passen.
 
 const getClient = () => new BedrockRuntimeClient({ region: process.env.RACEPIC_EMBEDDING_REGION ?? 'eu-central-1' });

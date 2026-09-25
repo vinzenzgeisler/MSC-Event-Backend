@@ -187,17 +187,17 @@ export const warmEventVehicleReferences = async (
   timeBudgetMs = 22_000
 ): Promise<{ processed: number; skipped: number; total: number; done: boolean }> => {
   const db = await getDb();
-  const eligibleRows = await db
-    .selectDistinct({ vehicleId: entry.vehicleId })
+  const eligibleEntries = await db
+    .select({ vehicleId: entry.vehicleId, backupVehicleId: entry.backupVehicleId })
     .from(entry)
-    .innerJoin(eventClass, eq(eventClass.id, entry.classId))
-    .innerJoin(vehicle, eq(vehicle.id, entry.vehicleId))
     .where(and(
       eq(entry.eventId, eventId),
       eq(entry.acceptanceStatus, 'accepted'),
       eq(entry.registrationStatus, 'submitted_verified'),
       isNull(entry.deletedAt)
     ));
+  const eligibleRows = Array.from(new Set(eligibleEntries.flatMap((row) => [row.vehicleId, row.backupVehicleId].filter((id): id is string => Boolean(id)))))
+    .map((vehicleId) => ({ vehicleId }));
 
   // Bug gefunden 2026-09-23 (Nutzer-Feedback: Fortschrittsanzeige lief unbegrenzt weiter, "skipped"
   // wuchs weit ueber die Gesamtzahl der Fahrzeuge hinaus): eine einzelne Select-Abfrage PRO

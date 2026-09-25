@@ -3,6 +3,7 @@ import { getDb } from '../db/client';
 import { racepicEvent, racepicImage, racepicLicense, racepicPhotographer } from '../db/schema';
 import { RacePicError } from './repository';
 import { presignGetObject } from './s3';
+import { isImagePubliclyEligible } from './eligibility';
 
 /**
  * Oeffentlicher Download (Paket 8), siehe docs/memory-bank/racepic-architecture.md Abschnitt H
@@ -52,7 +53,9 @@ export const requestImageDownload = async (imageId: string, variant: DownloadVar
     .limit(1);
 
   if (!row) throw new RacePicError('RACEPIC_IMAGE_NOT_FOUND');
-  if (row.visibility !== 'PUBLISHED' || !row.eventPublished || !row.eventEnabled) throw new RacePicError('RACEPIC_IMAGE_NOT_PUBLISHED');
+  if (row.visibility !== 'PUBLISHED' || !row.eventPublished || !row.eventEnabled || !(await isImagePubliclyEligible(imageId))) {
+    throw new RacePicError('RACEPIC_IMAGE_NOT_PUBLISHED');
+  }
   if (row.offerMode !== 'FREE') {
     // Der Marketplace (kostenpflichtige Bilder, Entitlement-Pruefung) ist nicht Teil des MVP -
     // siehe Architekturplan Abschnitt K/J. Dieser Codepfad existiert, damit spaeter nur die

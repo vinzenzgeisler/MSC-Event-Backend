@@ -10,6 +10,7 @@ import {
   integer,
   jsonb,
   numeric,
+  primaryKey,
   pgTable,
   text,
   timestamp,
@@ -1611,6 +1612,29 @@ export const racepicEvent = pgTable('racepic_event', {
   slugUnique: unique('racepic_event_slug_unique').on(table.slug)
 }));
 
+export const racepicParticipantSuppression = pgTable('racepic_participant_suppression', {
+  entryId: uuid('entry_id')
+    .primaryKey()
+    .references(() => entry.id, { onDelete: 'cascade' }),
+  reason: text('reason').notNull(),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+});
+
+export const racepicManifestRefresh = pgTable('racepic_manifest_refresh', {
+  scope: text('scope').notNull(),
+  scopeId: text('scope_id').notNull(),
+  requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+  lastError: text('last_error')
+}, (table) => ({
+  key: primaryKey({ columns: [table.scope, table.scopeId] }),
+  scopeCheck: check('racepic_manifest_refresh_scope_check', sql`${table.scope} in ('event','photographer')`)
+}));
+
 export const racepicPhotographer = pgTable('racepic_photographer', {
   id: uuid('id').defaultRandom().primaryKey(),
   cognitoSub: text('cognito_sub'),
@@ -1741,13 +1765,17 @@ export const racepicUpload = pgTable('racepic_upload', {
   status: text('status').notNull().default('INITIATED'),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   completedAt: timestamp('completed_at', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
 }, (table) => ({
   s3KeyUnique: uniqueIndex('racepic_upload_s3_key_unique').on(table.s3Key),
   batchFingerprintIndex: index('racepic_upload_batch_fingerprint_idx').on(table.batchId, table.clientFingerprint),
+  activeFingerprintUnique: uniqueIndex('racepic_upload_active_fingerprint_unique')
+    .on(table.batchId, table.clientFingerprint)
+    .where(sql`${table.clientFingerprint} is not null and ${table.status} in ('INITIALIZING','INITIATED','MULTIPART_OPEN','COMPLETED')`),
   statusCheck: check(
     'racepic_upload_status_check',
-    sql`${table.status} in ('INITIATED','MULTIPART_OPEN','COMPLETED','FAILED','ABORTED','EXPIRED')`
+    sql`${table.status} in ('INITIALIZING','INITIATED','MULTIPART_OPEN','COMPLETED','FAILED','ABORTED','EXPIRED')`
   ),
   contentTypeCheck: check('racepic_upload_content_type_check', sql`${table.contentType} in ('image/jpeg', 'image/png')`)
 }));
@@ -1970,6 +1998,8 @@ export const racepicProcessingStep = pgTable('racepic_processing_step', {
   step: text('step').notNull(),
   pipelineVersion: text('pipeline_version').notNull(),
   status: text('status').notNull().default('DONE'),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
   error: text('error')

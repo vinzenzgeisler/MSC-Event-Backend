@@ -111,7 +111,13 @@ const ageAt = (birthdate, referenceDate) => {
   return age;
 };
 
-const displayName = (row) => `${row.last_name}, ${row.first_name}`.trim();
+// Drivers who set a publication name (Veröffentlichungsname) have their legal name protected;
+// every printed list must show the publication name instead, never first_name/last_name.
+const displayName = (row) => {
+  const publicationName = row.publication_name?.trim();
+  if (publicationName) return publicationName;
+  return `${row.last_name}, ${row.first_name}`.trim();
+};
 
 // ── minimal, self-contained checklist-table PDF renderer (pdfkit) ─────────────────────
 // One or more sections (each with its own heading, e.g. a vehicle class), rendered as a
@@ -307,6 +313,7 @@ const main = async () => {
         ec.name as class_name,
         p.first_name,
         p.last_name,
+        p.publication_name,
         p.birthdate,
         v.make as vehicle_make,
         v.model as vehicle_model,

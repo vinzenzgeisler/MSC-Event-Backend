@@ -93,19 +93,25 @@ export class RacePicStack extends Stack {
     });
 
     // --- CloudFront (Abschnitt G: /m/*, /p/* oeffentlich; /d/* signiert) -------------------
-    // TODO vor Go-Live (Paket 4/9): racepicSigningPublicKeyPem in der Stage-Config setzen
-    // (einmalig per `openssl genrsa`/`openssl rsa -pubout` erzeugtes Schluesselpaar, privater
-    // Schluessel in Secrets Manager, siehe Architekturplan Abschnitt I "Originale"). Bis dahin
-    // sind originals/ und derived/ zwar nicht oeffentlich (Bucket bleibt BLOCK_ALL + OAC), aber
-    // noch nicht per Signed-URL/Cookie geschuetzt - kein Downloadendpunkt darf vorher live gehen.
+    // Downloads currently use short-lived S3 presigned URLs. A configured CloudFront public key is
+    // therefore optional and only useful together with API-side signing using the private key.
+    // Without it, the viewer-request function keeps every non-public CDN path fail-closed.
     const signingPublicKeyPem = props.config.racepicSigningPublicKeyPem;
     let trustedKeyGroups: cloudfront.IKeyGroup[] | undefined;
+    let privatePathFunctions: cloudfront.FunctionAssociation[] | undefined;
     if (signingPublicKeyPem) {
       const publicKey = new cloudfront.PublicKey(this, 'DownloadSigningPublicKey', {
         encodedKey: signingPublicKeyPem,
         comment: 'RacePic download URL signing key (originals/derived)'
       });
       trustedKeyGroups = [new cloudfront.KeyGroup(this, 'DownloadSigningKeyGroup', { items: [publicKey] })];
+    } else {
+      const denyUnsignedPrivatePaths = new cloudfront.Function(this, 'DenyUnsignedPrivatePaths', {
+        code: cloudfront.FunctionCode.fromInline(
+          "function handler(event) { var uri = event.request.uri; if (uri.indexOf('/public/') === 0 || uri.indexOf('/manifests/') === 0) return event.request; return { statusCode: 404, statusDescription: 'Not Found', headers: { 'cache-control': { value: 'no-store' } } }; }"
+        )
+      });
+      privatePathFunctions = [{ eventType: cloudfront.FunctionEventType.VIEWER_REQUEST, function: denyUnsignedPrivatePaths }];
     }
 
     const oacOrigin = origins.S3BucketOrigin.withOriginAccessControl(this.mediaBucket);
@@ -147,7 +153,8 @@ export class RacePicStack extends Stack {
         origin: oacOrigin,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-        trustedKeyGroups
+        trustedKeyGroups,
+        functionAssociations: privatePathFunctions
       },
       additionalBehaviors: {
         // Event-/Teilnehmer-Manifeste (Abschnitt H): kurze TTL, damit Publish-Updates schnell sichtbar sind.
@@ -236,7 +243,8 @@ export class RacePicStack extends Stack {
       clientName: `${props.config.prefix}-racepic-photographer-client`,
       userPoolId: this.photographerUserPool.userPoolId,
       generateSecret: false,
-      explicitAuthFlows: ['ALLOW_USER_AUTH', 'ALLOW_USER_PASSWORD_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH'],
+      explicitAuthFlows: ['ALLOW_USER_AUTH', 'ALLOW_USER_PASSWORD_AUTH'],
+      refreshTokenRotation: { feature: 'ENABLED', retryGracePeriodSeconds: 60 },
       preventUserExistenceErrors: 'ENABLED',
       accessTokenValidity: 15,
       idTokenValidity: 15,

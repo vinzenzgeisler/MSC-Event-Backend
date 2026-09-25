@@ -9,11 +9,13 @@ import {
   racepicDetection,
   racepicImage,
   racepicMatchCandidate,
+  racepicParticipantSuppression,
   vehicle
 } from '../db/schema';
 import { RacePicError } from './repository';
 import { presignGetObject } from './s3';
 import { logOperationalEvent } from '../observability/logger';
+import { requestManifestRefresh } from './manifestRefresh';
 
 /**
  * Review-Queue (Paket 7), siehe docs/memory-bank/racepic-architecture.md Abschnitt H/18. Die
@@ -230,16 +232,45 @@ const writeAssignmentEvent = async (
   await db.insert(racepicAssignmentEvent).values({ assignmentId, fromStatus, toStatus, actorType: 'admin', actorId, reason });
 };
 
+const validateAssignmentTarget = async (imageId: string, entryId: string, detectionId: string | null) => {
+  const db = await getDb();
+  const [image] = await db.select({ eventId: racepicImage.eventId, photographerId: racepicImage.photographerId })
+    .from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
+  if (!image) throw new RacePicError('RACEPIC_IMAGE_NOT_FOUND');
+  const [target] = await db.select({ id: entry.id })
+    .from(entry)
+    .innerJoin(person, eq(person.id, entry.driverPersonId))
+    .leftJoin(racepicParticipantSuppression, eq(racepicParticipantSuppression.entryId, entry.id))
+    .where(and(
+      eq(entry.id, entryId),
+      eq(entry.eventId, image.eventId),
+      eq(entry.registrationStatus, 'submitted_verified'),
+      eq(entry.acceptanceStatus, 'accepted'),
+      isNull(entry.deletedAt),
+      eq(person.processingRestricted, false),
+      eq(person.objectionFlag, false),
+      isNull(racepicParticipantSuppression.entryId)
+    )).limit(1);
+  if (!target) throw new RacePicError('RACEPIC_ASSIGNMENT_TARGET_INVALID');
+  if (detectionId) {
+    const [detection] = await db.select({ id: racepicDetection.id }).from(racepicDetection)
+      .where(and(eq(racepicDetection.id, detectionId), eq(racepicDetection.imageId, imageId))).limit(1);
+    if (!detection) throw new RacePicError('RACEPIC_DETECTION_NOT_FOUND');
+  }
+  return image;
+};
+
 /** "Bestaetigen": die KI-Vorschlagszuordnung wird zur endgueltigen, manuellen Entscheidung. */
 export const confirmAssignment = async (assignmentId: string, actorId: string) => {
   const db = await getDb();
   const [assignment] = await db.select().from(racepicAssignment).where(eq(racepicAssignment.id, assignmentId)).limit(1);
   if (!assignment) throw new RacePicError('RACEPIC_ASSIGNMENT_NOT_FOUND');
-  await db
-    .update(racepicAssignment)
-    .set({ status: 'MANUALLY_CONFIRMED', source: 'MANUAL', decidedByType: 'admin', decidedById: actorId, decidedAt: new Date() })
-    .where(eq(racepicAssignment.id, assignmentId));
-  await writeAssignmentEvent(db, assignmentId, assignment.status, 'MANUALLY_CONFIRMED', actorId, 'review_confirm');
+  const image = await validateAssignmentTarget(assignment.imageId, assignment.entryId, assignment.detectionId);
+  await db.transaction(async (tx) => {
+    await tx.update(racepicAssignment).set({ status: 'MANUALLY_CONFIRMED', source: 'MANUAL', decidedByType: 'admin', decidedById: actorId, decidedAt: new Date() }).where(eq(racepicAssignment.id, assignmentId));
+    await writeAssignmentEvent(tx, assignmentId, assignment.status, 'MANUALLY_CONFIRMED', actorId, 'review_confirm');
+  });
+  await Promise.all([requestManifestRefresh('event', image.eventId), requestManifestRefresh('photographer', image.photographerId)]);
   return assignment;
 };
 
@@ -248,11 +279,12 @@ export const rejectAssignment = async (assignmentId: string, actorId: string) =>
   const db = await getDb();
   const [assignment] = await db.select().from(racepicAssignment).where(eq(racepicAssignment.id, assignmentId)).limit(1);
   if (!assignment) throw new RacePicError('RACEPIC_ASSIGNMENT_NOT_FOUND');
-  await db
-    .update(racepicAssignment)
-    .set({ status: 'REJECTED', source: 'MANUAL', decidedByType: 'admin', decidedById: actorId, decidedAt: new Date() })
-    .where(eq(racepicAssignment.id, assignmentId));
-  await writeAssignmentEvent(db, assignmentId, assignment.status, 'REJECTED', actorId, 'review_reject');
+  const [image] = await db.select({ eventId: racepicImage.eventId, photographerId: racepicImage.photographerId }).from(racepicImage).where(eq(racepicImage.id, assignment.imageId)).limit(1);
+  await db.transaction(async (tx) => {
+    await tx.update(racepicAssignment).set({ status: 'REJECTED', source: 'MANUAL', decidedByType: 'admin', decidedById: actorId, decidedAt: new Date() }).where(eq(racepicAssignment.id, assignmentId));
+    await writeAssignmentEvent(tx, assignmentId, assignment.status, 'REJECTED', actorId, 'review_reject');
+  });
+  if (image) await Promise.all([requestManifestRefresh('event', image.eventId), requestManifestRefresh('photographer', image.photographerId)]);
   return assignment;
 };
 
@@ -265,8 +297,9 @@ export const correctAssignment = async (assignmentId: string, newEntryId: string
   const db = await getDb();
   const [assignment] = await db.select().from(racepicAssignment).where(eq(racepicAssignment.id, assignmentId)).limit(1);
   if (!assignment) throw new RacePicError('RACEPIC_ASSIGNMENT_NOT_FOUND');
+  const image = await validateAssignmentTarget(assignment.imageId, newEntryId, assignment.detectionId);
 
-  return db.transaction(async (tx) => {
+  const correctedId = await db.transaction(async (tx) => {
     await tx
       .update(racepicAssignment)
       .set({ status: 'REJECTED', source: 'MANUAL', decidedByType: 'admin', decidedById: actorId, decidedAt: new Date() })
@@ -311,13 +344,14 @@ export const correctAssignment = async (assignmentId: string, newEntryId: string
     await writeAssignmentEvent(tx, created.id, null, 'MANUALLY_CORRECTED', actorId, 'review_correct');
     return created.id;
   });
+  await Promise.all([requestManifestRefresh('event', image.eventId), requestManifestRefresh('photographer', image.photographerId)]);
+  return correctedId;
 };
 
 /** "weitere Zuordnung": ein zusaetzlicher Fahrer wird demselben Bild zugeordnet (mehrere Fahrzeuge pro Bild, Abschnitt C). */
 export const addAssignment = async (imageId: string, entryId: string, detectionId: string | null, actorId: string) => {
   const db = await getDb();
-  const [image] = await db.select({ id: racepicImage.id }).from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
-  if (!image) throw new RacePicError('RACEPIC_IMAGE_NOT_FOUND');
+  const image = await validateAssignmentTarget(imageId, entryId, detectionId);
 
   const [existing] = await db
     .select()
@@ -326,12 +360,13 @@ export const addAssignment = async (imageId: string, entryId: string, detectionI
     .limit(1);
   if (existing) throw new RacePicError('RACEPIC_ASSIGNMENT_ALREADY_EXISTS');
 
-  const [created] = await db
-    .insert(racepicAssignment)
-    .values({ imageId, entryId, detectionId, status: 'MANUALLY_CONFIRMED', source: 'MANUAL', decidedByType: 'admin', decidedById: actorId })
-    .returning();
-  if (!created) throw new RacePicError('RACEPIC_ASSIGNMENT_CREATE_FAILED');
-  await writeAssignmentEvent(db, created.id, null, 'MANUALLY_CONFIRMED', actorId, 'review_add');
+  const created = await db.transaction(async (tx) => {
+    const [row] = await tx.insert(racepicAssignment).values({ imageId, entryId, detectionId, status: 'MANUALLY_CONFIRMED', source: 'MANUAL', decidedByType: 'admin', decidedById: actorId }).returning();
+    if (!row) throw new RacePicError('RACEPIC_ASSIGNMENT_CREATE_FAILED');
+    await writeAssignmentEvent(tx, row.id, null, 'MANUALLY_CONFIRMED', actorId, 'review_add');
+    return row;
+  });
+  await Promise.all([requestManifestRefresh('event', image.eventId), requestManifestRefresh('photographer', image.photographerId)]);
   return created;
 };
 
@@ -420,7 +455,16 @@ export const searchEntriesByEvent = async (eventId: string, query: string) => {
     .from(entry)
     .innerJoin(person, eq(person.id, entry.driverPersonId))
     .innerJoin(vehicle, eq(vehicle.id, entry.vehicleId))
-    .where(eq(entry.eventId, eventId));
+    .leftJoin(racepicParticipantSuppression, eq(racepicParticipantSuppression.entryId, entry.id))
+    .where(and(
+      eq(entry.eventId, eventId),
+      eq(entry.registrationStatus, 'submitted_verified'),
+      eq(entry.acceptanceStatus, 'accepted'),
+      isNull(entry.deletedAt),
+      isNull(racepicParticipantSuppression.entryId),
+      eq(person.processingRestricted, false),
+      eq(person.objectionFlag, false)
+    ));
 
   const normalizedQuery = query.trim().toLowerCase();
   return rows
@@ -439,32 +483,24 @@ export const searchEntriesByEvent = async (eventId: string, query: string) => {
     }));
 };
 
-/**
- * "Teilnehmer ausblenden" (Paket 9), siehe docs/memory-bank/racepic-architecture.md Abschnitt
- * "Datenschutz": "Bei Widerspruch gegen Bilder: Assignments auf REJECTED setzen und die Bilder
- * verbergen." Lehnt alle aktiven Zuordnungen dieser Nennung ab (Bilder mit *nur* dieser Nennung
- * verschwinden dadurch automatisch aus dem naechsten Manifest-Rebuild - andere, weiterhin gueltige
- * Zuordnungen desselben Bildes zu anderen Fahrern bleiben unberuehrt).
- */
-export const hideParticipant = async (entryId: string, actorId: string): Promise<{ eventIds: string[]; rejectedCount: number }> => {
+/** Suppress one entry from matching and reject its assignments without removing shared images. */
+export const hideParticipant = async (entryId: string, actorId: string): Promise<{ rejectedCount: number }> => {
   const db = await getDb();
   const [entryRow] = await db.select({ eventId: entry.eventId }).from(entry).where(eq(entry.id, entryId)).limit(1);
   if (!entryRow) throw new RacePicError('RACEPIC_ENTRY_NOT_FOUND');
-
-  const activeAssignments = await db
-    .select()
-    .from(racepicAssignment)
-    .where(and(eq(racepicAssignment.entryId, entryId), ne(racepicAssignment.status, 'REJECTED')));
-
-  for (const assignment of activeAssignments) {
-    await db
-      .update(racepicAssignment)
-      .set({ status: 'REJECTED', source: 'MANUAL', decidedByType: 'admin', decidedById: actorId, decidedAt: new Date() })
-      .where(eq(racepicAssignment.id, assignment.id));
-    await writeAssignmentEvent(db, assignment.id, assignment.status, 'REJECTED', actorId, 'participant_hidden');
-  }
-
-  return { eventIds: [entryRow.eventId], rejectedCount: activeAssignments.length };
+  const rejectedCount = await db.transaction(async (tx) => {
+    await tx.insert(racepicParticipantSuppression).values({ entryId, reason: 'participant_hidden', createdBy: actorId })
+      .onConflictDoUpdate({ target: racepicParticipantSuppression.entryId, set: { reason: 'participant_hidden', createdBy: actorId, updatedAt: new Date() } });
+    const activeAssignments = await tx.select().from(racepicAssignment)
+      .where(and(eq(racepicAssignment.entryId, entryId), ne(racepicAssignment.status, 'REJECTED')));
+    for (const assignment of activeAssignments) {
+      await tx.update(racepicAssignment).set({ status: 'REJECTED', source: 'MANUAL', decidedByType: 'admin', decidedById: actorId, decidedAt: new Date() }).where(eq(racepicAssignment.id, assignment.id));
+      await writeAssignmentEvent(tx, assignment.id, assignment.status, 'REJECTED', actorId, 'participant_hidden');
+    }
+    return activeAssignments.length;
+  });
+  await requestManifestRefresh('event', entryRow.eventId);
+  return { rejectedCount };
 };
 
 /**

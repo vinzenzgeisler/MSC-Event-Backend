@@ -1,5 +1,15 @@
 <!-- Synchron gehalten in: msc-website, MSC-Event-Backend, MSC-Event-Frontend (docs/memory-bank/racepic-architecture.md). Nur DIESE Architekturdatei wird identisch dupliziert; der Fortschritt (racepic-progress.md) ist repo-spezifisch und wird NICHT gespiegelt. -->
-> **Stand:** 2026-09-21 · **Status:** Architektur freigegeben, Paket 0 (Entscheidungen) im Entwurf fertig · Fortschritt in diesem Repo: [racepic-progress.md](./racepic-progress.md)
+> **Stand:** 2026-09-25 · **Status:** Architektur freigegeben; repositoryübergreifender Reliability-/Security-Review umgesetzt, noch nicht deployed · Fortschritt in diesem Repo: [racepic-progress.md](./racepic-progress.md)
+
+## Implementierter Ist-Stand nach Gesamt-Review (2026-09-25)
+
+- Öffentliche Zugriffe lesen weiterhin nur validierte JSON-Manifeste und öffentliche Varianten über CloudFront; Downloads werden serverseitig gegen eine zentrale Eligibility-Regel geprüft.
+- Upload-Sessions sind idempotent reserviert, an exakte Dateigröße und MIME-Type gebunden und für Single- sowie Multipart-Uploads wiederaufnehmbar. Pipeline-Schritte verwenden atomare Claims mit Leases und können vom Reconciler erneut angestoßen werden.
+- Manifest-Neubauten werden in `racepic_manifest_refresh` zusammengeführt. Neue Dateien werden vor dem Entfernen veralteter Dateien geschrieben; Fehler bei Queueing oder Invalidation werden nicht mehr still verschluckt.
+- `racepic_participant_suppression` verhindert nach einem Widerspruch neue KI-/manuelle Zuordnungen und entfernt bestehende aktive Zuordnungen aus Manifesten. Das Bild selbst bleibt öffentlich und herunterladbar; Bildsichtbarkeit und Bildlöschung sind davon getrennte Admin-/Fotografenentscheidungen.
+- Website und Admin aktivieren RacePic nur über explizite Feature-Flags. Der öffentliche Client validiert Manifest- und Download-Antworten zur Laufzeit. Das Admin-Frontend erzwingt `racepic.read`/`racepic.manage` auch in der Navigation und Tab-Auswahl.
+- Der Fotografen-Pool verwendet Refresh-Token-Rotation. Passkeys und die starke Marketplace-Step-up-Stufe bleiben bewusst spätere Ausbaustufen. Admin-MFA ist im Code vorbereitet, muss vor Produktion jedoch per Infrastrukturkonfiguration aktiviert und getestet werden.
+- Die offizielle Event-Startnummer stammt ausschließlich aus der Nennung; Text auf dem Referenzfoto wird nicht als Startnummernquelle verwendet. Bei exaktem OCR-Treffer im Rennfoto werden unterdurchschnittliche Embedding-/Farbsignale des möglicherweise veralteten Referenzfotos neutral statt negativ gewertet. Überdurchschnittliche visuelle Übereinstimmung darf weiterhin helfen.
 
 # RacePic – Architektur- und Umsetzungskonzept
 
@@ -11,7 +21,7 @@ Der MVP ist kostenlos. Das Domain-Modell muss aber einen späteren Marketplace m
 
 Entschieden:
 - Der Fotografenbereich liegt auf der Website unter `/racepic/studio`.
-- Im MVP werden nur JPEGs angenommen.
+- Im MVP werden JPEG- und PNG-Dateien angenommen.
 - Das Event liegt zurück.
 
 **Leitentscheidung:** RacePic wird **kein neuer Service**. Es wird ein neues fachliches Modul im bestehenden **MSC-Event-Backend** (gleiches CDK, gleiche Postgres-DB, gleiche Pipeline), plus Seiten in der **msc-website** und eine Review-Oberfläche im **MSC-Event-Frontend**. Neu hinzu kommen nur Dinge, die heute technisch fehlen: ein Media-Bucket mit CloudFront, SQS-basierte Bildverarbeitung, ein Cognito-Pool für Fotografen sowie Rekognition und Bedrock.
@@ -149,7 +159,7 @@ Event wählen → Dateien ziehen / auswählen → Lizenz (Default aus Profil) �
 1. `POST /photographer/events/{eventId}/batches` mit `{licenseId, fileCount}` legt den Batch an.
    - Der Server prüft das Upload-Fenster und die Event-Berechtigung.
 2. Pro Datei `POST /photographer/batches/{id}/uploads` mit `{name, size, type, fingerprint}`.
-   - Der Server prüft MIME (nur JPEG), die Größe (≤ 80 MB) und Duplikate über den Fingerprint im Batch.
+   - Der Server prüft MIME (JPEG/PNG), die Größe (≤ 80 MB) und Duplikate über den Fingerprint im Batch.
    - Er erzeugt den Key `incoming/{eventId}/{photographerId}/{uploadId}`; **der Key ist nie vom Client wählbar**.
    - Bis 16 MB: ein Presigned PUT mit signierter `Content-Length`.
    - Darüber: `CreateMultipartUpload`.
@@ -160,7 +170,7 @@ Event wählen → Dateien ziehen / auswählen → Lizenz (Default aus Profil) �
 4. `POST …/uploads/{id}/complete`:
    - Der Server macht `HeadObject`, prüft die Größe, legt `racepic_image` (UPLOADED) an und schickt eine Nachricht an **SQS ingest**.
    - Das ist idempotent über die `upload_id`.
-   - Der Ingest-Worker prüft danach die Magic Bytes und dekodiert das Bild, wie `imageValidation.ts`, aber für große JPEGs.
+   - Der Ingest-Worker prüft danach die Magic Bytes und dekodiert das Bild, wie `imageValidation.ts`, aber für große JPEG-/PNG-Dateien.
 
 **Robustheit:**
 - 3 parallele Dateien auf Mobilgeräten, 6 auf dem Desktop.
@@ -376,7 +386,7 @@ Ein neuer Bucket `{prefix}-racepic-media-{account}`: Block Public Access, SSE-S3
 - **Keine biometrische Verarbeitung.** Das Matching nutzt Startnummer, Fahrzeug und Farbe. Rekognition-Labels „Person“ werden ignoriert, Face-APIs sind ausgeschlossen (IAM-Policy erlaubt nur `DetectText` und `DetectLabels`).
 - **Öffentliche Teilnehmerdaten** entsprechen dem heutigen Event-Hub: Startnummer, Anzeigename, Fahrzeug und Klasse, nur für Einträge mit `isPubliclyEligible`.
   - Einträge ohne Eligibility (Objection, Restriction, Pseudonymschutz) erscheinen **nicht in der Namenssuche**. Ihre Bilder sind nicht namentlich auffindbar, bleiben aber über Startnummer bzw. Fotografengalerie sichtbar, sofern kein Widerspruch vorliegt.
-  - Bei Widerspruch gegen Bilder: Assignments auf REJECTED setzen und die Bilder verbergen (Admin-Funktion „Teilnehmer ausblenden“).
+  - Bei einem Teilnehmer-Widerspruch: Assignments auf REJECTED setzen und die Nennung dauerhaft vom Matching ausschließen. Das Bild selbst wird nicht verborgen oder gelöscht.
 - **Namenssuche nach 365 Tagen** (Rückfrage des Nutzers):
   - Die Retention setzt `person.first_name`/`last_name` auf „Anonymisiert Teilnehmer“.
   - `entry.start_number_norm`, Klasse und `vehicle.make`/`model` **bleiben erhalten**.
@@ -393,7 +403,7 @@ Ein neuer Bucket `{prefix}-racepic-media-{account}`: Block Public Access, SSE-S3
 **Enthalten:**
 1. Backend-Modul, `RacePicStack` (Bucket, CloudFront, SQS, Worker), Migrationen.
 2. Photographer-Pool, Einladung, Claim, Login mit Email-OTP und Passkey, Profil, Stufe `recent`.
-3. Studio auf der Website: Upload (JPEG, Multipart, Resume), Batches, eigene Bilder, Profil, Lizenz-Default.
+3. Studio auf der Website: Upload (JPEG/PNG, Multipart, Resume), Batches, eigene Bilder, Profil, Lizenz-Default.
 4. Ingest: Validierung, Deduplizierung (SHA-256), EXIF, Varianten thumb/preview/medium/large.
 5. KI: Referenzen, DetectLabels, DetectText, Embeddings, Matcher, konfigurierbare Schwellen, vollständiges Audit.
 6. Admin im Nennungstool: Event-Settings, Fotografen einladen, Review-Queue, Korrektur aus Bild- und Fahrersicht, Statistik, Matching-Config, Re-Match.
@@ -501,7 +511,7 @@ Absicherung: AWS Budgets und Anomalie-Alarm auf Rekognition und CloudFront, Quot
 
 - **Backend:** Unit-Tests im bestehenden Stil (`api/tests/*.test.js`) für Matcher-Scoring (Fixtures aus echten Rekognition-Antworten), Statusübergänge, Idempotenz (doppelte SQS-Nachricht), Owner-Checks, Einladungs-Claim (abgelaufen, verbraucht, falsche E-Mail), Step-up-Policies, Download-Autorisierung.
 - **Dev-Stage** (`deploy-dev/**`-Tag):
-  - Lasttest mit 2.000 JPEGs über das Studio, inkl. Abbruch und Resume, Netzwerk-Drosselung, Mobile.
+  - Lasttest mit 2.000 JPEG-/PNG-Dateien über das Studio, inkl. Abbruch und Resume, Netzwerk-Drosselung, Mobile.
   - Prüfen, dass kein RDS-Verbindungsengpass auftritt (CloudWatch).
   - DLQ-Verhalten mit absichtlich defekten Dateien.
 - **KI-Qualität:** 300 manuell gelabelte OLD-Bilder als Goldset. Precision/Recall je Schwelle aus dem Admin-Report, Ziel Precision ≥ 98 % bei AUTO_MATCHED.

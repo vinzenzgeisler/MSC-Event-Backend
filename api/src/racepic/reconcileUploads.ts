@@ -1,9 +1,11 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { racepicUpload, racepicUploadBatch } from '../db/schema';
+import { racepicImage, racepicUpload, racepicUploadBatch } from '../db/schema';
 import { logOperationalEvent } from '../observability/logger';
 import { listExpiredOpenUploads } from './uploads';
 import { abortMultipartUpload, deleteObject } from './s3';
+import { processManifestRefreshes } from './manifestRefresh';
+import { sendAnalyzeMessage, sendIngestMessage, sendMatchMessage } from './queues';
 
 /**
  * RacePicUploadReconciler (Paket 3), per EventBridge-Schedule (siehe infra/lib/stacks/api-stack.ts).
@@ -29,9 +31,8 @@ export const handler = async (): Promise<void> => {
         await deleteObject(upload.s3Key);
       }
       await db.update(racepicUpload).set({ status: 'EXPIRED' }).where(eq(racepicUpload.id, upload.id));
-      await db
-        .update(racepicUploadBatch)
-        .set({ failedCount: batch.failedCount + 1, updatedAt: new Date() })
+      await db.update(racepicUploadBatch)
+        .set({ failedCount: sql`${racepicUploadBatch.failedCount} + 1`, updatedAt: new Date() })
         .where(eq(racepicUploadBatch.id, batch.id));
       cleaned += 1;
     } catch {
@@ -39,9 +40,32 @@ export const handler = async (): Promise<void> => {
     }
   }
 
+  const staleImages = await db.select({ id: racepicImage.id, status: racepicImage.processingStatus }).from(racepicImage)
+    .where(and(
+      inArray(racepicImage.processingStatus, ['UPLOADED', 'DERIVED', 'ANALYZED']),
+      lt(racepicImage.updatedAt, new Date(Date.now() - 15 * 60 * 1000))
+    )).limit(BATCH_LIMIT);
+  let pipelineRequeued = 0;
+  let pipelineRequeueErrors = 0;
+  for (const image of staleImages) {
+    try {
+      if (image.status === 'UPLOADED') await sendIngestMessage(image.id);
+      else if (image.status === 'DERIVED') await sendAnalyzeMessage(image.id);
+      else await sendMatchMessage(image.id);
+      pipelineRequeued += 1;
+    } catch {
+      pipelineRequeueErrors += 1;
+    }
+  }
+
+  const manifests = await processManifestRefreshes();
   logOperationalEvent('info', 'racepic_upload_reconciler.run', {
     count: expired.length,
     processed: cleaned,
-    racepicUploadReconcilerErrors: failed
+    racepicUploadReconcilerErrors: failed,
+    manifestRefreshProcessed: manifests.processed,
+    manifestRefreshErrors: manifests.failed,
+    pipelineRequeued,
+    pipelineRequeueErrors
   });
 };

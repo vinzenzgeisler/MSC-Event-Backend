@@ -1,6 +1,6 @@
 # RacePic – Betriebs-Runbook
 
-Stand: 2026-09-21 (Paket 9). Bezieht sich auf den Code-Stand in `feature/racepic-planning`,
+Stand: 2026-09-25. Bezieht sich auf den aktuellen, noch nicht deployten Code-Stand,
 **noch nicht deployed**. Ergänzt `docs/memory-bank/racepic-architecture.md` (Konzept) und
 `docs/memory-bank/racepic-progress.md` (Umsetzungsstand) um konkrete Betriebs-Handgriffe.
 
@@ -24,11 +24,12 @@ Stand: 2026-09-21 (Paket 9). Bezieht sich auf den Code-Stand in `feature/racepic
 `HIDDEN` braucht nur `racepic.review`, `PUBLISHED`/`REMOVED` brauchen `racepic.manage`. Löst
 automatisch eine Manifest-Regenerierung für das zugehörige Event aus.
 
-## Ein-/Widerspruch eines Teilnehmers ("Teilnehmer ausblenden")
+## Widerspruch eines Teilnehmers gegen die RacePic-Zuordnung
 
 `POST /admin/racepic/participants/{entryId}/hide` (braucht `racepic.manage`). Lehnt alle aktiven
-Zuordnungen dieser Nennung ab (`REJECTED`) und regeneriert die Manifeste des betroffenen Events.
-Bilder, die *auch* anderen Fahrern zugeordnet sind, bleiben für diese sichtbar.
+Zuordnungen dieser Nennung ab (`REJECTED`), unterdrückt künftige Zuordnungen und stellt einen
+Manifest-Refresh ein. Das Bild selbst bleibt unabhängig von weiteren Zuordnungen sichtbar und
+herunterladbar.
 
 ## Matching neu laufen lassen
 
@@ -44,9 +45,10 @@ Bilder, die *auch* anderen Fahrern zugeordnet sind, bleiben für diese sichtbar.
 ## Datenschutz-Anfrage (Auskunft/Löschung) zu einem Teilnehmer
 
 1. Nennung im Nennungstool suchen (Startnummer/Name).
-2. Falls Bilder entfernt werden sollen: `POST /admin/racepic/participants/{entryId}/hide`
-   (siehe oben).
-3. Für eine vollständige Bild-Löschung eines konkreten Fotos: `PATCH
+2. Für die Entfernung der Teilnehmerzuordnung: `POST
+   /admin/racepic/participants/{entryId}/hide` (siehe oben).
+3. Nur wenn ein konkretes Foto aus einem separaten rechtlichen oder redaktionellen Grund entfernt
+   werden soll: `PATCH
    /admin/racepic/images/{imageId}` mit `visibility: REMOVED` – löscht S3-Objekte und
    `racepic_image_variant`-Zeilen, das Audit (`racepic_assignment_event`) bleibt ohne
    Bilddaten erhalten (Architekturplan Abschnitt G "Löschung").
@@ -106,8 +108,10 @@ Kalibrierung müssen die Rohdaten aus `racepic_match_candidate` separat ausgewer
 
 ## Vor dem ersten echten Deploy
 
-1. CloudFront-Signing-Schlüsselpaar erzeugen und `racepicSigningPublicKeyPem` setzen (Paket 1
-   – bis dahin laufen Downloads über S3-Presigned-URLs statt CloudFront, siehe Paket 8).
+1. Für den ersten Piloten ist kein CloudFront-Signing-Key erforderlich: Downloads verwenden
+   kurzlebige S3-Presigned-URLs, und CloudFront lehnt private Pfade ohne Key fail-closed ab. Für
+   eine spätere Umstellung auf CloudFront-Signed-URLs müssen Public Key, privater Key in Secrets
+   Manager und die Signierung im API-Handler gemeinsam implementiert und aktiviert werden.
 2. `cdk deploy` einmal in der GitHub-Actions-CI beobachten und bestätigen, dass `sharp` dort
    mit Linux-x64-Binaries bündelt (Paket 4 – lokal auf Windows nicht abschließend
    verifizierbar).
@@ -117,5 +121,5 @@ Kalibrierung müssen die Rohdaten aus `racepic_match_candidate` separat ausgewer
    siehe Bug 2026-09-23) in der Bedrock-Konsole freigeben - live gegen prod getestet, schlaegt
    aktuell mit `AccessDeniedException` fehl (IAM-Policy ist korrekt, es fehlt die separate
    Bedrock-Modellzugriffsfreigabe). Ohne das faellt Matching komplett auf OCR/Startnummer zurueck.
-5. Rate-Limiting für `POST /public/racepic/images/{id}/download` ergänzen (Paket 8, offener
-   Punkt).
+5. Rate-Limiting für öffentliche Einladung-, Registrierungs- und Download-Endpunkte ist umgesetzt;
+   die Grenzwerte beim Pilotbetrieb über CloudWatch beobachten.

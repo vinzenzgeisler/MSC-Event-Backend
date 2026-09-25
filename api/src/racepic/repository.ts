@@ -11,6 +11,7 @@ import { getDb } from '../db/client';
 import { slugify } from './slug';
 
 const INVITATION_TTL_DAYS = 14;
+export const RACEPIC_PHOTOGRAPHER_TERMS_VERSION = '2026-09-21';
 
 export const hashToken = (token: string): string => createHash('sha256').update(token, 'utf8').digest('hex');
 
@@ -21,6 +22,12 @@ export class RacePicError extends Error {
     super(message ?? code);
   }
 }
+
+const assertCurrentTermsVersion = (termsVersion: string): void => {
+  if (termsVersion !== RACEPIC_PHOTOGRAPHER_TERMS_VERSION) {
+    throw new RacePicError('RACEPIC_TERMS_VERSION_REQUIRED');
+  }
+};
 
 /**
  * Legt ein Fotografenprofil (falls noch keins existiert) an und erzeugt eine neue Einladung.
@@ -191,6 +198,7 @@ export const claimInvitation = async (input: {
   cognitoSub: string;
   termsVersion: string;
 }) => {
+  assertCurrentTermsVersion(input.termsVersion);
   const tokenHash = hashToken(input.token);
   const db = await getDb();
 
@@ -241,6 +249,7 @@ export const getPhotographerByCognitoSub = async (cognitoSub: string) => {
 
 /** Self-service profile creation follows Cognito email confirmation; upload access is granted only by staff. */
 export const registerPhotographer = async (input: { cognitoSub: string; email: string; displayName: string; termsVersion: string }) => {
+  assertCurrentTermsVersion(input.termsVersion);
   const db = await getDb();
   const emailNorm = normalizeEmail(input.email);
   const [existing] = await db.select().from(racepicPhotographer).where(and(eq(racepicPhotographer.emailNorm, emailNorm), isNull(racepicPhotographer.deletedAt))).limit(1);

@@ -1,5 +1,6 @@
 import { SQSEvent, SQSBatchResponse } from 'aws-lambda';
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { getDb } from '../db/client';
 import {
   entry,
@@ -9,7 +10,7 @@ import {
   racepicDetection,
   racepicImage,
   racepicMatchCandidate,
-  racepicProcessingStep,
+  racepicParticipantSuppression,
   racepicTextDetection,
   vehicle
 } from '../db/schema';
@@ -18,6 +19,8 @@ import { canonicalizeOcrNumber, colorSimilarity, embeddingSimilarity, scoreCandi
 import { getActiveMatchingConfig } from './matchingConfig';
 import { ensureVehicleReference } from './vehicleReference';
 import type { RgbColor } from './rekognition';
+import { claimProcessingStep, failProcessingStep, finishProcessingStep } from './processingSteps';
+import { requestManifestRefresh } from './manifestRefresh';
 
 /**
  * RacePicMatchWorker (Paket 6: KI-Pipeline), konsumiert die Match-Queue. Siehe
@@ -33,7 +36,7 @@ import type { RgbColor } from './rekognition';
  * dieser Datei, die das Ergebnis fuer bereits verarbeitete Bilder beeinflussen kann, muss diese
  * Versionsnummer mit hochgezaehlt werden, sonst bleibt ein Rematch wirkungslos.
  */
-export const PIPELINE_VERSION = '2026-09-23.1';
+export const PIPELINE_VERSION = '2026-09-25.2';
 const MAX_STORED_CANDIDATES = 5;
 // Bug gefunden 2026-09-22: `eligible.map(...)` in `Promise.all` feuerte pro Detection so viele
 // gleichzeitige `ensureVehicleReference`-Aufrufe wie es zulaessige Nennungen im Event gibt - jeder
@@ -65,6 +68,8 @@ type EligibleEntry = {
   startNumberNorm: string | null;
   vehicleId: string;
   vehicleType: string;
+  backupVehicleId: string | null;
+  backupVehicleType: string | null;
 };
 
 const processOneImage = async (imageId: string): Promise<void> => {
@@ -72,40 +77,40 @@ const processOneImage = async (imageId: string): Promise<void> => {
 
   const [image] = await db.select().from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
   if (!image) return;
-  if (image.processingStatus !== 'ANALYZED' && image.processingStatus !== 'MATCHED') return;
+  if (image.processingStatus !== 'ANALYZED' && image.processingStatus !== 'MATCHED') {
+    throw new Error('RACEPIC_MATCH_IMAGE_NOT_READY');
+  }
 
   const config = await getActiveMatchingConfig(image.eventId);
   const pipelineVersion = `${PIPELINE_VERSION}:${config.version}`;
 
-  const [existingStep] = await db
-    .select()
-    .from(racepicProcessingStep)
-    .where(and(eq(racepicProcessingStep.imageId, imageId), eq(racepicProcessingStep.step, 'match'), eq(racepicProcessingStep.pipelineVersion, pipelineVersion)))
-    .limit(1);
-  if (existingStep?.status === 'DONE') return;
-  if (!existingStep) {
-    await db.insert(racepicProcessingStep).values({ imageId, step: 'match', pipelineVersion, status: 'IN_PROGRESS' }).onConflictDoNothing();
-  }
+  if (!(await claimProcessingStep(imageId, 'match', pipelineVersion))) return;
 
   const detections = await db.select().from(racepicDetection).where(eq(racepicDetection.imageId, imageId));
   const textDetections = await db.select().from(racepicTextDetection).where(eq(racepicTextDetection.imageId, imageId));
 
+  const backupClass = alias(eventClass, 'racepic_backup_class');
   const eligibleRows = await db
     .select({
       entryId: entry.id,
       startNumberNorm: entry.startNumberNorm,
       vehicleId: entry.vehicleId,
-      vehicleType: eventClass.vehicleType
+      vehicleType: eventClass.vehicleType,
+      backupVehicleId: entry.backupVehicleId,
+      backupVehicleType: backupClass.vehicleType
     })
     .from(entry)
     .innerJoin(eventClass, eq(eventClass.id, entry.classId))
     .innerJoin(vehicle, eq(vehicle.id, entry.vehicleId))
+    .leftJoin(backupClass, eq(backupClass.id, entry.backupClassId))
+    .leftJoin(racepicParticipantSuppression, eq(racepicParticipantSuppression.entryId, entry.id))
     .where(
       and(
         eq(entry.eventId, image.eventId),
         eq(entry.acceptanceStatus, 'accepted'),
         eq(entry.registrationStatus, 'submitted_verified'),
-        isNull(entry.deletedAt)
+        isNull(entry.deletedAt),
+        isNull(racepicParticipantSuppression.entryId)
       )
     );
   const eligible: EligibleEntry[] = eligibleRows;
@@ -125,6 +130,9 @@ const processOneImage = async (imageId: string): Promise<void> => {
     return reference;
   };
 
+  await db.delete(racepicMatchCandidate).where(eq(racepicMatchCandidate.imageId, imageId));
+  const desiredAssignmentIds = new Set<string>();
+
   for (const detection of detections) {
     const linkedTexts = textDetections.filter((text) => text.detectionId === detection.id);
     const detectionColor: RgbColor | null = Array.isArray(detection.dominantColors) && detection.dominantColors[0] ? (detection.dominantColors[0] as RgbColor) : null;
@@ -134,19 +142,27 @@ const processOneImage = async (imageId: string): Promise<void> => {
       const textMatches = candidateEntry.startNumberNorm
         ? linkedTexts.filter((text) => canonicalizeOcrNumber(text.normalized) === canonicalizeOcrNumber(candidateEntry.startNumberNorm!))
         : [];
-      const reference = await getReference(candidateEntry.vehicleId);
-
-      const features: CandidateFeatures = {
-        ocrExact: textMatches.length > 0,
-        ocrConfidence: textMatches.length > 0 ? Math.max(...textMatches.map((t) => Number(t.confidence ?? 0))) / 100 : 0,
-        vehicleTypeMatch: vehicleTypeMatches(detection.label as 'Car' | 'Motorcycle', candidateEntry.vehicleType),
-        embeddingSimilarity:
-          detectionEmbedding && reference?.embedding ? embeddingSimilarity(detectionEmbedding, reference.embedding) : null,
-        colorSimilarity: detectionColor && reference?.dominantColor ? colorSimilarity(detectionColor, reference.dominantColor) : null,
-        ambiguityCount: candidateEntry.startNumberNorm ? (ambiguityCounts.get(candidateEntry.startNumberNorm) ?? 1) : 1
-      };
-
-      return { entryId: candidateEntry.entryId, score: scoreCandidate(features, config.weights), features };
+      const vehiclesToScore = [
+        { id: candidateEntry.vehicleId, type: candidateEntry.vehicleType },
+        ...(candidateEntry.backupVehicleId
+          ? [{ id: candidateEntry.backupVehicleId, type: candidateEntry.backupVehicleType ?? candidateEntry.vehicleType }]
+          : [])
+      ];
+      let best: { score: number; features: CandidateFeatures } | null = null;
+      for (const candidateVehicle of vehiclesToScore) {
+        const reference = await getReference(candidateVehicle.id);
+        const features: CandidateFeatures = {
+          ocrExact: textMatches.length > 0,
+          ocrConfidence: textMatches.length > 0 ? Math.max(...textMatches.map((t) => Number(t.confidence ?? 0))) / 100 : 0,
+          vehicleTypeMatch: vehicleTypeMatches(detection.label as 'Car' | 'Motorcycle', candidateVehicle.type),
+          embeddingSimilarity: detectionEmbedding && reference?.embedding ? embeddingSimilarity(detectionEmbedding, reference.embedding) : null,
+          colorSimilarity: detectionColor && reference?.dominantColor ? colorSimilarity(detectionColor, reference.dominantColor) : null,
+          ambiguityCount: candidateEntry.startNumberNorm ? (ambiguityCounts.get(candidateEntry.startNumberNorm) ?? 1) : 1
+        };
+        const score = scoreCandidate(features, config.weights);
+        if (!best || score > best.score) best = { score, features };
+      }
+      return { entryId: candidateEntry.entryId, score: best?.score ?? 0, features: best!.features };
     });
 
     scored.sort((a, b) => b.score - a.score);
@@ -166,8 +182,6 @@ const processOneImage = async (imageId: string): Promise<void> => {
     // einem alten Lauf mit anderen Gewichten/Schwellen. Vor dem Einfuegen der frischen Kandidaten
     // erst die alten fuer diese Detection entfernen, damit die Tabelle immer nur den aktuellen Lauf
     // widerspiegelt (die eigentliche Historie ist racepic_assignment_event, nicht diese Tabelle).
-    await db.delete(racepicMatchCandidate).where(eq(racepicMatchCandidate.detectionId, detection.id));
-
     const storedCandidateIds: string[] = [];
     for (const [index, candidate] of scored.slice(0, MAX_STORED_CANDIDATES).entries()) {
       const [row] = await db
@@ -240,6 +254,7 @@ const processOneImage = async (imageId: string): Promise<void> => {
       })
       .returning();
     if (!assignmentRow) continue; // bestehende Zeile war MANUAL - unveraendert gelassen.
+    desiredAssignmentIds.add(assignmentRow.id);
 
     await db.insert(racepicAssignmentEvent).values({
       assignmentId: assignmentRow.id,
@@ -250,21 +265,48 @@ const processOneImage = async (imageId: string): Promise<void> => {
     });
   }
 
+  const staleAutomaticAssignments = await db
+    .select({ id: racepicAssignment.id, status: racepicAssignment.status })
+    .from(racepicAssignment)
+    .where(and(eq(racepicAssignment.imageId, imageId), eq(racepicAssignment.source, 'AI')));
+  for (const assignment of staleAutomaticAssignments) {
+    if (desiredAssignmentIds.has(assignment.id) || assignment.status === 'REJECTED') continue;
+    await db.update(racepicAssignment).set({ status: 'REJECTED', decidedAt: new Date() }).where(eq(racepicAssignment.id, assignment.id));
+    await db.insert(racepicAssignmentEvent).values({
+      assignmentId: assignment.id,
+      fromStatus: assignment.status,
+      toStatus: 'REJECTED',
+      actorType: 'system',
+      reason: `rematch_removed:${pipelineVersion}`
+    });
+  }
+
   await db.update(racepicImage).set({ processingStatus: 'MATCHED', updatedAt: new Date() }).where(eq(racepicImage.id, imageId));
-  await db
-    .update(racepicProcessingStep)
-    .set({ status: 'DONE', finishedAt: new Date() })
-    .where(and(eq(racepicProcessingStep.imageId, imageId), eq(racepicProcessingStep.step, 'match'), eq(racepicProcessingStep.pipelineVersion, pipelineVersion)));
+  await requestManifestRefresh('event', image.eventId);
+  await requestManifestRefresh('photographer', image.photographerId);
+  await finishProcessingStep(imageId, 'match', pipelineVersion);
 };
 
 export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
   const batchItemFailures: { itemIdentifier: string }[] = [];
   for (const record of event.Records) {
+    let imageId: string | undefined;
+    let pipelineVersion: string | undefined;
     try {
       const body = JSON.parse(record.body) as { imageId?: string };
       if (!body.imageId) throw new Error('RACEPIC_MATCH_MISSING_IMAGE_ID');
-      await processOneImage(body.imageId);
+      imageId = body.imageId;
+      await processOneImage(imageId);
     } catch (error) {
+      if (imageId) {
+        const db = await getDb();
+        const [image] = await db.select({ eventId: racepicImage.eventId }).from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
+        if (image) {
+          const config = await getActiveMatchingConfig(image.eventId).catch(() => null);
+          pipelineVersion = config ? `${PIPELINE_VERSION}:${config.version}` : undefined;
+        }
+      }
+      if (imageId && pipelineVersion) await failProcessingStep(imageId, 'match', pipelineVersion, error).catch(() => undefined);
       logOperationalEvent('error', 'racepic_match.failed', { errorCode: errorCodeOf(error) });
       batchItemFailures.push({ itemIdentifier: record.messageId });
     }

@@ -1,11 +1,12 @@
 import { SQSEvent, SQSBatchResponse } from 'aws-lambda';
 import { and, eq, isNotNull, ne } from 'drizzle-orm';
 import { getDb } from '../db/client';
-import { racepicImage, racepicImageVariant, racepicPhotographer, racepicProcessingStep, racepicUpload } from '../db/schema';
+import { racepicImage, racepicImageVariant, racepicPhotographer, racepicUpload } from '../db/schema';
 import { logOperationalEvent, errorCodeOf } from '../observability/logger';
 import { computeSha256, decodeImage, detectSupportedImageFormat, extractExif, renderVariants } from './imageProcessing';
 import { deleteObject, getObject, putObject } from './s3';
 import { sendAnalyzeMessage } from './queues';
+import { claimProcessingStep, failProcessingStep, finishProcessingStep } from './processingSteps';
 
 /**
  * RacePicIngestWorker (Paket 4), konsumiert die Ingest-Queue aus infra/lib/stacks/racepic-stack.ts.
@@ -27,22 +28,11 @@ const markImageFailed = async (imageId: string, message: string) => {
 const processOneImage = async (imageId: string): Promise<void> => {
   const db = await getDb();
 
-  // Idempotenz: ein bereits abgeschlossener Lauf fuer dieselbe Pipeline-Version wird uebersprungen.
-  const [existingStep] = await db
-    .select()
-    .from(racepicProcessingStep)
-    .where(and(eq(racepicProcessingStep.imageId, imageId), eq(racepicProcessingStep.step, 'ingest'), eq(racepicProcessingStep.pipelineVersion, PIPELINE_VERSION)))
-    .limit(1);
-  if (existingStep?.status === 'DONE') {
-    return;
-  }
-  if (!existingStep) {
-    await db.insert(racepicProcessingStep).values({ imageId, step: 'ingest', pipelineVersion: PIPELINE_VERSION, status: 'IN_PROGRESS' }).onConflictDoNothing();
-  }
+  if (!(await claimProcessingStep(imageId, 'ingest', PIPELINE_VERSION))) return;
 
   const [image] = await db.select().from(racepicImage).where(eq(racepicImage.id, imageId)).limit(1);
   if (!image) {
-    // Bild wurde zwischenzeitlich geloescht (z. B. Fotograf hat den Upload abgebrochen) - kein Fehler.
+    await finishProcessingStep(imageId, 'ingest', PIPELINE_VERSION);
     return;
   }
   if (!image.uploadId) {
@@ -61,6 +51,7 @@ const processOneImage = async (imageId: string): Promise<void> => {
   if (!imageFormat) {
     await markImageFailed(imageId, 'Not a valid JPEG/PNG (magic bytes check failed)');
     await deleteObject(upload.s3Key);
+    await failProcessingStep(imageId, 'ingest', PIPELINE_VERSION, new Error('RACEPIC_INGEST_UNSUPPORTED_IMAGE'));
     return;
   }
 
@@ -86,10 +77,7 @@ const processOneImage = async (imageId: string): Promise<void> => {
       .set({ processingStatus: 'DUPLICATE', sha256, bytes: originalBuffer.length, updatedAt: new Date() })
       .where(eq(racepicImage.id, imageId));
     await deleteObject(upload.s3Key);
-    await db
-      .update(racepicProcessingStep)
-      .set({ status: 'DONE', finishedAt: new Date() })
-      .where(and(eq(racepicProcessingStep.imageId, imageId), eq(racepicProcessingStep.step, 'ingest'), eq(racepicProcessingStep.pipelineVersion, PIPELINE_VERSION)));
+    await finishProcessingStep(imageId, 'ingest', PIPELINE_VERSION);
     return;
   }
 
@@ -99,6 +87,7 @@ const processOneImage = async (imageId: string): Promise<void> => {
   } catch {
     await markImageFailed(imageId, 'Image could not be decoded');
     await deleteObject(upload.s3Key);
+    await failProcessingStep(imageId, 'ingest', PIPELINE_VERSION, new Error('RACEPIC_INGEST_DECODE_FAILED'));
     return;
   }
 
@@ -110,7 +99,6 @@ const processOneImage = async (imageId: string): Promise<void> => {
 
   const originalKey = buildOriginalKey(image.eventId, imageId, imageFormat === 'png' ? 'png' : 'jpg');
   await putObject(originalKey, originalBuffer, imageFormat === 'png' ? 'image/png' : 'image/jpeg');
-  await deleteObject(upload.s3Key);
 
   for (const variant of variants) {
     const extension = variant.contentType === 'image/webp' ? 'webp' : 'jpg';
@@ -132,9 +120,8 @@ const processOneImage = async (imageId: string): Promise<void> => {
       .onConflictDoNothing();
   }
 
-  await db
-    .update(racepicImage)
-    .set({
+  try {
+    await db.update(racepicImage).set({
       originalKey,
       sha256,
       bytes: originalBuffer.length,
@@ -145,18 +132,25 @@ const processOneImage = async (imageId: string): Promise<void> => {
       processingStatus: 'DERIVED',
       processingError: null,
       updatedAt: new Date()
-    })
-    .where(eq(racepicImage.id, imageId));
+    }).where(eq(racepicImage.id, imageId));
+  } catch (error) {
+    if (errorCodeOf(error) !== '23505') throw error;
+    await Promise.all([deleteObject(originalKey), ...variants.map((variant) => {
+      const extension = variant.contentType === 'image/webp' ? 'webp' : 'jpg';
+      return deleteObject(buildDerivedKey(imageId, variant.kind, extension));
+    })]);
+    await db.delete(racepicImageVariant).where(eq(racepicImageVariant.imageId, imageId));
+    await db.update(racepicImage).set({ processingStatus: 'DUPLICATE', sha256, bytes: originalBuffer.length, updatedAt: new Date() }).where(eq(racepicImage.id, imageId));
+    await finishProcessingStep(imageId, 'ingest', PIPELINE_VERSION);
+    await deleteObject(upload.s3Key);
+    return;
+  }
 
-  await db
-    .update(racepicProcessingStep)
-    .set({ status: 'DONE', finishedAt: new Date() })
-    .where(and(eq(racepicProcessingStep.imageId, imageId), eq(racepicProcessingStep.step, 'ingest'), eq(racepicProcessingStep.pipelineVersion, PIPELINE_VERSION)));
-
-  // Naechste Pipeline-Stufe (Paket 6: KI-Analyse). Bis Paket 6 existiert, bleibt die Nachricht
-  // einfach in der Analyze-Queue liegen (Retention 4 Tage) - kein Fehlerfall.
-  await sendAnalyzeMessage(imageId).catch((error) =>
-    logOperationalEvent('error', 'racepic_ingest.analyze_enqueue_failed', { errorCode: errorCodeOf(error) })
+  // Keep the incoming object until the database update and downstream enqueue are durable.
+  await sendAnalyzeMessage(imageId);
+  await finishProcessingStep(imageId, 'ingest', PIPELINE_VERSION);
+  await deleteObject(upload.s3Key).catch((error) =>
+    logOperationalEvent('error', 'racepic_ingest.incoming_cleanup_failed', { errorCode: errorCodeOf(error) })
   );
 };
 
@@ -164,13 +158,16 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
   const batchItemFailures: { itemIdentifier: string }[] = [];
 
   for (const record of event.Records) {
+    let imageId: string | undefined;
     try {
       const body = JSON.parse(record.body) as { imageId?: string };
       if (!body.imageId) {
         throw new Error('RACEPIC_INGEST_MISSING_IMAGE_ID');
       }
-      await processOneImage(body.imageId);
+      imageId = body.imageId;
+      await processOneImage(imageId);
     } catch (error) {
+      if (imageId) await failProcessingStep(imageId, 'ingest', PIPELINE_VERSION, error).catch(() => undefined);
       logOperationalEvent('error', 'racepic_ingest.failed', { errorCode: errorCodeOf(error) });
       batchItemFailures.push({ itemIdentifier: record.messageId });
     }

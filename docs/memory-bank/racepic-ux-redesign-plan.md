@@ -16,9 +16,9 @@ eines **eigenständigen, aber gut integrierten Sub-Produkts** ("wie AirBnB, aber
 Website integriert") – bis hin zu einem späteren Stripe-Checkout. Das ist bewusst zu groß für ein
 einzelnes Paket; dieses Dokument bricht es in eine Reihenfolge von Paketen (14–18) herunter, jedes
 für sich lauffähig, verifizierbar und wie gewohnt in `docs/memory-bank/racepic-progress.md`
-dokumentiert. Bezahlung/Stripe selbst (Marketplace-Pakete M1–M5) bleibt explizit außen vor – hier
-geht es nur um die UI-*Vorbereitung* dafür, die eigentliche Zahlungsanbindung startet erst nach
-der schon dokumentierten rechtlich/steuerlichen Prüfung (siehe `racepic-open-items.md` Abschnitt D).
+dokumentiert. Bezahlung/Stripe selbst bleibt in den UI-Paketen 14–18 explizit außen vor – hier
+geht es nur um die UI-*Vorbereitung*. Die eigentliche Zahlungsanbindung folgt dem separaten
+[Marketplace-/Checkout-Plan](./racepic-marketplace-checkout-plan.md) mit AP00–AP25.
 
 **Vorhandene Bausteine, die wiederverwendet werden (kein Neubau nötig):**
 - `msc-website/src/integrations/racepic/client.ts`: `listMyImages`, `updateMyProfile`,
@@ -154,8 +154,8 @@ Landingpage-Optik kommen sollten.
   RacePic-Shop" – keine echte Buyer-Authentifizierung, kein Stripe.
 - **Explizit dokumentiert** (in `racepic-open-items.md`, Abschnitt D): das ist reine
   UI-Vorbereitung: der eigentliche Checkout/Bezahlvorgang startet erst nach der rechtlichen/
-  steuerlichen Prüfung des Seller-Modells (bereits als Blocker gelistet) und den
-  Marketplace-Paketen M1–M5.
+  steuerlichen Freigabe und den Arbeitspaketen AP00–AP25 aus dem
+  [Marketplace-/Checkout-Plan](./racepic-marketplace-checkout-plan.md).
 - **Verifikation:** `tsc --noEmit`, `npm run build`.
 
 ---

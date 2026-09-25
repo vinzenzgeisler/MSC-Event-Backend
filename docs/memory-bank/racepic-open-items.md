@@ -74,20 +74,31 @@ AWS-Zugriff, den diese Sandbox nicht abschließend verifizieren kann.
 | Vereinfachtes Copyright-Handling (EXIF-Tag statt vollem IPTC/XMP) | Backend | Bei Bedarf nachziehen, falls Fotoportale volle IPTC-Metadaten erwarten |
 | `RACEPIC_EMBEDDING_MODEL_ID`-Override nicht als CDK-Env-Var gesetzt | Backend | Nutzt aktuell immer den Default `cohere.embed-v4:0` |
 
-## D. Für den Marketplace (deutlich später, nicht MVP)
+## D. Marketplace/Stripe Checkout (geplant, noch nicht implementiert)
 
-- **Rechtliches Seller-Modell (A/B)** – verkauft der Fotograf selbst und der MSC vermittelt nur,
-  oder verkauft der MSC? Braucht vor jeder Zahlungsimplementierung eine steuerliche/rechtliche
-  Prüfung (siehe racepic-architecture.md Abschnitt K).
-- Stripe Connect, Käufer-Entitlements und `strong`-Step-up gehören zum späteren Checkout. Die
-  private Wasserzeichen-Vorschau für interne Preisentwürfe ist bereits in Paket 21 vorbereitet.
-- **Warenkorb-/Konto-UI (Paket 18, msc-website) ist reine Vorbereitung, kein Checkout.** Der
-  client-seitige Warenkorb (`localStorage`, `src/integrations/racepic/cart.tsx`) sammelt nur
-  bereits kostenlose Bilder für einen bequemen Sammel-Download (ruft denselben bestehenden
-  `POST /public/racepic/images/{id}/download`-Endpunkt mehrfach auf) – kein Konto, keine
-  Zahlung, kein Backend-Zustand. Das Konto-Icon im RacePic-Header ist absichtlich deaktiviert.
-  Der eigentliche Checkout/Bezahlvorgang startet erst nach der oben genannten Rechtsprüfung und
-  den Marketplace-Paketen M1–M5.
+Der vollständige Plan mit Architektur, APIs, Zuständen, Tests und den Arbeitspaketen AP00–AP25
+steht in [racepic-marketplace-checkout-plan.md](./racepic-marketplace-checkout-plan.md).
+
+Verbindlich entschieden sind MSC als Merchant of Record, Hosted Checkout, Multi-Seller-Warenkorb,
+Separate Charges and Transfers, 80/20-Nettoaufteilung, 14-Tage-Reserve, Gastkauf plus optionales
+passwortloses Käuferkonto, automatische Übernahme passender Gastbestellungen, vollständige
+Positionsrefunds und die Admin-geprüfte FREE→PAID-Umwandlung bereits veröffentlichter Bilder.
+
+Vor Beginn bzw. Aktivierung bleiben folgende Gates offen:
+
+1. Rechts-/Steuerfreigabe für Checkout, Widerruf, digitale Inhalte, MSC-Rechnung und
+   Fotografen-Gutschrift (AP00).
+2. Stripe-Testkonto, Connect-/Merchant-of-Record-Konfiguration, Webhook-Secrets und stabile
+   API-Version (AP01).
+3. Entscheidung/Freigabe der konkreten steuerlichen Behandlung je Fotografenstatus; ungeklärte
+   Profile dürfen nicht ausgezahlt werden.
+4. Abnahme eines vollständigen Testkaufs einschließlich Entitlement, Rechnung, Item-Refund,
+   Transfer/Reversal, Dispute und täglicher Reconciliation.
+5. Kontrollierter Pilot über mindestens einen vollständigen 14-Tage-Hold-Zyklus.
+
+Der heutige lokale Warenkorb bleibt bis dahin reine FREE-Sammeldownload-Vorbereitung. Käuferkonto,
+Checkout, PAID-Veröffentlichung, Transfers und Refunds sind noch nicht implementiert oder
+öffentlich freigeschaltet.
 
 ## Verweise
 

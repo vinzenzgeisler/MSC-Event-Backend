@@ -506,7 +506,8 @@ Reste. Ergebnis und daraus folgende Anpassungen:
 - `RACEPIC_EMBEDDING_MODEL_ID` ist als Override vorgesehen (siehe `bedrock.ts`), aber noch nicht als CDK-Env-Var gesetzt – nutzt aktuell immer den Default `cohere.embed-v4:0`.
 - Freigabe der Rechtstexte (Datenschutzhinweis, Fotografen-Bedingungen) durch Datenschutzbeauftragten/Vorstand.
 - Namenssuche nach 365 Tagen: aktueller Stand (Name verschwindet, Bildzuordnung über Startnummer/Klasse/Fahrzeug bleibt) ist technisch umgesetzt vorgesehen; dauerhafte Namenssuche erfordert eine zusätzliche Rechtsgrundlage – Entscheidung bei Vorstand/Datenschutz.
-- Rechtliches Seller-Modell (A/B) vor Marketplace-Implementierung klären.
+- Merchant-of-Record-Modell entschieden: Der MSC verkauft an den Käufer. Offen bleibt die
+  schriftliche Rechts-/Steuerfreigabe gemäß AP00 im Marketplace-/Checkout-Plan.
 - Keine Cost Anomaly Detection eingerichtet (bräuchte eine SNS-Themen-Abo-Bestätigung, in dieser Umgebung nicht einrichtbar/verifizierbar) – nur das neue `CfnBudget` (Paket 9) deckt die Kostenüberwachung ab.
 - Das neue `RacePicMonthlyBudget` ist nicht live getestet (kein AWS-Zugriff in dieser Umgebung) – vor dem Piloten (Paket 10) einmal in der CI beobachten, dass es tatsächlich erzeugt wird und die Schwellenwerte sinnvoll sind.
 ## Pakete 19–24 – Implementierungsstand 2026-09-22
@@ -514,3 +515,7 @@ Reste. Ergebnis und daraus folgende Anpassungen:
 Backend: Bildkatalog und Preis-Migration, private Wasserzeichen-Vorschau, Registrierungsfreigabe, Event-/Download-Sperren, neue CDN-Detailmanifeste, OCR-Crops und räumliche Textzuordnung.
 
 Dies ist Feature-Branch-Arbeit. Lokal erfolgreich: TypeScript-Typechecks der Website, Backend-API, Backend-Infrastruktur und des Nennungstool-Admins. Ein echter Browser-/Cognito-/AWS-Durchlauf, eine KI-Qualitätsmessung mit bestätigten Bildern und eine rechtliche Freigabe stehen aus. Keine Merges, Deployments oder öffentliche Freischaltung erfolgten in diesem Paket. Das genaue Paket- und Abnahme-Raster steht in racepic-open-items.md, Abschnitt E.
+
+## Marketplace-/Checkout-Plan (2026-09-25)
+
+Der vollständige Plan ist in [racepic-marketplace-checkout-plan.md](./racepic-marketplace-checkout-plan.md) dokumentiert. Dieses Repo übernimmt Commerce-Schema und Ledger, Stripe-Adapter, Buyer-Cognito, Quotes und Checkout Sessions, Raw-Body-Webhooks, Fulfillment, Entitlements, Rechnungen, Connect, Settlement, Refunds/Reversals, Disputes und Reconciliation. Es wurde noch keine Checkout-Implementierung, Migration oder Infrastruktur dafür ausgerollt.

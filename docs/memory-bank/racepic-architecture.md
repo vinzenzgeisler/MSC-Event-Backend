@@ -227,13 +227,14 @@ Eine Middleware `requireStepUp(policy)` im `RacePicApiHandler`. Die Policies pro
 |---|---|---|
 | `session` | Gültiges Access-Token und Profil ACTIVE | Upload, Bildtexte, Lizenz neuer Uploads, eigene Bilder verbergen |
 | `recent` | `auth_time` ≤ 10 Minuten | E-Mail ändern, Passkeys verwalten, Bilder endgültig löschen, Copyright-Inhaber ändern |
-| `strong` (Marketplace) | Frischer Login ≤ 5 Minuten **mit Passkey** und Profil mit registriertem Passkey | Preise aktivieren/ändern, Stripe verbinden, Account-Session bzw. Onboarding-Link erzeugen, Auszahlungsansicht |
+| `strong` (Marketplace) | Frischer Login ≤ 5 Minuten **mit Passkey** und Profil mit registriertem Passkey | Stripe Connect verbinden, Onboarding-/Dashboard-Link erzeugen, Auszahlungs- und Identitätsänderungen |
 
 - **Umsetzung von `strong`:** Cognito-Tokens enthalten nicht, welcher Faktor verwendet wurde. Deshalb gibt es einen backend-eigenen Step-up:
   1. `POST /photographer/step-up/challenge` erzeugt eine WebAuthn-Challenge.
   2. `…/verify` prüft die Assertion gegen die bei Cognito registrierten Credential-IDs (`ListWebAuthnCredentials`) bzw. eine eigene Credential-Tabelle.
   3. Ergebnis ist ein **Step-up-Grant**: serverseitig gespeichert, 5 Minuten gültig, an `sub`, Aktion und Session gebunden.
 - Im MVP wird nur `recent` benötigt. `strong` wird mit dem Marketplace gebaut; die Abstraktion steht aber von Anfang an.
+- Ein FREE→PAID-Antrag benötigt nur eine normale aktive Fotografensitzung. Er wird erst durch eine getrennte Adminfreigabe wirksam; diese Vier-Augen-Kontrolle ersetzt für diesen Workflow den `strong`-Step-up.
 
 ### Admins
 
@@ -243,10 +244,9 @@ Eine Middleware `requireStepUp(policy)` im `RacePicApiHandler`. Die Policies pro
 
 ### Spätere Stripe-Verknüpfung
 
-- Nur `POST /photographer/payments/account-session` (Embedded Components) bzw. `…/onboarding-link`.
+- Stripe-hosted Onboarding und Express Dashboard werden ausschließlich über kurzlebige serverseitige Links geöffnet.
 - Voraussetzungen: gültige Session, Fotograf besitzt das Profil, Status erlaubt Payments, `strong`-Grant.
-- Der Link bzw. das Client-Secret wird on demand erzeugt, **nie gespeichert, nie gemailt**.
-- Jeder Aufruf wird auditiert.
+- Links werden on demand erzeugt, **nie gespeichert und nie gemailt**. Jeder Aufruf wird auditiert.
 
 ---
 
@@ -420,31 +420,15 @@ Ein neuer Bucket `{prefix}-racepic-media-{account}`: Block Public Access, SSE-S3
 
 ## K. Marketplace-Zielarchitektur
 
-- **Commerce ist ein eigenes Modul** (`api/src/commerce/*`, Tabellen `commerce_*`) im selben Backend, ohne Referenz auf RacePic-Interna. RacePic liefert nur Produkte, Angebote und Entitlement-Auflösung über ein Interface `ProductTypeHandler` (z. B. `RACEPIC_IMAGE_LICENSE`, später `MERCH_ITEM`).
-- **Modell:**
-  - `seller` (`owner_type`: PHOTOGRAPHER oder MSC)
-  - `payment_account` (1:1 zum Seller; `provider`, `provider_account_id`, `onboarding_status`, `payouts_enabled`, `charges_enabled`, `requirements_due`; nur Status)
-  - `product` (Typ, `reference_id` = `image_id`, Seller)
-  - `offer` (Produkt, Lizenz, Variante, `amount`, `currency`, Gültigkeit)
-  - `commission_rule` (Scope global, Event oder Seller; Priorität; `rate_bps` und fix; Gültigkeit; **keine Prozentzahl im Code**)
-  - `order` → `order_item` (Seller, Offer, **Snapshot** von Preis, Lizenzversion, Provision und Steuer)
-  - `payment` (1 pro Order) → `transfer` (je Seller und Order, `source_transaction`)
-  - `payout` (aus Webhooks, read-only)
-  - `refund` → `refund_item` (Bezug zum OrderItem) → `transfer_reversal`
-  - `dispute`
-  - `entitlement` (Customer oder E-Mail, `order_item`, `image`, Variante, Lizenz, `granted_at`, `expires_at?`, `max_downloads?`, `revoked_at`)
-- **Funds Flow:** eine Kundenzahlung (Checkout auf dem Plattform-Account) und danach **Separate Charges and Transfers**: je Seller ein Transfer über `transfer_group = order_id` und `source_transaction`. Die Provision bleibt als Differenz auf der Plattform. Stripe-Gebühren trägt die Plattform und berücksichtigt sie in der Provisionskalkulation (konfigurierbar). Die dann aktuelle Stripe-Empfehlung (Accounts v2, Controller-Properties statt Standard/Express/Custom) ist **bei der Implementierung zu prüfen**.
-- **Beispiel:** 30 € mit A 20 € und B 10 € bei 15 % ergibt Transfer A 17,00 €, Transfer B 8,50 € und 4,50 € Plattformanteil. Die Gebühren werden aus dem Plattformanteil getragen, sofern eine Regel nichts anderes festlegt.
-- **Refund:** Pro `refund_item` wird bestimmt, welcher Transfer betroffen ist. Ist der Transfer erfolgt, folgt ein `transfer_reversal` über den Seller-Anteil, sonst wird er vor dem Transfer storniert. Die Provision wird anteilig zurückgenommen, das Entitlement widerrufen.
-- **Disputes:** Plattformrisiko. Die Reversal-Policy ist konfigurierbar.
-- **Transfers verzögert** (z. B. 7 Tage nach Kauf, Widerrufsfrist beachten), damit Refunds vor dem Transfer die Regel sind.
-- **Seller-Status (Fotograf):** INVITED → ACTIVE_FREE → PAYMENT_ONBOARDING_REQUIRED → PAYMENT_ONBOARDING_PENDING → PAYMENT_ENABLED oder PAYMENT_RESTRICTED oder PAYMENT_DISABLED. Die Übergänge kommen aus Stripe-Webhooks (`account.updated`). PAID-Angebote sind nur bei PAYMENT_ENABLED veröffentlichbar.
-- **Paid Images:** `offer_mode=PAID` erzeugt `watermarked_preview` im Ingest bzw. beim Umschalten, `public/` bekommt die Wasserzeichen-Variante, und der Download-Endpoint verlangt ein Entitlement.
-- **Dashboard:** Verkaufszahlen aus eigenen `order_item`-Daten; Auszahlung, Kontostand und Onboarding über **Stripe Connect Embedded Components** (Account Session serverseitig on demand, `strong`). Keine eigene Banking-Oberfläche.
-- **Rechtliches Seller-Modell (A: Fotograf verkauft, MSC vermittelt / B: MSC verkauft):** Das Modell hält beides offen.
-  - `order_item.seller_id` gegenüber `order.merchant_of_record` (Plattform oder Seller).
-  - Rechnungs- und Steuer-Snapshot pro Item.
-  - **Vor der Implementierung ist eine steuerliche und rechtliche Prüfung Pflicht** (USt, Widerruf bei digitalen Inhalten, AGB, Lizenzvertrag).
+- Der vollständige, entscheidungsfertige Plan steht in [racepic-marketplace-checkout-plan.md](./racepic-marketplace-checkout-plan.md).
+- **MSC ist Merchant of Record.** Hosted Checkout erzeugt eine Plattformzahlung; je Fotograf folgen Separate Charges and Transfers nach einer Reserve von 14 Tagen.
+- Ein Checkout darf mehrere Fotografen enthalten. Fotografen erhalten 80 % des Nettoerlöses, der MSC 20 % und trägt Stripe-Gebühren.
+- Gastkauf bleibt möglich. Optionales Käuferkonto: eigener Cognito-Pool, passwortloses E-Mail-OTP und automatische Übernahme historischer Gastbestellungen nach Verifikation derselben normalisierten E-Mail.
+- Angebote, Bestellpositionen, Lizenz-, Steuer- und Provisionswerte sind immutable Snapshots. RacePic bindet sich über `ProductTypeHandler<RACEPIC_IMAGE_LICENSE>` an das eigenständige Commerce-Modul.
+- Bereits veröffentlichte FREE-Bilder dürfen nach Fotografenantrag und Adminfreigabe als neue PAID-Angebotsversion erscheinen. Neue kostenlose Downloads werden atomar gesperrt; bereits heruntergeladene Dateien können nicht zurückgerufen werden.
+- Refunds sind für die gesamte Order oder vollständige einzelne Bildpositionen möglich. Freie Teilbeträge ohne Itembezug sind in V1 ausgeschlossen.
+- Stripe-hosted Onboarding und Express Dashboard vermeiden eine eigene Banking-/KYC-Oberfläche. Webhooks, Reconciliation, Refunds, Reversals, Disputes, Rechnungen und Seller-Gutschriften laufen über das interne Ledger.
+- Vor Implementierung und Go-live bleiben Rechts-, Steuer- und Stripe-Konfigurationsfreigabe Pflicht.
 
 ## L. Merchandise-Perspektive
 
@@ -499,7 +483,7 @@ Absicherung: AWS Budgets und Anomalie-Alarm auf Rekognition und CloudFront, Quot
 | 8 | Öffentlich | Website | Routen in `src/App.tsx`, Sitemap (`scripts/generate-sitemap.mjs`), Navigation (`Header.tsx`), i18n; Suche, Galerie (Justified Grid, Lazy Loading, `srcset`), Lightbox (PhotoSwipe), Download-Dialog mit Lizenz |
 | 9 | Datenschutz und Betrieb | Backend | Retention-Integration inkl. S3-Löschung, Ausblenden-Funktion, `docs/privacy`, Budgets, Runbook |
 | 10 | Pilot OLD 2026 | alle | Fotografen einladen, Upload (Event liegt zurück), Kalibrierung der Schwellen an Review-Daten, Veröffentlichung |
-| M1–M5 | Marketplace (später) | Backend + Website | Rechtsprüfung → Commerce-Kern und Entitlements → `strong` Step-up und Stripe-Onboarding (Embedded) → Paid Offers, Wasserzeichen, Checkout, Multi-Seller-Transfers → Refund/Dispute und Dashboard |
+| AP00–AP25 | Marketplace/Checkout | alle | Vollständige Pakete für Recht/Steuer, Commerce-Ledger, Buyer-Accounts, FREE→PAID, Hosted Checkout, Webhooks, Entitlements, Settlement, Refunds, Admin, Reconciliation und Rollout: [racepic-marketplace-checkout-plan.md](./racepic-marketplace-checkout-plan.md) |
 
 ## Dokumentation (erster Schritt nach Freigabe)
 

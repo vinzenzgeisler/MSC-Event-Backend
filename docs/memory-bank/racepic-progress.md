@@ -519,3 +519,18 @@ Dies ist Feature-Branch-Arbeit. Lokal erfolgreich: TypeScript-Typechecks der Web
 ## Marketplace-/Checkout-Plan (2026-09-25)
 
 Der vollständige Plan ist in [racepic-marketplace-checkout-plan.md](./racepic-marketplace-checkout-plan.md) dokumentiert. Dieses Repo übernimmt Commerce-Schema und Ledger, Stripe-Adapter, Buyer-Cognito, Quotes und Checkout Sessions, Raw-Body-Webhooks, Fulfillment, Entitlements, Rechnungen, Connect, Settlement, Refunds/Reversals, Disputes und Reconciliation. Es wurde noch keine Checkout-Implementierung, Migration oder Infrastruktur dafür ausgerollt.
+
+## Commerce-Fundament (Etappe 1, Branch `feature/racepic/commerce-foundation`)
+
+Umgesetzt im Backend (Stand 2026-09-28, alle Flags aus, nichts deployt):
+
+- **AP02:** Migration `0110_commerce_core.sql` (Ledger, Angebotsversionen mit DB-Trigger gegen Änderungen, Conversion-Tabellen, ausschließlich `ON DELETE RESTRICT`) und Drizzle-Definitionen der bereits genutzten Tabellen in `api/src/db/schema.ts`.
+- **AP03:** Migration `0111_commerce_backfill.sql` (Seller, Produkte, aktive FREE-Angebotsversion je FREE-Bild, View `commerce_backfill_conflicts` als Konfliktreport). `racepic_image.price_cents` bleibt bestehen, ist aber nicht mehr die kaufrechtliche Quelle.
+- **AP01:** Stripe-Adapter `api/src/commerce/stripe/client.ts` (Paket `stripe` exakt gepinnt, Secret aus Secrets Manager `<prefix>/racepic/stripe`, in `api-stack.ts` angelegt und an `RacePicApiHandler` freigegeben). Das Secret muss einmalig manuell mit `secretKey`, `platformWebhookSecret`, `connectWebhookSecret` befüllt werden. Webhook-Endpunkte folgen mit AP16.
+- **Flags:** `commerceBuyerAccounts`, `commercePaidOffers`, `commerceCheckout`, `commerceSettlement`, `commerceFreeToPaidConversion` in `infra/lib/config` (Variablen `DEV_/PROD_COMMERCE_*`, nur exakt `true` schaltet ein), als Lambda-Env und in `GET /public/racepic/config` unter `commerce`. Die CI-`env:`-Blöcke kennen die neuen Variablen noch nicht; ohne Eintrag bleiben die Flags in jeder Pipeline aus. Zum Aktivieren müssen sie dort ergänzt werden.
+- **AP07:** `api/src/commerce/offers.ts` (immutable Versionen, atomarer Wechsel mit Produktsperre, Preisstufen 500/1000/1500/2000) und `productTypes.ts` (`ProductTypeHandler` für `RACEPIC_IMAGE_LICENSE`).
+- Audit-Aktionen für Angebote und Conversions in `api/src/audit/log.ts`. Test: `api/tests/commerce-foundation.test.js`.
+
+**Abweichungen vom Plan:** AP05 (Step-up `strong`, Passkey-Grant-Store) ist auf Etappe 2 unmittelbar vor AP06 verschoben, weil nur Connect es braucht und FREE→PAID laut Plan keinen Step-up verlangt. Neue Commerce-Permissions sind nicht angelegt; die Conversion-Freigabe nutzt `racepic.manage`.
+
+**Nicht geprüft:** Die Migrationen wurden nicht gegen eine echte PostgreSQL-Datenbank ausgeführt (kein lokaler Postgres, Docker-Daemon nicht gestartet), sondern nur über Contract-Tests auf den SQL-Text abgesichert. Vor dem Merge einmal in der CI/dev-Umgebung migrieren und `select * from commerce_backfill_conflicts` prüfen. `cdk synth` mit dem neuen Secret wurde nicht ausgeführt, nur der TypeScript-Build.

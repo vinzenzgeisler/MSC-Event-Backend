@@ -91,7 +91,12 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   // RacePic (Paket 9: Datenschutz), siehe api/src/racepic/reviewQueue.ts.
   racepic_participant_hidden: ['rejectedCount'],
   // RacePic (Paket 15: Studio-Redesign), siehe api/src/racepic/uploads.ts.
-  racepic_own_image_deleted: []
+  racepic_own_image_deleted: [],
+  // RacePic Commerce (AP07-AP09), siehe api/src/commerce/offers.ts und docs/memory-bank/racepic-marketplace-checkout-plan.md.
+  commerce_offer_version_activated: ['offerVersionId', 'version', 'mode', 'priceCents'],
+  racepic_offer_conversion_requested: ['conversionId', 'imageCount', 'priceCents'],
+  racepic_offer_conversion_approved: ['conversionId', 'imageCount'],
+  racepic_offer_conversion_rejected: ['conversionId', 'imageCount']
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

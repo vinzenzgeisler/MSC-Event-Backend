@@ -118,3 +118,18 @@ Checkout, PAID-Veröffentlichung, Transfers und Refunds sind noch nicht implemen
 - Architektur: [racepic-architecture.md](./racepic-architecture.md)
 - Repo-spezifischer Umsetzungsstand: `docs/memory-bank/racepic-progress.md` in jedem der drei Repos
 - Betrieb: `docs/racepic/runbook.md` (MSC-Event-Backend)
+
+## Offene Steuerentscheidungen (AP00 Punkt 4)
+
+Der Marketplace-Plan reserviert nur Felder (Steuerklasse, Steuerstatus, Brutto/Netto/Steuer-Snapshots), entscheidet aber kein Steuermodell. Zu klären mit Steuerberatung, bevor AP12 echte Beträge berechnet und bevor das erste PAID-Angebot aktiv wird:
+
+1. **Steuerstatus des MSC:** Kleinunternehmer (§ 19 UStG) oder regelbesteuert; Zuordnung des Bildverkaufs bei einem gemeinnützigen Verein (Zweckbetrieb oder wirtschaftlicher Geschäftsbetrieb).
+2. **Steuersatz der Lizenz:** 7 % oder 19 % für die Einräumung von Nutzungsrechten an Fotos; ob er vom Lizenztyp abhängt.
+3. **Leistungskette bei MSC als Merchant of Record:** Fotograf leistet an den MSC, der MSC an den Käufer; Einordnung, Gutschriftsverfahren (§ 14 Abs. 2 UStG), Vorsteuerabzug.
+4. **Steuerstatus der Fotografen:** Privatpersonen, Kleinunternehmer, Regelbesteuerte in der Gutschrift; Pflichtangaben; erlaubte Werte und Nachweis für `commerce_seller.tax_status` (Default `UNCLEARED`, blockiert Auszahlungen).
+5. **Bezugsgröße der 80 %:** Nettoerlös nach Umsatzsteuer; Rolle der Stripe-Gebühren; Rundung pro Position oder pro Bestellung.
+6. **Rechnung an Käufer:** Pflichtangaben, Nummernkreis, Steuerausweis, Kleinunternehmerfall, Aufbewahrung, Format (E-Rechnungspflicht im B2C-Fall bestätigen lassen).
+7. **Refunds und Steuer:** Korrektur von Rechnung und Gutschrift bei Voll-/Positionsrefund, Stornorechnung, Behandlung nach Transfer-Reversal und bei negativem Seller-Saldo.
+8. **Stripe Tax:** nutzen oder eigene Berechnung; nur Inlandsverkauf in EUR, OSS entfällt in V1.
+
+Technisch ist das Modell konfigurierbar vorbereitet: `commerce_offer_version.tax_class` und `tax_rate_bp` haben keinen Default.

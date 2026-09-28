@@ -10,6 +10,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as ses from 'aws-cdk-lib/aws-ses';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
@@ -1757,6 +1758,14 @@ export class ApiStack extends Stack {
         'arn:aws:bedrock:eu-south-2::foundation-model/cohere.*'
       ];
 
+      // RacePic Commerce (AP01): Stripe-Zugangsdaten. Das Secret wird hier nur angelegt; der Inhalt
+      // (JSON mit secretKey, platformWebhookSecret, connectWebhookSecret) wird einmalig manuell im
+      // Secrets Manager hinterlegt und steht nie im Repository oder in der Pipeline.
+      const stripeSecret = new secretsmanager.Secret(this, 'RacePicStripeSecret', {
+        secretName: `${props.config.prefix}/racepic/stripe`,
+        description: 'Stripe secretKey, platformWebhookSecret und connectWebhookSecret fuer RacePic Commerce (manuell befuellen)'
+      });
+
       const racePicApiHandler = new NodejsFunction(this, 'RacePicApiHandler', {
         runtime: lambda.Runtime.NODEJS_24_X,
         architecture: lambda.Architecture.X86_64, // gleiche Begruendung wie RacePicIngestWorker (sharp).
@@ -1788,6 +1797,12 @@ export class ApiStack extends Stack {
           DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
           DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
           DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+          COMMERCE_BUYER_ACCOUNTS: String(props.config.commerceFlags.commerceBuyerAccounts),
+          COMMERCE_PAID_OFFERS: String(props.config.commerceFlags.commercePaidOffers),
+          COMMERCE_CHECKOUT: String(props.config.commerceFlags.commerceCheckout),
+          COMMERCE_SETTLEMENT: String(props.config.commerceFlags.commerceSettlement),
+          COMMERCE_FREE_TO_PAID_CONVERSION: String(props.config.commerceFlags.commerceFreeToPaidConversion),
+          STRIPE_SECRET_ARN: stripeSecret.secretArn,
           RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
           RACEPIC_CDN_DOMAIN: racePicStack.distribution.distributionDomainName,
           RACEPIC_CDN_DISTRIBUTION_ID: racePicStack.distribution.distributionId,
@@ -1815,6 +1830,7 @@ export class ApiStack extends Stack {
           resources: [dbSecretArn]
         })
       );
+      stripeSecret.grantRead(racePicApiHandler);
       racePicApiHandler.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['rds-db:connect'],

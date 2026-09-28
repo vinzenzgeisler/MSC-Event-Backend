@@ -1,4 +1,5 @@
 import { StageConfig } from './types';
+import { readCommerceFlags } from './commerce-flags';
 import { parseNotificationRecipients } from './notification-recipients';
 
 export type DevProfile = 'idle' | 'test';
@@ -55,7 +56,8 @@ const baseDevConfig: Omit<StageConfig, 'enableRds' | 'enableApi' | 'enableMigrat
   racepicPhotographerRelyingPartyId: (process.env.DEV_RACEPIC_RELYING_PARTY_ID ?? '').trim() || 'localhost',
   racepicSigningPublicKeyPem: devRacePicSigningPublicKeyPem,
   racepicWebsiteBaseUrl: ((process.env.DEV_RACEPIC_WEBSITE_BASE_URL ?? '').trim() || 'http://localhost:8080').replace(/\/$/, ''),
-  racepicMonthlyBudgetUsd: Number((process.env.DEV_RACEPIC_MONTHLY_BUDGET_USD ?? '').trim() || '20')
+  racepicMonthlyBudgetUsd: Number((process.env.DEV_RACEPIC_MONTHLY_BUDGET_USD ?? '').trim() || '20'),
+  commerceFlags: readCommerceFlags('DEV')
 };
 
 const devIdleConfig: StageConfig = {

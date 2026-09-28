@@ -1,3 +1,11 @@
+export interface CommerceFlags {
+  commerceBuyerAccounts: boolean;
+  commercePaidOffers: boolean;
+  commerceCheckout: boolean;
+  commerceSettlement: boolean;
+  commerceFreeToPaidConversion: boolean;
+}
+
 export interface StageConfig {
   stage: 'dev' | 'prod';
   prefix: string;
@@ -54,6 +62,9 @@ export interface StageConfig {
   // https://www.msc-oberlausitz.de - dort liegt das Fotografen-Studio (Abschnitt E), nicht im
   // Nennungstool-Frontend.
   racepicWebsiteBaseUrl: string;
+  // RacePic Commerce (docs/memory-bank/racepic-marketplace-checkout-plan.md, Abschnitt 11): getrennte Flags,
+  // standardmaessig alle aus. Aktivierung erst nach dokumentierter Rechts-/Steuer-/Stripe-Freigabe (AP00).
+  commerceFlags: CommerceFlags;
   // Paket 9 (Betrieb): monatliches Budget in USD, gefiltert auf Rekognition/Bedrock/CloudFront
   // (Abschnitt M: groesste Kostentreiber). Benachrichtigt `orgaNotificationRecipients`.
   racepicMonthlyBudgetUsd: number;

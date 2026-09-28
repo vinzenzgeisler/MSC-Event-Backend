@@ -73,6 +73,7 @@ import { requestImageDownload } from './download';
 import { racepicAssignment, racepicAssignmentEvent, racepicDetection, racepicEvent, racepicImage, racepicProcessingStep } from '../db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import { buildPublicRateLimitKey, enforcePublicRateLimit } from '../http/publicRateLimit';
+import { getCommerceFlags } from '../commerce/flags';
 
 /**
  * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet, Paket 3: Upload). Eigenstaendiger
@@ -443,7 +444,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }
 
     if (method === 'GET' && path === '/public/racepic/config') {
-      return json(200, { ok: true, enabled: true, photographerTermsVersion: RACEPIC_PHOTOGRAPHER_TERMS_VERSION });
+      return json(200, {
+        ok: true,
+        enabled: true,
+        photographerTermsVersion: RACEPIC_PHOTOGRAPHER_TERMS_VERSION,
+        commerce: getCommerceFlags()
+      });
     }
 
     // --- Admin: Fotografen einladen/auflisten (Abschnitt E) -----------------------------------

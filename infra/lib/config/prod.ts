@@ -1,4 +1,5 @@
 import { StageConfig } from './types';
+import { readCommerceFlags } from './commerce-flags';
 import { parseNotificationRecipients } from './notification-recipients';
 
 const requireEnv = (name: string): string => {
@@ -95,6 +96,7 @@ export const resolveProdConfig = (): StageConfig => {
     racepicPhotographerRelyingPartyId: (process.env.PROD_RACEPIC_RELYING_PARTY_ID ?? '').trim() || 'msc-oberlausitz.de',
     racepicSigningPublicKeyPem: (process.env.PROD_RACEPIC_SIGNING_PUBLIC_KEY_PEM ?? '').trim() || undefined,
     racepicWebsiteBaseUrl: ((process.env.PROD_RACEPIC_WEBSITE_BASE_URL ?? '').trim() || 'https://www.msc-oberlausitz.de').replace(/\/$/, ''),
-    racepicMonthlyBudgetUsd: Number((process.env.PROD_RACEPIC_MONTHLY_BUDGET_USD ?? '').trim() || '50')
+    racepicMonthlyBudgetUsd: Number((process.env.PROD_RACEPIC_MONTHLY_BUDGET_USD ?? '').trim() || '50'),
+    commerceFlags: readCommerceFlags('PROD')
   };
 };

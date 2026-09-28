@@ -2007,3 +2007,120 @@ export const racepicProcessingStep = pgTable('racepic_processing_step', {
   stepCheck: check('racepic_processing_step_step_check', sql`${table.step} in ('ingest','analyze','match','publish')`),
   uniqueStep: unique('racepic_processing_step_unique').on(table.imageId, table.step, table.pipelineVersion)
 }));
+
+// --- RacePic Commerce (AP02), siehe migrations/0110_commerce_core.sql und docs/memory-bank/racepic-marketplace-checkout-plan.md.
+// Die SQL-Migration ist massgeblich. Hier stehen nur die Tabellen, die der Code bereits nutzt; die uebrigen
+// Ledger-Tabellen (Order, Payment, Refund, Transfer, Invoice, Webhook-Inbox ...) folgen mit ihren Arbeitspaketen.
+
+export const commerceSeller = pgTable('commerce_seller', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  kind: text('kind').notNull(),
+  photographerId: uuid('photographer_id').references(() => racepicPhotographer.id, { onDelete: 'restrict' }),
+  displayName: text('display_name').notNull(),
+  status: text('status').notNull().default('ACTIVE'),
+  taxStatus: text('tax_status').notNull().default('UNCLEARED'),
+  payoutsBlocked: boolean('payouts_blocked').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  kindCheck: check('commerce_seller_kind_check', sql`${table.kind} in ('MSC','PHOTOGRAPHER')`),
+  statusCheck: check('commerce_seller_status_check', sql`${table.status} in ('ACTIVE','SUSPENDED')`),
+  taxStatusCheck: check('commerce_seller_tax_status_check', sql`${table.taxStatus} in ('UNCLEARED','PRIVATE','SMALL_BUSINESS','REGULAR')`)
+}));
+
+export const commercePaymentAccount = pgTable('commerce_payment_account', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  sellerId: uuid('seller_id').notNull().references(() => commerceSeller.id, { onDelete: 'restrict' }),
+  provider: text('provider').notNull().default('STRIPE'),
+  providerAccountId: text('provider_account_id').notNull(),
+  chargesEnabled: boolean('charges_enabled').notNull().default(false),
+  payoutsEnabled: boolean('payouts_enabled').notNull().default(false),
+  detailsSubmitted: boolean('details_submitted').notNull().default(false),
+  requirements: jsonb('requirements').notNull().default(sql`'{}'::jsonb`),
+  status: text('status').notNull().default('PENDING'),
+  syncedAt: timestamp('synced_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  sellerUnique: unique('commerce_payment_account_seller_unique').on(table.sellerId),
+  statusCheck: check('commerce_payment_account_status_check', sql`${table.status} in ('PENDING','ENABLED','RESTRICTED','DISABLED')`)
+}));
+
+export const commerceProduct = pgTable('commerce_product', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  productType: text('product_type').notNull(),
+  racepicImageId: uuid('racepic_image_id').references(() => racepicImage.id, { onDelete: 'restrict' }),
+  sellerId: uuid('seller_id').notNull().references(() => commerceSeller.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  typeCheck: check('commerce_product_type_check', sql`${table.productType} in ('RACEPIC_IMAGE_LICENSE')`)
+}));
+
+export const racepicOfferConversion = pgTable('racepic_offer_conversion', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  photographerId: uuid('photographer_id').notNull().references(() => racepicPhotographer.id, { onDelete: 'restrict' }),
+  idempotencyKey: text('idempotency_key').notNull(),
+  status: text('status').notNull().default('REQUESTED'),
+  targetPriceCents: integer('target_price_cents').notNull(),
+  targetLicenseId: uuid('target_license_id').notNull().references(() => racepicLicense.id),
+  rightsConfirmedAt: timestamp('rights_confirmed_at', { withTimezone: true }).notNull(),
+  rightsConfirmationVersion: text('rights_confirmation_version').notNull(),
+  reviewer: text('reviewer'),
+  reviewNote: text('review_note'),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  failureReason: text('failure_reason'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  idempotencyUnique: unique('racepic_offer_conversion_idempotency_unique').on(table.photographerId, table.idempotencyKey),
+  statusCheck: check(
+    'racepic_offer_conversion_status_check',
+    sql`${table.status} in ('REQUESTED','PREPARING_ASSETS','READY_FOR_REVIEW','APPROVED','REJECTED','FAILED')`
+  ),
+  priceCheck: check('racepic_offer_conversion_price_check', sql`${table.targetPriceCents} in (500,1000,1500,2000)`)
+}));
+
+export const commerceOfferVersion = pgTable('commerce_offer_version', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  productId: uuid('product_id').notNull().references(() => commerceProduct.id, { onDelete: 'restrict' }),
+  version: integer('version').notNull(),
+  mode: text('mode').notNull(),
+  priceCents: integer('price_cents').notNull().default(0),
+  currency: text('currency').notNull().default('EUR'),
+  licenseId: uuid('license_id').notNull().references(() => racepicLicense.id),
+  taxClass: text('tax_class'),
+  taxRateBp: integer('tax_rate_bp'),
+  sellerId: uuid('seller_id').notNull().references(() => commerceSeller.id, { onDelete: 'restrict' }),
+  status: text('status').notNull().default('DRAFT'),
+  conversionId: uuid('conversion_id').references(() => racepicOfferConversion.id, { onDelete: 'restrict' }),
+  artifactPrefix: text('artifact_prefix'),
+  validFrom: timestamp('valid_from', { withTimezone: true }),
+  validTo: timestamp('valid_to', { withTimezone: true }),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  productVersionUnique: unique('commerce_offer_version_product_version_unique').on(table.productId, table.version),
+  activeUnique: uniqueIndex('commerce_offer_version_active_unique').on(table.productId).where(sql`${table.status} = 'ACTIVE'`),
+  modeCheck: check('commerce_offer_version_mode_check', sql`${table.mode} in ('FREE','PAID')`),
+  statusCheck: check('commerce_offer_version_status_check', sql`${table.status} in ('DRAFT','PENDING_REVIEW','ACTIVE','REJECTED','RETIRED')`),
+  priceCheck: check(
+    'commerce_offer_version_price_check',
+    sql`(${table.mode} = 'FREE' and ${table.priceCents} = 0) or (${table.mode} = 'PAID' and ${table.priceCents} in (500,1000,1500,2000))`
+  )
+}));
+
+export const racepicOfferConversionItem = pgTable('racepic_offer_conversion_item', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  conversionId: uuid('conversion_id').notNull().references(() => racepicOfferConversion.id, { onDelete: 'restrict' }),
+  imageId: uuid('image_id').notNull().references(() => racepicImage.id, { onDelete: 'restrict' }),
+  sourceOfferVersionId: uuid('source_offer_version_id').references(() => commerceOfferVersion.id, { onDelete: 'restrict' }),
+  targetOfferVersionId: uuid('target_offer_version_id').references(() => commerceOfferVersion.id, { onDelete: 'restrict' }),
+  artifactStatus: text('artifact_status').notNull().default('PENDING'),
+  artifactError: text('artifact_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+}, (table) => ({
+  itemUnique: unique('racepic_offer_conversion_item_unique').on(table.conversionId, table.imageId),
+  artifactCheck: check('racepic_offer_conversion_item_artifact_check', sql`${table.artifactStatus} in ('PENDING','RUNNING','READY','FAILED')`)
+}));

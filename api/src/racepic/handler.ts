@@ -77,6 +77,7 @@ import { getCommerceFlags } from '../commerce/flags';
 import { handleConversionRoutes } from '../commerce/conversionRoutes';
 import { handlePasskeyRoutes } from './stepUpRoutes';
 import { handlePaymentAccountRoutes } from '../commerce/paymentAccountRoutes';
+import { handleQuoteRoutes } from '../commerce/quoteRoutes';
 
 /**
  * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet, Paket 3: Upload). Eigenstaendiger
@@ -455,6 +456,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     // Commerce: Stripe-Connect-Zahlungskonto (hinter dem Flag commerceSettlement, Aktionen mit Step-up strong).
     const paymentAccountResponse = await handlePaymentAccountRoutes(event, { requireActivePhotographer });
     if (paymentAccountResponse) return paymentAccountResponse;
+    // Commerce: serverautorisierte Quote und Steuer-/Provisionseinstellungen (Flag commerceCheckout bzw. Admin racepic.manage).
+    const quoteResponse = await handleQuoteRoutes(event);
+    if (quoteResponse) return quoteResponse;
 
     if (method === 'GET' && path === '/public/racepic/config') {
       return json(200, {

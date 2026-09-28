@@ -563,3 +563,15 @@ Stand 2026-09-28, hinter dem Flag `commerceSettlement` (aus), nichts deployt, ke
 - Test: `api/tests/commerce-connect-stepup.test.js` (Stripe und WebAuthn-Bibliothek ersetzt, Fake-DB).
 
 **Nicht geprüft / offen:** Es gab keinen echten Passkey-Lauf (die kryptografische Prüfung liegt vollständig in der Bibliothek, unsere Logik ist über Fakes getestet), keine Stripe-Testkonto-Verbindung, keine Migration gegen PostgreSQL. Der Webhook `account.updated` (AP16) fehlt noch; bis dahin gleicht `?refresh=true` das Konto ab. Für die Aktion `IDENTITY_CHANGE` gibt es bisher keinen Verbraucher. Die Passkey-Registrierung setzt einen frischen Login (`recent`) voraus; Fotograf:innen ohne Passkey müssen ihn zuerst anlegen.
+
+## Commerce: Steuer-/Provisions-Einstellungen und Quote (Etappe 5, Branch `feature/racepic/commerce-quote`)
+
+Stand 2026-09-28, hinter dem Flag `commerceCheckout` (aus), nichts deployt, kein PostgreSQL-Lauf:
+
+- **Migration `0114_commerce_settings.sql`:** `commerce_settings_version` (unveränderliche Versionen per Trigger; Startversion: Provision 20 %, Bezug NET, Verkaufssteuersatz `NULL`), dazu `settings_version_id` an Quote und Bestellposition sowie `seller_share_basis`/`tax_rate_bp` an der Bestellposition.
+- **`api/src/commerce/pricing.ts`:** reine Preisberechnung in Cent und Basispunkten (`priceSale` beim Verkauf, `sellerLine` für die Gutschrift zum Abrechnungszeitpunkt, `artistSocialLevyCents`). Ohne Steuersatz wird nichts berechnet; `UNCLEARED` rechnet keine Gutschrift. Ein Test über alle Preisstufen und Sätze belegt, dass bei Bezug auf Netto der MSC-Anteil unabhängig vom Steuerstatus der Fotograf:innen ist.
+- **`settings.ts`:** aktuelle Version lesen, neue Version mit `expectedVersion` (optimistische Sperre) anlegen. Admin: `GET/POST /admin/racepic/commerce-settings` (`racepic.manage`, Audit `commerce_settings_changed`).
+- **`quote.ts`/`quoteRoutes.ts`:** `POST /public/commerce/quotes` (Flag `commerceCheckout`, Rate-Limit 30/min je IP). Nur Bild-IDs vom Client; Preis, Steuer, Verkäufer und Lizenz aus der aktiven PAID-Angebotsversion, Kaufbarkeit aus Veröffentlichung, Event, aktivem Verkäufer und öffentlicher Eligibility; 15 Minuten gültig; nicht kaufbare Bilder erscheinen als `unavailable` ohne Grund. Die Aufteilung auf MSC und Fotograf wird gespeichert, aber nicht ausgeliefert. Ohne Steuersatz: 503 `QUOTE_TAX_NOT_CONFIGURED`, keine Quote.
+- Test: `api/tests/commerce-pricing-quote.test.js` (Beispielrechnungen 10 € bei 19 %/7 %, Cent-Reste, Einstellungsversionen, Quote-Regeln, HTTP-Schicht).
+
+**Offen:** Die Quote ist noch nicht mit einem Checkout verbunden (AP15); Bestellung, Zahlung und Rechnung fehlen. `sellerLine` wird erst von der Gutschrift (AP20) benutzt. Die Preisstufen (5/10/15/20 €) bleiben hart; die Einstellungen ändern nur Steuer und Provision.

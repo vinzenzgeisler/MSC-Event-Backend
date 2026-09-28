@@ -102,7 +102,9 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   racepic_passkey_revoked: [],
   racepic_step_up_granted: ['action'],
   racepic_payment_account_onboarding_started: [],
-  racepic_payment_account_dashboard_opened: []
+  racepic_payment_account_dashboard_opened: [],
+  // RacePic Commerce (AP12), siehe api/src/commerce/quoteRoutes.ts.
+  commerce_settings_changed: ['version', 'saleTaxRateBp', 'commissionBp', 'sellerShareBasis', 'sellerVatRateBp', 'artistSocialLevyBp']
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

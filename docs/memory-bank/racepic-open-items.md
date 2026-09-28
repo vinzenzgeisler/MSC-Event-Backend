@@ -133,3 +133,20 @@ Der Marketplace-Plan reserviert nur Felder (Steuerklasse, Steuerstatus, Brutto/N
 8. **Stripe Tax:** nutzen oder eigene Berechnung; nur Inlandsverkauf in EUR, OSS entfällt in V1.
 
 Technisch ist das Modell konfigurierbar vorbereitet: `commerce_offer_version.tax_class` und `tax_rate_bp` haben keinen Default.
+
+### Stand der Steuerdiskussion (2026-09-28)
+
+**Entschieden (technisch, jederzeit änderbar):**
+- **Abrechnung mit Fotograf:innen per Gutschrift durch den MSC** (§ 14 Abs. 2 UStG), automatisch aus dem Ledger, PDF zuerst, strukturiertes Format (ZUGFeRD/XRechnung) später als reine Darstellung. Eigene Rechnungen der Fotograf:innen sind kein Weg.
+- **Standardmodell „Variante B“:** Fotografenanteil = (1 − Provision) vom Nettobetrag; ist ein Fotograf regelbesteuert, kommt in der Gutschrift seine Umsatzsteuer hinzu (Vorsteuerabzug beim MSC), sonst nicht. Der MSC-Anteil ist dadurch unabhängig vom Steuerstatus der Fotograf:innen. Bezug auf Brutto („Variante A“) ist als Einstellung möglich, lässt den MSC-Anteil aber vom Steuerstatus abhängen.
+- **Alle offenen Punkte sind Einstellungen** (`commerce_settings_version`, unveränderliche Versionen, Admin-Endpunkt `/admin/racepic/commerce-settings`): Verkaufssteuersatz (Start: **nicht gesetzt**, dann berechnet die Quote nichts), Provision (Start 20 %), Bezugsgröße NET/GROSS, Steuersatz der Fotograf:innen (Standard: wie beim Verkauf), Künstlersozialabgabe (Start 0 %).
+
+**Beispiel (10,00 € brutto, 19 %, Variante B):** Netto 8,40 €, USt 1,60 €, Fotografenanteil netto 6,72 €, MSC 1,68 €. Regelbesteuerter Fotograf: Auszahlung 6,72 € + 1,28 € USt = 8,00 €; Kleinunternehmer: 6,72 €.
+
+**Recherche zu den Fragen an die Steuerberatung (Stand Web, keine Rechtsauskunft):**
+- **Künstlersozialabgabe:** 2026 sind es 4,9 % auf Honorare an selbständige Künstler (ohne gesondert ausgewiesene USt, ohne Zahlungen an juristische Personen). „Bilderdienste“ sind typische Verwerter (§ 24 Abs. 1 KSVG); Vereine sind abgabepflichtig, wenn sie typische Verwerter sind oder über der Bagatellgrenze (ab 2026: 1.000 € pro Jahr) zahlen, „schon ein Unkostenbeitrag genügt“. Wirkung bei 10 €: rund 0,33 € je Bild. Zu klären: gilt das für RacePic, und darf es umgelegt werden? Klärung über Steuerberatung und Künstlersozialkasse (Kontaktformular, Fragebogen zur Abgabepflicht).
+- **Private/Hobby-Fotograf:innen:** Wer regelmäßig verkauft, ist meist Unternehmer im Sinne des UStG. Kleinunternehmer bis 25.000 € Vorjahresumsatz und 100.000 € im laufenden Jahr (seit 2025). Das Gutschriftsverfahren geht auch bei Kleinunternehmern (Vereinbarung vor der Leistung, Pflichtangaben, Vermerk „Gutschrift“). Onboarding-Vorschlag: „Kleinunternehmer (§ 19)“ oder „mit Umsatzsteuer“ plus Steuernummer/USt-IdNr.; ohne Angabe keine Auszahlung; Richtigkeit verantworten die Fotograf:innen (Nutzungsbedingungen, juristisch prüfen).
+- **DAC7 / Plattformen-Steuertransparenzgesetz:** Plattformbetreiber melden Anbieter und Umsätze jährlich ans BZSt (bei Warenverkäufen erst ab 30 Verkäufen). Ob der MSC als Verkäufer darunterfällt, ist offen und gehört in die Anfrage; Anschrift und Steuer-ID der Fotograf:innen sollten im Onboarding ohnehin erfasst werden.
+- **E-Rechnung:** Empfangspflicht seit 2025; Ausstellungspflicht bei B2B im Inland ab 2027 (Vorjahresumsatz über 800.000 €) bzw. 2028 für alle; ausgenommen Kleinunternehmer und Rechnungen bis 250 € brutto; Archivierung 8 Jahre im Originalformat. Offen: gilt das für unsere Gutschriften, und in welchem Format (Sammelgutschrift über 250 € pro Monat)?
+
+**Fragen an die Steuerberatung (Ergänzungen):** (4) Ist der MSC mit RacePic Verwerter im Sinne des KSVG, fallen 4,9 % auf die Gutschriften an? (5) Einstufung privater Fotograf:innen ohne Gewerbe. (6) Ist der MSC meldepflichtiger Plattformbetreiber (PStTG)? (7) E-Rechnungspflicht und Format für die Gutschriften.

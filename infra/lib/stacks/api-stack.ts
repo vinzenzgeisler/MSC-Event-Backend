@@ -2203,6 +2203,15 @@ export class ApiStack extends Stack {
         authorizer: jwtAuthorizer
       });
 
+      // Commerce (AP12): oeffentliche Quote (Flag commerceCheckout) und Steuer-/Provisionseinstellungen (Admin).
+      this.api.addRoutes({ path: '/public/commerce/quotes', methods: [apigwv2.HttpMethod.POST], integration: racePicIntegration });
+      this.api.addRoutes({
+        path: '/admin/racepic/commerce-settings',
+        methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+
       // Commerce (AP05/AP06): Passkeys, Step-up strong und Stripe-Connect-Zahlungskonto (Flag commerceSettlement).
       this.api.addRoutes({
         path: '/photographer/passkeys',

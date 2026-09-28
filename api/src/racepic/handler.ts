@@ -74,6 +74,7 @@ import { racepicAssignment, racepicAssignmentEvent, racepicDetection, racepicEve
 import { and, eq, inArray } from 'drizzle-orm';
 import { buildPublicRateLimitKey, enforcePublicRateLimit } from '../http/publicRateLimit';
 import { getCommerceFlags } from '../commerce/flags';
+import { handleConversionRoutes } from '../commerce/conversionRoutes';
 
 /**
  * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet, Paket 3: Upload). Eigenstaendiger
@@ -442,6 +443,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     if (method === 'OPTIONS') {
       return json(200, { ok: true });
     }
+
+    // Commerce: FREE->PAID-Antrag und Adminpruefung (hinter dem Flag commerceFreeToPaidConversion).
+    const conversionResponse = await handleConversionRoutes(event, { requireActivePhotographer });
+    if (conversionResponse) return conversionResponse;
 
     if (method === 'GET' && path === '/public/racepic/config') {
       return json(200, {

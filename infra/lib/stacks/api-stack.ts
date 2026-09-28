@@ -263,6 +263,7 @@ export class ApiStack extends Stack {
         // der dynamische Import in privacyRetentionWorker.ts faengt das ab (siehe dortiger Kommentar).
         ...(props.racePicStack
           ? {
+              COMMERCE_PAID_OFFERS: String(props.config.commerceFlags.commercePaidOffers),
               RACEPIC_MEDIA_BUCKET: props.racePicStack.mediaBucket.bucketName,
               RACEPIC_CDN_DISTRIBUTION_ID: props.racePicStack.distribution.distributionId
             }
@@ -502,7 +503,8 @@ export class ApiStack extends Stack {
                 'x-amz-security-token',
                 'x-api-key',
                 'x-signing-device-token',
-                'x-msc-admin-email'
+                'x-msc-admin-email',
+                'idempotency-key'
               ],
               maxAge: cdk.Duration.seconds(600)
             }
@@ -2166,6 +2168,39 @@ export class ApiStack extends Stack {
         authorizer: photographerJwtAuthorizer
       });
 
+      // Commerce (AP08/AP09): FREE->PAID-Antrag und Adminpruefung, siehe api/src/commerce/conversionRoutes.ts.
+      // Die Handler antworten mit 404, solange das Flag commerceFreeToPaidConversion aus ist.
+      this.api.addRoutes({
+        path: '/photographer/offer-conversions',
+        methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/offer-conversions/{conversionId}',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/offer-conversions',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/offer-conversions/{conversionId}',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/admin/racepic/offer-conversions/{conversionId}/{action}',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: jwtAuthorizer
+      });
+
       // Paket 4 (Publish-Worker): Veroeffentlichen/Verbergen/Entfernen, siehe api/src/racepic/publish.ts.
       this.api.addRoutes({
         path: '/admin/racepic/images/{imageId}',
@@ -2201,6 +2236,7 @@ export class ApiStack extends Stack {
           DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
           DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
           DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+          COMMERCE_PAID_OFFERS: String(props.config.commerceFlags.commercePaidOffers),
           RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
           RACEPIC_CDN_DISTRIBUTION_ID: racePicStack.distribution.distributionId,
           RACEPIC_INGEST_QUEUE_URL: racePicStack.ingestQueue.queueUrl,
@@ -2281,6 +2317,7 @@ export class ApiStack extends Stack {
           DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
           DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
           DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+          COMMERCE_PAID_OFFERS: String(props.config.commerceFlags.commercePaidOffers),
           RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
           RACEPIC_ANALYZE_QUEUE_URL: racePicStack.analyzeQueue.queueUrl
         },
@@ -2332,6 +2369,7 @@ export class ApiStack extends Stack {
           DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
           DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
           DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+          COMMERCE_PAID_OFFERS: String(props.config.commerceFlags.commercePaidOffers),
           RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
           RACEPIC_MATCH_QUEUE_URL: racePicStack.matchQueue.queueUrl,
           // Cohere Embed v4 ist inzwischen auch in eu-central-1 verfuegbar (Bug gefunden

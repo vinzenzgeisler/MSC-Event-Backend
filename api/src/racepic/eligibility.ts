@@ -1,10 +1,24 @@
 import { getPool } from '../db/client';
+import { getCommerceFlags } from '../commerce/flags';
+
+/**
+ * Oeffentlich sichtbar sind FREE-Bilder. Bezahlbilder erscheinen erst, wenn `commercePaidOffers` an ist UND das
+ * Bild eine aktive PAID-Angebotsversion hat (nach Adminfreigabe eines FREE->PAID-Antrags); alte PAID-Entwuerfe
+ * ohne Freigabe bleiben so weiterhin privat.
+ */
+const offerCondition = (): string =>
+  getCommerceFlags().commercePaidOffers
+    ? `(i.offer_mode = 'FREE' or (i.offer_mode = 'PAID' and exists (
+         select 1 from commerce_offer_version o
+           join commerce_product p on p.id = o.product_id
+          where p.racepic_image_id = i.id and o.status = 'ACTIVE' and o.mode = 'PAID')))`
+    : `i.offer_mode = 'FREE'`;
 
 const eligibilitySql = (requirePublished: boolean, restrictEvent: boolean) => `
   select i.id
     from racepic_image i
     join racepic_event re on re.event_id = i.event_id
-   where i.offer_mode = 'FREE'
+   where ${offerCondition()}
      ${requirePublished ? "and i.visibility = 'PUBLISHED' and re.enabled = true and re.published = true" : ''}
      ${restrictEvent ? 'and i.event_id = $1' : 'and i.id = $1'}`;
 

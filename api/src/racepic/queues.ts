@@ -23,3 +23,10 @@ export const sendAnalyzeMessage = (imageId: string) => sendMessage('RACEPIC_ANAL
 
 /** Stoesst die Matching-Stufe (Paket 6: KI-Pipeline) an. */
 export const sendMatchMessage = (imageId: string) => sendMessage('RACEPIC_MATCH_QUEUE_URL', { imageId });
+
+/**
+ * Stoesst die Artefakt-Erzeugung eines FREE->PAID-Conversion-Items an (Commerce AP08). Nutzt bewusst die
+ * Ingest-Queue und den vorhandenen Worker (gleiche Bildverarbeitung, gleiche Rechte, gleiche DLQ); die
+ * Nachricht unterscheidet sich durch `conversionItemId` statt `imageId`.
+ */
+export const sendConversionMessage = (conversionItemId: string) => sendMessage('RACEPIC_INGEST_QUEUE_URL', { conversionItemId });

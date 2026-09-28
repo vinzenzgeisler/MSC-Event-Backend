@@ -7,6 +7,7 @@ import { computeSha256, decodeImage, detectSupportedImageFormat, extractExif, re
 import { deleteObject, getObject, putObject } from './s3';
 import { sendAnalyzeMessage } from './queues';
 import { claimProcessingStep, failProcessingStep, finishProcessingStep } from './processingSteps';
+import { processConversionItem } from '../commerce/conversion';
 
 /**
  * RacePicIngestWorker (Paket 4), konsumiert die Ingest-Queue aus infra/lib/stacks/racepic-stack.ts.
@@ -160,7 +161,12 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
   for (const record of event.Records) {
     let imageId: string | undefined;
     try {
-      const body = JSON.parse(record.body) as { imageId?: string };
+      const body = JSON.parse(record.body) as { imageId?: string; conversionItemId?: string };
+      if (body.conversionItemId) {
+        // Commerce: Lizenzartefakte fuer einen FREE->PAID-Antrag (api/src/commerce/conversion.ts).
+        await processConversionItem(body.conversionItemId);
+        continue;
+      }
       if (!body.imageId) {
         throw new Error('RACEPIC_INGEST_MISSING_IMAGE_ID');
       }

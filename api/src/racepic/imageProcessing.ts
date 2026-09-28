@@ -80,6 +80,20 @@ export const VARIANT_SPECS: VariantSpec[] = [
   { kind: 'large', maxDimension: 3840, format: 'jpeg', withCopyright: true }
 ];
 
+/**
+ * EXIF-Textfelder sind ASCII: sharp/libvips schreibt `©` als `(C)` und verwirft/verstuemmelt andere Nicht-ASCII-Zeichen.
+ * Wir normalisieren daher selbst (Diakritika entfernen, ß -> ss, © -> (C)), damit Schreiben und spaeteres Pruefen
+ * denselben Text vergleichen.
+ */
+export const toExifAscii = (value: string): string =>
+  value
+    .replace(/©/g, '(C)')
+    .replace(/ß/g, 'ss')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^\x20-\x7e]/g, '?')
+    .trim();
+
 export type RenderedVariant = { kind: VariantKind; contentType: string; buffer: Buffer; width: number; height: number };
 
 /**
@@ -99,7 +113,10 @@ export const renderVariants = async (buffer: Buffer, copyrightLine: string): Pro
       withoutEnlargement: true
     });
     if (spec.withCopyright && copyrightLine) {
-      pipeline = pipeline.withMetadata({ exif: { IFD0: { Copyright: copyrightLine, Artist: copyrightLine } } });
+      // withExif ersetzt alle EXIF-Daten (GPS, Kameramodell, Seriennummern fallen weg). withMetadata() wuerde
+      // dagegen alles behalten und nur Copyright/Artist ergaenzen - Bug gefunden 2026-09-28, siehe racepic-progress.md.
+      const exifLine = toExifAscii(copyrightLine);
+      pipeline = pipeline.withExif({ IFD0: { Copyright: exifLine, Artist: exifLine } });
     }
     pipeline = spec.format === 'webp' ? pipeline.webp({ quality: 82 }) : pipeline.jpeg({ quality: 87, mozjpeg: true });
     const { data, info } = await pipeline.toBuffer({ resolveWithObject: true });
@@ -123,4 +140,55 @@ export const renderWatermarkedPreview = async (previewBuffer: Buffer): Promise<B
   const rows = Array.from({ length: 5 }, (_, row) => `<text x="-25%" y="${Math.round((row + 0.6) * height / 5)}">RacePic · VORSCHAU · RacePic · VORSCHAU</text>`).join('');
   const overlay = Buffer.from(`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><g transform="rotate(-18 ${width / 2} ${height / 2})" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="bold" fill="white" fill-opacity="0.56" stroke="black" stroke-opacity="0.42" stroke-width="2" paint-order="stroke">${rows}</g></svg>`);
   return sharp(previewBuffer, { limitInputPixels: MAX_INPUT_PIXELS }).composite([{ input: overlay }]).webp({ quality: 82 }).toBuffer();
+};
+
+/**
+ * `licensed_full` (Commerce AP04): das an Kaeufer ausgelieferte Vollaufloesungs-JPEG. Alle Upload-Metadaten
+ * (GPS, Seriennummern, Kamera-Notizen ...) werden entfernt, nur Copyright/Artist werden eingebettet. Die
+ * EXIF-Ausrichtung wird vor dem Strippen angewendet (`rotate()`), sonst waeren Hochformatbilder gedreht.
+ * Das unveraenderte Upload-Original wird nie verkauft.
+ */
+export const renderLicensedFull = async (
+  originalBuffer: Buffer,
+  copyrightLine: string
+): Promise<{ buffer: Buffer; width: number; height: number }> => {
+  const exifLine = toExifAscii(copyrightLine);
+  const { data, info } = await sharp(originalBuffer, { limitInputPixels: MAX_INPUT_PIXELS, failOn: 'error' })
+    .rotate()
+    .withExif({ IFD0: { Copyright: exifLine, Artist: exifLine } })
+    .jpeg({ quality: 92, mozjpeg: true })
+    .toBuffer({ resolveWithObject: true });
+  return { buffer: data, width: info.width, height: info.height };
+};
+
+export class LicensedFullValidationError extends Error {
+  constructor(public readonly code: 'NOT_JPEG' | 'DIMENSIONS_REDUCED' | 'GPS_PRESENT' | 'COPYRIGHT_MISSING') {
+    super(`RACEPIC_LICENSED_FULL_${code}`);
+    this.name = 'LicensedFullValidationError';
+  }
+}
+
+/** Qualitaetspruefung des Lizenzartefakts: JPEG, volle Aufloesung, kein GPS, Copyright eingebettet. */
+export const validateLicensedFull = async (
+  licensed: Buffer,
+  original: { width: number; height: number },
+  copyrightLine: string
+): Promise<void> => {
+  if (detectSupportedImageFormat(licensed) !== 'jpeg') throw new LicensedFullValidationError('NOT_JPEG');
+  const metadata = await sharp(licensed, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+  // Nach rotate() koennen Breite und Hoehe vertauscht sein; die laengere/kuerzere Kante muss erhalten bleiben.
+  if (
+    Math.max(width, height) !== Math.max(original.width, original.height) ||
+    Math.min(width, height) !== Math.min(original.width, original.height)
+  ) {
+    throw new LicensedFullValidationError('DIMENSIONS_REDUCED');
+  }
+  const gps = await exifr.gps(licensed).catch(() => undefined);
+  if (gps && (gps.latitude !== undefined || gps.longitude !== undefined)) throw new LicensedFullValidationError('GPS_PRESENT');
+  const tags = await exifr.parse(licensed, { pick: ['Copyright'] }).catch(() => null);
+  if (!tags || typeof tags.Copyright !== 'string' || !tags.Copyright.includes(toExifAscii(copyrightLine))) {
+    throw new LicensedFullValidationError('COPYRIGHT_MISSING');
+  }
 };

@@ -17,6 +17,9 @@ import { RacePicError } from './repository';
 import { copyObject, deleteObject, deleteObjectsByPrefix, listObjectKeys, putObject } from './s3';
 import { slugify } from './slug';
 import { isImagePubliclyEligible, listPubliclyEligibleImageIds } from './eligibility';
+import { getCommerceFlags } from '../commerce/flags';
+import { conversionArtifactKeys, paidPublicKey, publicVariantUrl } from '../commerce/objectKeys';
+import { loadActiveOffersByImage, type ActiveOfferInfo } from '../commerce/publicOffers';
 
 /**
  * Publish-Worker (Paket 4), siehe docs/memory-bank/racepic-architecture.md Abschnitt B/G/H.
@@ -40,7 +43,7 @@ import { isImagePubliclyEligible, listPubliclyEligibleImageIds } from './eligibi
 const publicVariantKey = (imageId: string, kind: 'thumb' | 'preview'): string => `public/${imageId}/${kind}.webp`;
 const derivedVariantKey = (imageId: string, kind: 'thumb' | 'preview'): string => `derived/${imageId}/${kind}.webp`;
 
-const invalidateCloudFront = async (paths: string[]): Promise<void> => {
+export const invalidateCloudFront = async (paths: string[]): Promise<void> => {
   const distributionId = process.env.RACEPIC_CDN_DISTRIBUTION_ID;
   if (!distributionId || paths.length === 0) {
     return;
@@ -78,7 +81,7 @@ export const getImagePhotographerId = async (imageId: string): Promise<string | 
 
 export const publishImage = async (imageId: string): Promise<void> => {
   const image = await loadImageOrThrow(imageId);
-  if (image.offerMode !== 'FREE') throw new RacePicError('RACEPIC_PAID_OFFER_NOT_PUBLIC');
+  if (image.offerMode !== 'FREE' && !(await hasPublicPaidOffer(imageId))) throw new RacePicError('RACEPIC_PAID_OFFER_NOT_PUBLIC');
   if (!['DERIVED', 'ANALYZED', 'MATCHED'].includes(image.processingStatus)) {
     throw new RacePicError('RACEPIC_IMAGE_NOT_READY_TO_PUBLISH');
   }
@@ -89,15 +92,41 @@ export const publishImage = async (imageId: string): Promise<void> => {
   const [event] = await db.select({ enabled: racepicEvent.enabled, published: racepicEvent.published })
     .from(racepicEvent).where(eq(racepicEvent.eventId, image.eventId)).limit(1);
   if (event?.enabled && event.published) {
-    await Promise.all((['thumb', 'preview'] as const).map((kind) => copyObject(derivedVariantKey(imageId, kind), publicVariantKey(imageId, kind))));
+    await publishPublicObjectsForImage(imageId);
   }
   await db.update(racepicImage).set({ visibility: 'PUBLISHED', updatedAt: new Date() }).where(eq(racepicImage.id, imageId));
   await invalidateCloudFront([`/public/${imageId}/*`]);
 };
 
 const unpublishObjects = async (imageId: string): Promise<void> => {
-  await Promise.all((['thumb', 'preview'] as const).map((kind) => deleteObject(publicVariantKey(imageId, kind))));
+  // Praefix statt fester Keys: umfasst auch offer-versionierte PAID-Vorschauen (public/{id}/o{version}/...).
+  await deleteObjectsByPrefix(`public/${imageId}/`);
   await invalidateCloudFront([`/public/${imageId}/*`]);
+};
+
+/** Wahr, wenn das Bild eine aktive PAID-Version hat und PAID-Angebote oeffentlich gelistet werden duerfen. */
+const hasPublicPaidOffer = async (imageId: string): Promise<boolean> => {
+  if (!getCommerceFlags().commercePaidOffers) return false;
+  return (await loadActiveOffersByImage([imageId])).get(imageId)?.mode === 'PAID';
+};
+
+/**
+ * Kopiert die oeffentlichen Vorschauobjekte eines Bildes: FREE wie bisher unversioniert, PAID ausschliesslich
+ * als wasserzeichenbehaftete, offer-versionierte Kopie. Ohne aktive PAID-Version (oder bei ausgeschaltetem
+ * Flag `commercePaidOffers`) wird nie etwas veroeffentlicht.
+ */
+export const publishPublicObjectsForImage = async (imageId: string): Promise<void> => {
+  const image = await loadImageOrThrow(imageId);
+  if (image.offerMode === 'PAID') {
+    if (!getCommerceFlags().commercePaidOffers) return;
+    const offer = (await loadActiveOffersByImage([imageId])).get(imageId);
+    if (!offer || offer.mode !== 'PAID') return;
+    const keys = conversionArtifactKeys(imageId, offer.offerVersionId);
+    await copyObject(keys.watermarkedThumb, paidPublicKey(imageId, offer.version, 'thumb'));
+    await copyObject(keys.watermarkedPreview, paidPublicKey(imageId, offer.version, 'preview'));
+    return;
+  }
+  await Promise.all((['thumb', 'preview'] as const).map((kind) => copyObject(derivedVariantKey(imageId, kind), publicVariantKey(imageId, kind))));
 };
 
 export const hideImage = async (imageId: string): Promise<void> => {
@@ -171,7 +200,12 @@ export type ManifestImage = {
   createdAt: string;
   photographer: { displayName: string; website: string | null; slug: string | null };
   license: { code: string; title: unknown; attributionRequired: boolean; attributionTemplate: string | null };
+  /** Angebot laut aktiver Angebotsversion; Preis nur zur Anzeige, autoritativ bleibt die serverseitige Quote. */
+  offer: { mode: 'FREE' | 'PAID'; priceCents: number | null; currency: 'EUR' };
 };
+
+const manifestOffer = (offer: ActiveOfferInfo | undefined): ManifestImage['offer'] =>
+  offer?.mode === 'PAID' ? { mode: 'PAID', priceCents: offer.priceCents, currency: 'EUR' } : { mode: 'FREE', priceCents: null, currency: 'EUR' };
 
 type ManifestData = { participants: ManifestParticipant[]; imagesByParticipantKey: Map<string, ManifestImage[]> };
 
@@ -233,13 +267,13 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
         eq(entry.consentMediaAccepted, true),
         inArray(racepicImage.id, Array.from(eligibleImageIds)),
         eq(racepicImage.visibility, 'PUBLISHED'),
-        eq(racepicImage.offerMode, 'FREE'),
         inArray(racepicAssignment.status, ['AUTO_MATCHED', 'MANUALLY_CONFIRMED', 'MANUALLY_CORRECTED'])
       )
     );
 
   const byEntry = new Map<string, ManifestParticipant & { _imageIds: Set<string> }>();
   const imagesByParticipantKey = new Map<string, ManifestImage[]>();
+  const activeOffers = await loadActiveOffersByImage(Array.from(new Set(rows.map((row) => row.imageId))));
 
   for (const row of rows) {
     // Datenschutz: Teilnehmer mit Widerspruch/Verarbeitungseinschraenkung erscheinen nicht in der
@@ -264,7 +298,7 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
         make: row.make,
         model: row.model,
         imageCount: 1,
-        coverThumbUrl: `/public/${row.imageId}/thumb.webp`,
+        coverThumbUrl: publicVariantUrl(row.imageId, 'thumb', activeOffers.get(row.imageId)),
         _imageIds: new Set([row.imageId])
       });
     }
@@ -273,8 +307,9 @@ const buildManifestData = async (eventId: string): Promise<ManifestData> => {
     if (!images.some((image) => image.imageId === row.imageId)) {
       images.push({
         imageId: row.imageId,
-        thumbUrl: `/public/${row.imageId}/thumb.webp`,
-        previewUrl: `/public/${row.imageId}/preview.webp`,
+        thumbUrl: publicVariantUrl(row.imageId, 'thumb', activeOffers.get(row.imageId)),
+        previewUrl: publicVariantUrl(row.imageId, 'preview', activeOffers.get(row.imageId)),
+        offer: manifestOffer(activeOffers.get(row.imageId)),
         width: row.imageWidth,
         height: row.imageHeight,
         title: row.imageTitle,
@@ -349,15 +384,16 @@ const listUnassignedPublishedImages = async (eventId: string): Promise<ManifestI
     .where(and(
       eq(racepicImage.eventId, eventId),
       eq(racepicImage.visibility, 'PUBLISHED'),
-      eq(racepicImage.offerMode, 'FREE'),
       inArray(racepicImage.id, Array.from(eligibleImageIds)),
       assignedImageIds.length > 0 ? notInArray(racepicImage.id, assignedImageIds) : undefined
     ));
 
+  const activeOffers = await loadActiveOffersByImage(rows.map((row) => row.imageId));
   return rows.map((row) => ({
     imageId: row.imageId,
-    thumbUrl: `/public/${row.imageId}/thumb.webp`,
-    previewUrl: `/public/${row.imageId}/preview.webp`,
+    thumbUrl: publicVariantUrl(row.imageId, 'thumb', activeOffers.get(row.imageId)),
+    previewUrl: publicVariantUrl(row.imageId, 'preview', activeOffers.get(row.imageId)),
+    offer: manifestOffer(activeOffers.get(row.imageId)),
     width: row.imageWidth,
     height: row.imageHeight,
     title: row.imageTitle,
@@ -521,10 +557,11 @@ const regenerateGlobalDiscoveryManifests = async (publishedEvents: (typeof racep
 export const setEventPublicObjectAvailability = async (eventId: string, available: boolean): Promise<void> => {
   const db = await getDb();
   const images = await db.select({ id: racepicImage.id }).from(racepicImage)
-    .where(and(eq(racepicImage.eventId, eventId), eq(racepicImage.visibility, 'PUBLISHED'), eq(racepicImage.offerMode, 'FREE')));
+    .where(and(eq(racepicImage.eventId, eventId), eq(racepicImage.visibility, 'PUBLISHED'), inArray(racepicImage.offerMode, ['FREE', 'PAID'])));
   for (const image of images) {
     if (available) {
-      await Promise.all((['thumb', 'preview'] as const).map((kind) => copyObject(derivedVariantKey(image.id, kind), publicVariantKey(image.id, kind))));
+      // PAID-Bilder ohne aktive Angebotsversion (oder bei ausgeschaltetem Flag) veroeffentlicht die Funktion nicht.
+      await publishPublicObjectsForImage(image.id);
     } else {
       await unpublishObjects(image.id);
     }

@@ -2583,7 +2583,10 @@ export class ApiStack extends Stack {
         new iam.PolicyStatement({ actions: ['rekognition:DetectLabels'], resources: ['*'] })
       );
       racePicMatchWorker.addEventSource(
-        new lambdaEventSources.SqsEventSource(racePicStack.matchQueue, { batchSize: 1, reportBatchItemFailures: true, maxConcurrency: 1 })
+        // Bug gefunden 2026-09-28 (erster echter cdk synth des Stacks): CDK verlangt maxConcurrency zwischen 2 und
+        // 1000; 1 war nie gueltig, ist aber vorher nie synthetisiert worden (weder Dev noch Prod deployten den
+        // RacePic-Stack bislang). 2 ist der niedrigste zulaessige Wert und schont wie beabsichtigt die kleine DB.
+        new lambdaEventSources.SqsEventSource(racePicStack.matchQueue, { batchSize: 1, reportBatchItemFailures: true, maxConcurrency: 2 })
       );
 
       new CfnOutput(this, 'RacePicAnalyzeWorkerName', { value: racePicAnalyzeWorker.functionName });

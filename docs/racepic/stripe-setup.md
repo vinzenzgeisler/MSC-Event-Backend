@@ -9,9 +9,22 @@
   (Kunde → Sie → Empfänger) im Connect-Einrichtungsassistenten des Dashboards — das entspricht „Separate Zahlungen
   und Überweisungen" (Schritt 2).
 - **Kontoerstellung auf Accounts v2 umgestellt** (siehe Abschnitt „Hinweis zum Kontotyp" unten) und gegen die
-  Sandbox verifiziert.
-- **Noch offen:** Schritt 3 (Plattformprofil und Haftungsbestätigung im Dashboard), Dev-Deploy, Schritte 7–9
-  (Webhook-Endpunkte, AWS-Secret, GitHub-Variablen).
+  Sandbox verifiziert (Testkonto `acct_1UKk12HyPyc81wWW`, danach nicht weiter benötigt).
+- **AWS-Ziel geklärt:** Das AWS-Profil `verein` entspricht dem Konto `590575330221`, das die Dev-Pipeline laut
+  GitHub-Umgebung „dev" tatsächlich verwendet (nicht das zuerst versehentlich genutzte Profil `default`/`Vinzenz`,
+  Konto `195275675655`). Geprüft: Weder der Stack `dreiecksrennen-dev-api-stack` noch das Secret
+  `dreiecksrennen-dev/racepic/stripe` existieren dort — **die RacePic-Infrastruktur wurde bislang noch nie nach Dev
+  deployt** (das Flag `DEV_ENABLE_RACEPIC` war in der GitHub-Umgebung „dev" bis heute nie gesetzt).
+- **GitHub-Umgebungsvariablen gesetzt** (Repo `vinzenzgeisler/MSC-Event-Backend`, Umgebung „dev", per `gh variable
+  set`): `DEV_ENABLE_RACEPIC`, `DEV_COMMERCE_FREE_TO_PAID_CONVERSION`, `DEV_COMMERCE_SETTLEMENT`,
+  `DEV_COMMERCE_PAID_OFFERS`, `DEV_COMMERCE_CHECKOUT` — alle `true`. Ohne einen Deploy bewirken sie noch nichts.
+- **Noch offen, bevor ein Kauf getestet werden kann:**
+  1. Schritt 3 im Stripe-Dashboard (Plattformprofil/Haftung) — im Testmodus bislang keine Blockade festgestellt,
+     aber vor dem Piloten trotzdem zu erledigen.
+  2. **Der erste Dev-Deploy** der RacePic-Infrastruktur (Branch `feature/racepic/commerce-stripe-setup`, Tag
+     `deploy-dev/<name>`) — das ist ein echter, erstmaliger AWS-Deploy (neuer Cognito-Pool, S3, CloudFront, SQS,
+     mehrere Lambdas) und braucht Ihr ausdrückliches Okay, siehe unten.
+  3. Danach Schritte 7–8 (Webhook-Endpunkte, AWS-Secret befüllen) — das übernehme ich per CLI, sobald deployt ist.
 
 
 Ziel: Ein Stripe-Testkonto des Vereins, das Zahlungen annimmt und Fotograf:innen als Verkäufer einbindet

@@ -210,7 +210,13 @@ const has = (db, needle) => db.log.some((entry) => entry.text.includes(needle));
   const link = await pa.createOnboardingLink(onboardDb, stripe, 'p1', urls);
   assert.equal(link.url, 'https://connect.stripe.test/setup');
   assert.equal(stripe.calls.create.length, 1);
-  assert.equal(stripe.calls.create[0].params.type, 'express');
+  assert.equal(stripe.calls.create[0].params.type, undefined, 'kein veralteter Kontotyp, sondern Controller-Eigenschaften');
+  assert.deepEqual(stripe.calls.create[0].params.controller, {
+    stripe_dashboard: { type: 'express' },
+    fees: { payer: 'application' },
+    losses: { payments: 'application' },
+    requirement_collection: 'stripe'
+  });
   assert.equal(stripe.calls.create[0].params.country, 'DE');
   assert.deepEqual(stripe.calls.create[0].params.capabilities, { transfers: { requested: true } });
   assert.equal(stripe.calls.create[0].options.idempotencyKey, 'racepic-connect-account-p1');

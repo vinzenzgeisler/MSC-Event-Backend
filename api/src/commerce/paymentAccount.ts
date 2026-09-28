@@ -214,7 +214,16 @@ export const createOnboardingLink = async (
       // Stabiler Idempotency-Key: parallele Aufrufe erzeugen bei Stripe hoechstens ein Konto.
       const created = await stripe.accounts.create(
         {
-          type: 'express',
+          // Controller-Eigenschaften statt des Kontotyps `express` (Stripe empfiehlt sie fuer neue Plattformen):
+          // gleiches Verhalten wie Express - Express-Dashboard, Stripe erfasst die Anforderungen, die Plattform
+          // (der MSC) traegt Gebuehren und haftet fuer negative Salden. Letzteres muss der MSC einmalig im
+          // Stripe-Dashboard (Plattformprofil) bestaetigen, siehe docs/racepic/stripe-setup.md.
+          controller: {
+            stripe_dashboard: { type: 'express' },
+            fees: { payer: 'application' },
+            losses: { payments: 'application' },
+            requirement_collection: 'stripe'
+          },
           country: 'DE',
           email: photographer.email,
           capabilities: { transfers: { requested: true } },

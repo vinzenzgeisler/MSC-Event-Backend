@@ -3,16 +3,27 @@ import { logOperationalEvent } from '../observability/logger';
 import type { Queryable } from './offers';
 
 /**
- * Stripe-Connect-Zahlungskonto der Fotograf:innen (Commerce AP06): Express-Konto, Hosted Onboarding,
- * Dashboard-Link und Capability-Synchronisation. Getrennte Charges und Transfers: das Konto braucht nur die
- * Faehigkeit `transfers`. Es werden weder Bank- noch KYC-Rohdaten gespeichert (nur Statusflags und die Namen
- * offener Anforderungen), und Onboarding-/Dashboard-Links werden weder gespeichert noch versendet.
+ * Stripe-Connect-Zahlungskonto der Fotograf:innen (Commerce AP06): Konto mit Express-Dashboard, Hosted
+ * Onboarding, Dashboard-Link und Capability-Synchronisation. Getrennte Charges und Transfers: das Konto braucht
+ * nur die Empfaenger-Faehigkeit `stripe_transfers`. Es werden weder Bank- noch KYC-Rohdaten gespeichert (nur
+ * Statusflags und die Namen offener Anforderungen), und Onboarding-/Dashboard-Links werden weder gespeichert
+ * noch versendet.
+ *
+ * Kontoerstellung laeuft ueber die **Accounts v2 API** (`stripe.v2.core.accounts.create`): Stripe stuft die
+ * klassischen Kontotypen (Standard/Express/Custom, `type: 'express'`) fuer neue Plattformen als veraltet ein.
+ * v2 bildet dasselbe Verhalten ab: `dashboard: 'express'`, Konfiguration `recipient` mit der Faehigkeit
+ * `stripe_balance.stripe_transfers`, `defaults.responsibilities` legt fest, dass der MSC die Gebuehren traegt
+ * und fuer negative Salden haftet (`fees_collector`/`losses_collector: 'application'`); Stripe bleibt fuer die
+ * Anforderungserfassung zustaendig (`requirements_collector` wird daraus automatisch `stripe`). Alles Weitere
+ * (Onboarding-Link, Login-Link, Kontostand-Abgleich) laeuft unveraendert ueber die v1-API: Stripe erlaubt, eine
+ * v2-Konto-ID an v1-Endpunkte zu uebergeben; die Antwort ist dann im gewohnten v1-Format strukturiert (siehe
+ * docs.stripe.com/connect/accounts-v2, Abschnitt "Bestehende Connect-Plattformen ... Accounts v1").
  *
  * Eine Auszahlung ist damit noch nicht freigegeben: `commerce_seller.payouts_blocked` bleibt an, bis der
  * Steuerstatus geklaert ist (Marketplace-Plan Abschnitt 6).
  */
 
-export type StripeConnectApi = Pick<Stripe, 'accounts' | 'accountLinks'>;
+export type StripeConnectApi = Pick<Stripe, 'accounts' | 'accountLinks'> & { v2: Pick<Stripe['v2'], 'core'> };
 
 export type PaymentAccountErrorCode =
   | 'PHOTOGRAPHER_NOT_ELIGIBLE'
@@ -212,21 +223,13 @@ export const createOnboardingLink = async (
   try {
     if (!account) {
       // Stabiler Idempotency-Key: parallele Aufrufe erzeugen bei Stripe hoechstens ein Konto.
-      const created = await stripe.accounts.create(
+      const created = await stripe.v2.core.accounts.create(
         {
-          // Controller-Eigenschaften statt des Kontotyps `express` (Stripe empfiehlt sie fuer neue Plattformen):
-          // gleiches Verhalten wie Express - Express-Dashboard, Stripe erfasst die Anforderungen, die Plattform
-          // (der MSC) traegt Gebuehren und haftet fuer negative Salden. Letzteres muss der MSC einmalig im
-          // Stripe-Dashboard (Plattformprofil) bestaetigen, siehe docs/racepic/stripe-setup.md.
-          controller: {
-            stripe_dashboard: { type: 'express' },
-            fees: { payer: 'application' },
-            losses: { payments: 'application' },
-            requirement_collection: 'stripe'
-          },
-          country: 'DE',
-          email: photographer.email,
-          capabilities: { transfers: { requested: true } },
+          dashboard: 'express',
+          contact_email: photographer.email,
+          identity: { country: 'de' },
+          configuration: { recipient: { capabilities: { stripe_balance: { stripe_transfers: { requested: true } } } } },
+          defaults: { currency: 'eur', responsibilities: { fees_collector: 'application', losses_collector: 'application' } },
           metadata: { racepic_photographer_id: photographerId, commerce_seller_id: seller.id }
         },
         { idempotencyKey: `racepic-connect-account-${photographerId}` }
@@ -237,7 +240,10 @@ export const createOnboardingLink = async (
         [seller.id, created.id]
       );
       account = await loadAccount(tx, seller.id);
-      await applyState(tx, photographerId, seller.id, deriveAccountState(created as unknown as AccountSnapshot));
+      // Die v2-Erstellungsantwort ist nicht v1-foermig (kein charges_enabled/capabilities.transfers); den
+      // Anfangsstatus deshalb ueber den v1-kompatiblen Retrieve-Endpunkt ableiten, denselben Weg wie der Abgleich.
+      const fresh = await stripe.accounts.retrieve(created.id);
+      await applyState(tx, photographerId, seller.id, deriveAccountState(fresh as unknown as AccountSnapshot));
     }
     const link = await stripe.accountLinks.create({
       account: (account as AccountRow).provider_account_id,

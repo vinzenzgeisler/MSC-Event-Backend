@@ -1,5 +1,19 @@
 # RacePic: Stripe einrichten (Testumgebung)
 
+## Stand (2026-09-28)
+
+- **Stripe-Sandbox verbunden:** „MSC Oberlausitzer Dreiländereck e.V. Sandbox" (`acct_1UKiLPHyPy56TkTk`), Land
+  Deutschland. Angemeldet über `stripe login` (Geräte-Autorisierung); der Schlüssel liegt nur lokal in der
+  Stripe-CLI-Konfiguration, nicht im Repository.
+- **Connect-Marktplatzmodell gewählt:** „Sie ziehen Zahlungen ein und leiten diese an die Empfänger/innen weiter"
+  (Kunde → Sie → Empfänger) im Connect-Einrichtungsassistenten des Dashboards — das entspricht „Separate Zahlungen
+  und Überweisungen" (Schritt 2).
+- **Kontoerstellung auf Accounts v2 umgestellt** (siehe Abschnitt „Hinweis zum Kontotyp" unten) und gegen die
+  Sandbox verifiziert.
+- **Noch offen:** Schritt 3 (Plattformprofil und Haftungsbestätigung im Dashboard), Dev-Deploy, Schritte 7–9
+  (Webhook-Endpunkte, AWS-Secret, GitHub-Variablen).
+
+
 Ziel: Ein Stripe-Testkonto des Vereins, das Zahlungen annimmt und Fotograf:innen als Verkäufer einbindet
 (Stripe Connect). Alles hier passiert zuerst nur im **Testmodus**. Es fließt kein echtes Geld, und für den Testmodus
 ist keine Kontoaktivierung nötig. Live-Betrieb kommt erst nach der rechtlichen und steuerlichen Freigabe (AP00).
@@ -129,8 +143,24 @@ Nur die Rückmeldung „Testumgebung steht“ und die `ApiUrl` der Dev-Umgebung.
   Stripe-Preisseite und in den Connect-Einstellungen; sie hängen vom Vertrag des Vereins ab.
 - Deshalb hält RacePic Erlöse 14 Tage zurück, bevor sie an Fotograf:innen überwiesen werden.
 
-## Hinweis zum Kontotyp
-Stripe stuft die klassischen Kontotypen (Standard, Express, Custom) für neue Plattformen als veraltet ein und empfiehlt
-Controller-Eigenschaften bzw. die neue Accounts-v2-API. RacePic legt Fotografenkonten deshalb mit
-Controller-Eigenschaften an (Express-Dashboard, Stripe erfasst die Angaben, Plattform trägt Gebühren und Verluste).
-Eine Umstellung auf Accounts v2 ist später möglich.
+## Hinweis zum Kontotyp: Accounts v2
+Diese Stripe-Sandbox lässt die klassischen Kontotypen (Standard, Express, Custom; `type: 'express'`) und auch die
+Accounts-v1-Kontoerstellung mit Controller-Eigenschaften **standardmäßig nicht mehr zu** — neue Sandboxes/Konten
+werden auf die **Accounts v2 API** verwiesen (bestätigt am 2026-09-28 per Testaufruf: `invalid_request_error`,
+„Stripe no longer recommends Accounts v1 for new Connect integrations"). RacePic legt Fotografenkonten deshalb mit
+`stripe.v2.core.accounts.create(...)` an: `dashboard: 'express'`, Konfiguration `recipient` mit der Fähigkeit
+`stripe_balance.stripe_transfers`, `defaults.responsibilities.fees_collector`/`losses_collector: 'application'`
+(der MSC trägt die Gebühren und haftet für negative Salden, wie geplant). Bestätigt per Testkonto in der Sandbox
+(`acct_1UKk12HyPyc81wWW`, seitdem geschlossen/verwaist als Testdatensatz ohne Personendaten): Kontoerstellung,
+Anforderungen und Verantwortlichkeiten entsprechen genau der Konfiguration.
+
+**Wichtig für den Rest der Integration:** Account-Link (Hosted Onboarding) und Login-Link (Express-Dashboard) sowie
+der Abgleich per `GET /v1/accounts/{id}` laufen **unverändert über die v1-API** — Stripe erlaubt ausdrücklich, eine
+v2-Konto-ID an v1-Endpunkte zu übergeben; die Antwort kommt dann im gewohnten v1-Format
+(docs.stripe.com/connect/accounts-v2, Abschnitt „Bestehende Connect-Plattformen, die Accounts v1 ... verwenden").
+Nur die Kontoerstellung selbst ist v2.
+
+**Vorschaufeature beachten:** Die Kombination „Express-Dashboard + Stripe haftet für negative Salden"
+(`losses_collector: 'stripe'`) ist laut Doku nur mit der Vorschau-API-Version `2026-08-26.preview` verfügbar. RacePic
+nutzt diese Kombination **nicht** (der MSC haftet selbst, `losses_collector: 'application'`), braucht also keine
+Vorschauversion.

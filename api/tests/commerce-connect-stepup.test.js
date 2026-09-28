@@ -182,11 +182,13 @@ const has = (db, needle) => db.log.some((entry) => entry.text.includes(needle));
     return {
       calls,
       accounts: {
-        create: async (params, options) => { calls.create.push({ params, options }); return { id: 'acct_1', details_submitted: false, payouts_enabled: false, capabilities: { transfers: 'inactive' }, requirements: { currently_due: ['individual.dob.day'] } }; },
+        // Nach der v2-Erstellung wird der Anfangsstatus ueber den v1-kompatiblen Retrieve-Endpunkt geladen
+        // (die v2-Erstellungsantwort ist nicht v1-foermig), deshalb liefert dieses Fake hier bereits den vollen v1-Stand.
         retrieve: async (id) => { calls.retrieve.push(id); return active; },
         createLoginLink: async (id) => { calls.login.push(id); return { url: 'https://dashboard.stripe.test/login' }; }
       },
       accountLinks: { create: async (params) => { calls.links.push(params); return { url: 'https://connect.stripe.test/setup', expires_at: 1790000000 }; } },
+      v2: { core: { accounts: { create: async (params, options) => { calls.create.push({ params, options }); return { id: 'acct_1' }; } } } },
       ...overrides
     };
   };
@@ -209,20 +211,17 @@ const has = (db, needle) => db.log.some((entry) => entry.text.includes(needle));
   ]);
   const link = await pa.createOnboardingLink(onboardDb, stripe, 'p1', urls);
   assert.equal(link.url, 'https://connect.stripe.test/setup');
-  assert.equal(stripe.calls.create.length, 1);
-  assert.equal(stripe.calls.create[0].params.type, undefined, 'kein veralteter Kontotyp, sondern Controller-Eigenschaften');
-  assert.deepEqual(stripe.calls.create[0].params.controller, {
-    stripe_dashboard: { type: 'express' },
-    fees: { payer: 'application' },
-    losses: { payments: 'application' },
-    requirement_collection: 'stripe'
-  });
-  assert.equal(stripe.calls.create[0].params.country, 'DE');
-  assert.deepEqual(stripe.calls.create[0].params.capabilities, { transfers: { requested: true } });
+  assert.equal(stripe.calls.create.length, 1, 'Kontoerstellung laeuft ueber die Accounts v2 API, nicht ueber den veralteten Kontotyp express');
+  assert.equal(stripe.calls.create[0].params.dashboard, 'express');
+  assert.equal(stripe.calls.create[0].params.identity.country, 'de');
+  assert.deepEqual(stripe.calls.create[0].params.configuration, { recipient: { capabilities: { stripe_balance: { stripe_transfers: { requested: true } } } } });
+  assert.deepEqual(stripe.calls.create[0].params.defaults, { currency: 'eur', responsibilities: { fees_collector: 'application', losses_collector: 'application' } });
   assert.equal(stripe.calls.create[0].options.idempotencyKey, 'racepic-connect-account-p1');
+  assert.deepEqual(stripe.calls.retrieve, ['acct_1'], 'Anfangsstatus wird ueber den v1-kompatiblen Retrieve-Endpunkt geladen (v2-Erstellungsantwort ist nicht v1-foermig)');
   assert.deepEqual([stripe.calls.links[0].account, stripe.calls.links[0].type, stripe.calls.links[0].return_url], ['acct_1', 'account_onboarding', urls.returnUrl]);
   const statusUpdate = onboardDb.log.find((e) => e.text.startsWith('update racepic_photographer set status'));
-  assert.equal(statusUpdate.values[1], 'PAYMENT_ONBOARDING_PENDING');
+  // Der Anfangsstatus kommt jetzt vom (im Fake bereits vollstaendigen) Retrieve-Aufruf, nicht mehr aus der v2-Erstellungsantwort.
+  assert.equal(statusUpdate.values[1], 'PAYMENT_ENABLED');
   assert.ok(!statusUpdate.values[2].includes('DISABLED') && !statusUpdate.values[2].includes('PENDING_APPROVAL'), 'gesperrte/neue Profile werden nie umgestellt');
   assert.equal(JSON.stringify(onboardDb.log).includes('account_onboarding'), false, 'Link-Daten werden nicht in die Datenbank geschrieben');
 
@@ -238,7 +237,7 @@ const has = (db, needle) => db.log.some((entry) => entry.text.includes(needle));
 
   // Stripe-Ausfall: neutraler Fehler ohne Details.
   await assert.rejects(
-    () => pa.createOnboardingLink(makeScriptedDb([photographerHandler('ACTIVE_FREE'), sellerHandler()]), makeStripe({ accounts: { create: async () => { throw new Error('sk_live_geheim'); } } }), 'p1', urls),
+    () => pa.createOnboardingLink(makeScriptedDb([photographerHandler('ACTIVE_FREE'), sellerHandler()]), makeStripe({ v2: { core: { accounts: { create: async () => { throw new Error('sk_live_geheim'); } } } } }), 'p1', urls),
     (e) => e.code === 'STRIPE_UNAVAILABLE' && !String(e.message).includes('sk_live')
   );
 

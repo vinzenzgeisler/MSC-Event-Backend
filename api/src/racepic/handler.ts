@@ -78,6 +78,7 @@ import { handleConversionRoutes } from '../commerce/conversionRoutes';
 import { handlePasskeyRoutes } from './stepUpRoutes';
 import { handlePaymentAccountRoutes } from '../commerce/paymentAccountRoutes';
 import { handleQuoteRoutes } from '../commerce/quoteRoutes';
+import { handleWebhookRoutes } from '../commerce/webhookRoutes';
 
 /**
  * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet, Paket 3: Upload). Eigenstaendiger
@@ -446,6 +447,10 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     if (method === 'OPTIONS') {
       return json(200, { ok: true });
     }
+
+    // Commerce: Stripe-Webhooks (Signatur ist die Authentifizierung; 404 ohne commerceCheckout/commerceSettlement).
+    const webhookResponse = await handleWebhookRoutes(event);
+    if (webhookResponse) return webhookResponse;
 
     // Commerce: FREE->PAID-Antrag und Adminpruefung (hinter dem Flag commerceFreeToPaidConversion).
     const conversionResponse = await handleConversionRoutes(event, { requireActivePhotographer });

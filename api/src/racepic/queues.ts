@@ -30,3 +30,6 @@ export const sendMatchMessage = (imageId: string) => sendMessage('RACEPIC_MATCH_
  * Nachricht unterscheidet sich durch `conversionItemId` statt `imageId`.
  */
 export const sendConversionMessage = (conversionItemId: string) => sendMessage('RACEPIC_INGEST_QUEUE_URL', { conversionItemId });
+
+/** Stoesst die Verarbeitung eines Stripe-Webhook-Inbox-Eintrags an (Commerce AP16). */
+export const sendCommerceWebhookMessage = (inboxId: string) => sendMessage('COMMERCE_WEBHOOK_QUEUE_URL', { inboxId });

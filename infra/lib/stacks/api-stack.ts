@@ -1805,6 +1805,7 @@ export class ApiStack extends Stack {
           COMMERCE_SETTLEMENT: String(props.config.commerceFlags.commerceSettlement),
           COMMERCE_FREE_TO_PAID_CONVERSION: String(props.config.commerceFlags.commerceFreeToPaidConversion),
           STRIPE_SECRET_ARN: stripeSecret.secretArn,
+          COMMERCE_WEBHOOK_QUEUE_URL: racePicStack.commerceWebhookQueue.queueUrl,
           RACEPIC_PASSKEY_RP_ID: props.config.racepicPhotographerRelyingPartyId,
           RACEPIC_PASSKEY_ORIGINS: props.config.racepicMediaCorsAllowedOrigins.join(','),
           RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
@@ -1835,6 +1836,7 @@ export class ApiStack extends Stack {
         })
       );
       stripeSecret.grantRead(racePicApiHandler);
+      racePicStack.commerceWebhookQueue.grantSendMessages(racePicApiHandler);
       racePicApiHandler.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['rds-db:connect'],
@@ -2212,6 +2214,10 @@ export class ApiStack extends Stack {
         authorizer: jwtAuthorizer
       });
 
+      // Commerce (AP16): Stripe-Webhooks. Keine Anmeldung; die Signaturpruefung im Handler ist die Authentifizierung.
+      this.api.addRoutes({ path: '/webhooks/stripe/platform', methods: [apigwv2.HttpMethod.POST], integration: racePicIntegration });
+      this.api.addRoutes({ path: '/webhooks/stripe/connect', methods: [apigwv2.HttpMethod.POST], integration: racePicIntegration });
+
       // Commerce (AP05/AP06): Passkeys, Step-up strong und Stripe-Connect-Zahlungskonto (Flag commerceSettlement).
       this.api.addRoutes({
         path: '/photographer/passkeys',
@@ -2408,6 +2414,52 @@ export class ApiStack extends Stack {
           maxConcurrency: 2
         })
       );
+
+      // Commerce (AP16): Worker der Stripe-Webhook-Queue. Niedrige Nebenlaeufigkeit schont die kleine Datenbank.
+      const commerceWebhookWorker = new NodejsFunction(this, 'CommerceWebhookWorker', {
+        runtime: lambda.Runtime.NODEJS_24_X,
+        entry: path.join(__dirname, '../../../api/src/commerce/webhookWorker.ts'),
+        handler: 'handler',
+        functionName: `${props.config.prefix}-commerce-webhook-worker`,
+        memorySize: 512,
+        timeout: cdk.Duration.seconds(60),
+        depsLockFilePath,
+        environment: {
+          STAGE: props.config.stage,
+          DB_SECRET_ARN: dbSecretArn,
+          DB_HOST: dbHost,
+          DB_PORT: dbPort,
+          DB_NAME: props.config.dbName,
+          DB_USER: dbUser,
+          DB_REGION: dbRegion,
+          DB_IAM_AUTH: props.config.dbUseIamAuth ? 'true' : 'false',
+          DB_SSL: props.config.dbRequireTls ? 'true' : 'false',
+          DB_SSL_REJECT_UNAUTHORIZED: sslRejectUnauthorized,
+          DB_SSL_CA_BUNDLE_URL: 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem',
+          STRIPE_SECRET_ARN: stripeSecret.secretArn,
+          RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName
+        },
+        ...(props.config.apiInVpc ? lambdaVpcConfig : {})
+      });
+      commerceWebhookWorker.addToRolePolicy(
+        new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [dbSecretArn] })
+      );
+      commerceWebhookWorker.addToRolePolicy(new iam.PolicyStatement({ actions: ['rds-db:connect'], resources: [dbConnectArn] }));
+      stripeSecret.grantRead(commerceWebhookWorker);
+      commerceWebhookWorker.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:GetObject'],
+          resources: [`${racePicStack.mediaBucket.bucketArn}/commerce/webhooks/*`]
+        })
+      );
+      commerceWebhookWorker.addEventSource(
+        new lambdaEventSources.SqsEventSource(racePicStack.commerceWebhookQueue, {
+          batchSize: 1,
+          reportBatchItemFailures: true,
+          maxConcurrency: 2
+        })
+      );
+      new CfnOutput(this, 'CommerceWebhookWorkerName', { value: commerceWebhookWorker.functionName });
 
       new CfnOutput(this, 'RacePicApiHandlerName', { value: racePicApiHandler.functionName });
       new CfnOutput(this, 'RacePicIngestWorkerName', { value: racePicIngestWorker.functionName });

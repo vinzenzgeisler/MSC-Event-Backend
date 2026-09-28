@@ -34,6 +34,8 @@ export class RacePicStack extends Stack {
   public readonly ingestQueue: sqs.Queue;
   public readonly analyzeQueue: sqs.Queue;
   public readonly matchQueue: sqs.Queue;
+  /** Stripe-Webhook-Verarbeitung (Commerce AP16), mit eigener DLQ und Alarm. */
+  public readonly commerceWebhookQueue: sqs.Queue;
   public readonly photographerUserPool: cognito.UserPool;
   public readonly photographerUserPoolClientId: string;
   public readonly photographerUserPoolIssuerUrl: string;
@@ -182,7 +184,7 @@ export class RacePicStack extends Stack {
     // --- Verarbeitungs-Queues (Abschnitt F: Pipeline-Mechanik) ------------------------------
     // Worker-Lambdas (Ingest/Analyze/Match/Publish) folgen in Paket 4/6; hier nur die Warteschlangen,
     // damit RacePicApiHandler (Paket 1/3) bereits Upload-Abschluesse einreihen kann.
-    const makeStage = (name: 'Ingest' | 'Analyze' | 'Match') => {
+    const makeStage = (name: 'Ingest' | 'Analyze' | 'Match' | 'CommerceWebhook') => {
       const dlq = new sqs.Queue(this, `${name}DeadLetterQueue`, {
         queueName: `${props.config.prefix}-racepic-${name.toLowerCase()}-dlq`,
         encryption: sqs.QueueEncryption.SQS_MANAGED,
@@ -210,6 +212,7 @@ export class RacePicStack extends Stack {
     this.ingestQueue = makeStage('Ingest');
     this.analyzeQueue = makeStage('Analyze');
     this.matchQueue = makeStage('Match');
+    this.commerceWebhookQueue = makeStage('CommerceWebhook');
 
     // --- Fotografen-Identitaet (Abschnitt E) ------------------------------------------------
     // Eigener Pool statt Gruppe im Staff-Pool: Blast-Radius-Trennung, siehe Architekturplan.

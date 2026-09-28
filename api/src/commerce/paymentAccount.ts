@@ -169,6 +169,30 @@ export const refreshPaymentAccount = async (tx: Queryable, stripe: StripeConnect
   return getPaymentAccountView(tx, photographerId);
 };
 
+/**
+ * Abgleich aus einem Stripe-Webhook (`account.updated`, `capability.updated`): sucht das Konto ueber die
+ * Stripe-Konto-ID und holt den aktuellen Stand bei Stripe, statt der Nachricht zu vertrauen. So sind doppelte,
+ * verzoegerte oder vertauschte Ereignisse unschaedlich. Unbekannte Konten werden ignoriert (`false`).
+ */
+export const syncPaymentAccountByProviderId = async (tx: Queryable, stripe: StripeConnectApi, providerAccountId: string): Promise<boolean> => {
+  const row = (await tx.query<{ seller_id: string; photographer_id: string | null }>(
+    `select a.seller_id, s.photographer_id
+       from commerce_payment_account a join commerce_seller s on s.id = a.seller_id
+      where a.provider = 'STRIPE' and a.provider_account_id = $1`,
+    [providerAccountId]
+  )).rows[0];
+  if (!row || !row.photographer_id) return false;
+  let remote: Stripe.Account;
+  try {
+    remote = await stripe.accounts.retrieve(providerAccountId);
+  } catch {
+    logOperationalEvent('error', 'racepic_payment_account.webhook_sync_failed', {});
+    throw new PaymentAccountError('STRIPE_UNAVAILABLE');
+  }
+  await applyState(tx, row.photographer_id, row.seller_id, deriveAccountState(remote as unknown as AccountSnapshot));
+  return true;
+};
+
 export type OnboardingUrls = { returnUrl: string; refreshUrl: string };
 
 /** Legt bei Bedarf Seller und Express-Konto an und erzeugt einen kurzlebigen Hosted-Onboarding-Link (nicht gespeichert). */

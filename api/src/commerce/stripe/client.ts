@@ -79,3 +79,28 @@ export const resetStripeCacheForTests = () => {
   cachedSecrets = null;
   cachedClient = null;
 };
+
+export type WebhookEndpoint = 'platform' | 'connect';
+
+export class StripeWebhookError extends Error {
+  constructor(public readonly code: 'SIGNATURE_MISSING' | 'SIGNATURE_INVALID') {
+    super(`STRIPE_WEBHOOK_${code}`);
+    this.name = 'StripeWebhookError';
+  }
+}
+
+/**
+ * Prueft Signatur und Zeitstempel einer Stripe-Webhook-Nachricht gegen den Secret des jeweiligen Endpunkts
+ * (Plattform und Connect haben getrennte Secrets). `rawBody` muss exakt der empfangene Body sein - ein
+ * geparster und neu serialisierter Body wuerde die Signatur brechen. Wirft `StripeWebhookError` ohne Details.
+ */
+export const verifyStripeWebhook = async (endpoint: WebhookEndpoint, rawBody: string, signature: string | undefined): Promise<Stripe.Event> => {
+  if (!signature) throw new StripeWebhookError('SIGNATURE_MISSING');
+  const secrets = await loadStripeSecrets();
+  const secret = endpoint === 'platform' ? secrets.platformWebhookSecret : secrets.connectWebhookSecret;
+  try {
+    return Stripe.webhooks.constructEvent(rawBody, signature, secret);
+  } catch {
+    throw new StripeWebhookError('SIGNATURE_INVALID');
+  }
+};

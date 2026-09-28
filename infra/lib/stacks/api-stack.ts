@@ -2207,6 +2207,9 @@ export class ApiStack extends Stack {
 
       // Commerce (AP12): oeffentliche Quote (Flag commerceCheckout) und Steuer-/Provisionseinstellungen (Admin).
       this.api.addRoutes({ path: '/public/commerce/quotes', methods: [apigwv2.HttpMethod.POST], integration: racePicIntegration });
+      // Commerce (AP15): Checkout-Session und Kaeuferbestaetigung (Flag commerceCheckout).
+      this.api.addRoutes({ path: '/public/commerce/checkout-sessions', methods: [apigwv2.HttpMethod.POST], integration: racePicIntegration });
+      this.api.addRoutes({ path: '/public/commerce/orders/{orderId}', methods: [apigwv2.HttpMethod.GET], integration: racePicIntegration });
       this.api.addRoutes({
         path: '/admin/racepic/commerce-settings',
         methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],

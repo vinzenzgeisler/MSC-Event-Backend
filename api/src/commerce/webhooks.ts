@@ -86,10 +86,59 @@ const accountChanged: WebhookHandler = async ({ tx, deps }, event) => {
   return (await syncPaymentAccountByProviderId(tx, await deps.stripe(), accountId)) ? 'HANDLED' : 'IGNORED';
 };
 
-/** Registrierung je Endpunkt und Ereignistyp; weitere Handler (Zahlung, Erstattung, Dispute ...) kommen mit ihren Arbeitspaketen. */
+/**
+ * Erfuellung nach bezahlter Bestellung (Commerce AP15/AP16): setzt Bestellung und Zahlung auf `PAID`, legt je
+ * Position ein aktives Entitlement und einen 14 Tage zurueckgehaltenen Transfer-Eintrag an (Ausschuettung selbst
+ * folgt erst beim taeglichen Settlement, AP19). Die Erfolgsseite erfuellt keine Bestellung - nur dieses
+ * verifizierte Stripe-Ereignis darf `PAID` setzen (Marketplace-Plan 3.2). Zustandsbasiert idempotent: eine
+ * bereits bezahlte Bestellung wird bei erneuter Zustellung als bereits erledigt erkannt, nicht doppelt verbucht.
+ */
+const checkoutCompleted: WebhookHandler = async ({ tx }, event) => {
+  const session = event.data.object as Stripe.Checkout.Session;
+  const orderId = session.metadata?.commerce_order_id ?? session.client_reference_id ?? null;
+  if (!orderId || session.payment_status !== 'paid') return 'IGNORED';
+
+  const payment = (await tx.query<{ id: string; status: string }>('select id, status from commerce_payment where order_id = $1', [orderId])).rows[0];
+  if (!payment) return 'IGNORED'; // unbekannte/fremde Bestellung: nichts zu tun
+
+  if (payment.status !== 'PAID') {
+    const claimed = await tx.query(
+      `update commerce_payment set status = 'PAID', paid_at = now(), provider_payment_intent_id = coalesce(provider_payment_intent_id, $2), updated_at = now()
+        where id = $1 and status <> 'PAID'`,
+      [payment.id, typeof session.payment_intent === 'string' ? session.payment_intent : null]
+    );
+    if (claimed.rowCount) {
+      await tx.query(`update commerce_order set status = 'PAID', updated_at = now() where id = $1 and status = 'PENDING'`, [orderId]);
+    }
+  }
+
+  const items = (await tx.query<{ id: string; seller_id: string; seller_share_cents: number; license_snapshot: unknown }>(
+    'select id, seller_id, seller_share_cents, license_snapshot from commerce_order_item where order_id = $1',
+    [orderId]
+  )).rows;
+  const orderEmail = (await tx.query<{ email_norm: string }>('select email_norm from commerce_order where id = $1', [orderId])).rows[0]?.email_norm;
+  for (const item of items) {
+    await tx.query(
+      `insert into commerce_entitlement (order_item_id, product_id, email_norm, license_snapshot)
+       select $1, oi.product_id, $2, $3::jsonb from commerce_order_item oi where oi.id = $1
+       on conflict (order_item_id) do nothing`,
+      [item.id, orderEmail ?? '', JSON.stringify(item.license_snapshot)]
+    );
+    await tx.query(
+      `insert into commerce_transfer (order_item_id, seller_id, amount_cents, status, release_at)
+       values ($1, $2, $3, 'HELD', now() + interval '14 days')
+       on conflict (order_item_id) do nothing`,
+      [item.id, item.seller_id, item.seller_share_cents]
+    );
+  }
+  return 'HANDLED';
+};
+
+/** Registrierung je Endpunkt und Ereignistyp; weitere Handler (Erstattung, Dispute ...) kommen mit ihren Arbeitspaketen. */
 export const webhookHandlers: Record<string, WebhookHandler> = {
   'connect:account.updated': accountChanged,
-  'connect:capability.updated': accountChanged
+  'connect:capability.updated': accountChanged,
+  'platform:checkout.session.completed': checkoutCompleted
 };
 
 type InboxRow = { id: string; endpoint: WebhookEndpoint; event_id: string; event_type: string; payload_ref: string | null; attempt_count: number };

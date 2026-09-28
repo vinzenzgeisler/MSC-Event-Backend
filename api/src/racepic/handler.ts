@@ -78,6 +78,7 @@ import { handleConversionRoutes } from '../commerce/conversionRoutes';
 import { handlePasskeyRoutes } from './stepUpRoutes';
 import { handlePaymentAccountRoutes } from '../commerce/paymentAccountRoutes';
 import { handleQuoteRoutes } from '../commerce/quoteRoutes';
+import { handleCheckoutRoutes } from '../commerce/checkoutRoutes';
 import { handleWebhookRoutes } from '../commerce/webhookRoutes';
 
 /**
@@ -464,6 +465,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     // Commerce: serverautorisierte Quote und Steuer-/Provisionseinstellungen (Flag commerceCheckout bzw. Admin racepic.manage).
     const quoteResponse = await handleQuoteRoutes(event);
     if (quoteResponse) return quoteResponse;
+    // Commerce: Checkout-Session und Kaeuferbestaetigung (Flag commerceCheckout).
+    const checkoutResponse = await handleCheckoutRoutes(event);
+    if (checkoutResponse) return checkoutResponse;
 
     if (method === 'GET' && path === '/public/racepic/config') {
       return json(200, {

@@ -75,6 +75,8 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { buildPublicRateLimitKey, enforcePublicRateLimit } from '../http/publicRateLimit';
 import { getCommerceFlags } from '../commerce/flags';
 import { handleConversionRoutes } from '../commerce/conversionRoutes';
+import { handlePasskeyRoutes } from './stepUpRoutes';
+import { handlePaymentAccountRoutes } from '../commerce/paymentAccountRoutes';
 
 /**
  * RacePicApiHandler (Paket 1: Fundament, Paket 2: Identitaet, Paket 3: Upload). Eigenstaendiger
@@ -447,6 +449,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     // Commerce: FREE->PAID-Antrag und Adminpruefung (hinter dem Flag commerceFreeToPaidConversion).
     const conversionResponse = await handleConversionRoutes(event, { requireActivePhotographer });
     if (conversionResponse) return conversionResponse;
+    // Commerce: Passkeys und Step-up strong (hinter dem Flag commerceSettlement).
+    const passkeyResponse = await handlePasskeyRoutes(event, { requireActivePhotographer });
+    if (passkeyResponse) return passkeyResponse;
+    // Commerce: Stripe-Connect-Zahlungskonto (hinter dem Flag commerceSettlement, Aktionen mit Step-up strong).
+    const paymentAccountResponse = await handlePaymentAccountRoutes(event, { requireActivePhotographer });
+    if (paymentAccountResponse) return paymentAccountResponse;
 
     if (method === 'GET' && path === '/public/racepic/config') {
       return json(200, {

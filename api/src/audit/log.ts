@@ -96,7 +96,13 @@ const allowedPayloadKeysByAction: Record<string, string[]> = {
   commerce_offer_version_activated: ['offerVersionId', 'version', 'mode', 'priceCents'],
   racepic_offer_conversion_requested: ['conversionId', 'imageCount', 'priceCents'],
   racepic_offer_conversion_approved: ['conversionId', 'imageCount'],
-  racepic_offer_conversion_rejected: ['conversionId', 'imageCount']
+  racepic_offer_conversion_rejected: ['conversionId', 'imageCount'],
+  // RacePic Commerce (AP05/AP06), siehe api/src/racepic/stepUp.ts und api/src/commerce/paymentAccount.ts.
+  racepic_passkey_registered: [],
+  racepic_passkey_revoked: [],
+  racepic_step_up_granted: ['action'],
+  racepic_payment_account_onboarding_started: [],
+  racepic_payment_account_dashboard_opened: []
 };
 
 const sanitizePayload = (action: string, payload: unknown): Record<string, unknown> | undefined => {

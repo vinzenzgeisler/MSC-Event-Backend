@@ -1805,6 +1805,8 @@ export class ApiStack extends Stack {
           COMMERCE_SETTLEMENT: String(props.config.commerceFlags.commerceSettlement),
           COMMERCE_FREE_TO_PAID_CONVERSION: String(props.config.commerceFlags.commerceFreeToPaidConversion),
           STRIPE_SECRET_ARN: stripeSecret.secretArn,
+          RACEPIC_PASSKEY_RP_ID: props.config.racepicPhotographerRelyingPartyId,
+          RACEPIC_PASSKEY_ORIGINS: props.config.racepicMediaCorsAllowedOrigins.join(','),
           RACEPIC_MEDIA_BUCKET: racePicStack.mediaBucket.bucketName,
           RACEPIC_CDN_DOMAIN: racePicStack.distribution.distributionDomainName,
           RACEPIC_CDN_DISTRIBUTION_ID: racePicStack.distribution.distributionId,
@@ -2199,6 +2201,62 @@ export class ApiStack extends Stack {
         methods: [apigwv2.HttpMethod.POST],
         integration: racePicIntegration,
         authorizer: jwtAuthorizer
+      });
+
+      // Commerce (AP05/AP06): Passkeys, Step-up strong und Stripe-Connect-Zahlungskonto (Flag commerceSettlement).
+      this.api.addRoutes({
+        path: '/photographer/passkeys',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/passkeys/{passkeyId}',
+        methods: [apigwv2.HttpMethod.DELETE],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/passkeys/registration-options',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/passkeys/registration-verify',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/step-up/challenge',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/step-up/verify',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/payment-account',
+        methods: [apigwv2.HttpMethod.GET],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/payment-account/onboarding-link',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
+      });
+      this.api.addRoutes({
+        path: '/photographer/payment-account/dashboard-link',
+        methods: [apigwv2.HttpMethod.POST],
+        integration: racePicIntegration,
+        authorizer: photographerJwtAuthorizer
       });
 
       // Paket 4 (Publish-Worker): Veroeffentlichen/Verbergen/Entfernen, siehe api/src/racepic/publish.ts.

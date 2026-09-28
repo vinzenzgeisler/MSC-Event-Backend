@@ -14,6 +14,11 @@ export type PhotographerAuthContext = {
   emailVerified: boolean;
   /** `auth_time`-Claim in Sekunden seit Epoch, fuer Step-up-Policies (Abschnitt E: "recent"/"strong"). */
   authTime: number | null;
+  /**
+   * Stabile Kennung der Anmeldesitzung fuer Step-up-Grants: `origin_jti` bleibt ueber Refresh-Token-Rotation
+   * gleich, sonst dient `auth_time`. Ein Grant gilt nur in der Sitzung, in der er ausgestellt wurde.
+   */
+  sessionRef: string | null;
 };
 
 export const getPhotographerAuthContext = (event: APIGatewayProxyEventV2): PhotographerAuthContext => {
@@ -31,11 +36,15 @@ export const getPhotographerAuthContext = (event: APIGatewayProxyEventV2): Photo
         ? Number(authTimeRaw)
         : null;
 
+  const authTimeValue = authTime !== null && Number.isFinite(authTime) ? authTime : null;
+  const originJti = typeof claims.origin_jti === 'string' && claims.origin_jti.length > 0 ? claims.origin_jti : null;
+
   return {
     sub,
     email,
     emailVerified,
-    authTime: authTime !== null && Number.isFinite(authTime) ? authTime : null
+    authTime: authTimeValue,
+    sessionRef: originJti ?? (authTimeValue !== null ? `auth_time:${authTimeValue}` : null)
   };
 };
 

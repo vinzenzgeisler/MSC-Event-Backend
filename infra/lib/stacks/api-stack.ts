@@ -2300,6 +2300,14 @@ export class ApiStack extends Stack {
         memorySize: 512,
         timeout: cdk.Duration.minutes(2),
         depsLockFilePath,
+        bundling: {
+          // uploads.ts importiert sharp (fuer renderWatermarkedPreview) - ohne diese Ausnahme crasht
+          // jeder Cold Start mit "createRequire(undefined)" (Init Error, nicht erst beim ersten
+          // Request). Gleicher Bug wie bei RacePicApiHandler/-IngestWorker/-AnalyzeWorker/-MatchWorker,
+          // hier aber uebersehen; gefunden 2026-09-29 ueber CloudWatch-Logs (jeder Aufruf schlug fehl,
+          // seit dem allerersten Deploy dieser Funktion), siehe deren Kommentare weiter oben.
+          nodeModules: ['sharp']
+        },
         environment: {
           STAGE: props.config.stage,
           DB_SECRET_ARN: dbSecretArn,

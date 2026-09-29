@@ -2,6 +2,8 @@ import { and, desc, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { getDb } from '../db/client';
 import {
+  commerceOfferVersion,
+  commerceProduct,
   eventClass,
   entry,
   person,
@@ -10,6 +12,7 @@ import {
   racepicImage,
   racepicImageVariant,
   racepicLicense,
+  racepicOfferConversionItem,
   racepicPhotographer,
   vehicle
 } from '../db/schema';
@@ -159,19 +162,38 @@ export const removeImage = async (imageId: string): Promise<void> => {
 /**
  * Loescht ein bereits entferntes Bild endgueltig aus der Datenbank (Feedback 2026-09-22: "ich
  * will es komplett entfernen können mit der Prämisse dass natürlich kein Kauf dahinter hängt" -
- * im MVP gibt es noch keinen echten Checkout, die Praemisse ist also fuer jedes RacePic-Bild
+ * im MVP gab es noch keinen echten Checkout, die Praemisse war also fuer jedes RacePic-Bild
  * erfuellt). Setzt `visibility='REMOVED'` voraus (kein Direkt-Hard-Delete aus PUBLISHED/HIDDEN,
  * damit `removeImage` immer zuerst die S3-Objekte aufraeumt). Kaskadiert per FK auch
  * `racepic_assignment`/`racepic_assignment_event` fuer dieses Bild weg - bewusster Bruch mit der
  * sonst geltenden Architekturregel "Das Audit bleibt ohne Bilddaten erhalten" (Abschnitt G), aber
  * hier vom Nutzer explizit so gewollt ("komplett entfernen"); die allgemeine Admin-Audit-Log-Zeile
  * fuer die Loeschaktion selbst (writeAuditLog, siehe handler.ts) bleibt unabhaengig davon erhalten.
+ *
+ * Bug gefunden 2026-09-29 (Postgres 23503 foreign_key_violation, 500 statt sauberer Fehlermeldung):
+ * die obige "kein Kauf dahinter"-Praemisse stimmt seit der Commerce-Grundlage (AP02/AP03) nicht
+ * mehr unbedingt - jedes Bild bekommt beim Backfill eine `commerce_product`-Zeile (ON DELETE
+ * RESTRICT auf racepic_image), aktive/vergangene Preisstufen dazu `commerce_offer_version`-Zeilen
+ * (RESTRICT auf commerce_product), eine abgeschlossene FREE->PAID-Umstellung zusaetzlich eine
+ * `racepic_offer_conversion_item`-Zeile (RESTRICT auf racepic_image). Bestellungen/Zahlungen
+ * referenzieren diese Zeilen nicht per FK (sie halten stattdessen einen unveraenderlichen
+ * Preis-Snapshot), koennen ein Loeschen hier also nicht verhindern - genau deshalb ist es sicher,
+ * dieses reine Produkt-/Preisstufen-Bucheintrag-Beiwerk in derselben Transaktion mitzuloeschen,
+ * statt die urspruengliche Praemisse als generelle RESTRICT-Sperre stehen zu lassen.
  */
 export const hardDeleteImage = async (imageId: string): Promise<void> => {
   const image = await loadImageOrThrow(imageId);
   if (image.visibility !== 'REMOVED') throw new RacePicError('RACEPIC_IMAGE_NOT_REMOVED');
   const db = await getDb();
-  await db.delete(racepicImage).where(eq(racepicImage.id, imageId));
+  await db.transaction(async (tx) => {
+    const [product] = await tx.select({ id: commerceProduct.id }).from(commerceProduct).where(eq(commerceProduct.racepicImageId, imageId)).limit(1);
+    if (product) {
+      await tx.delete(commerceOfferVersion).where(eq(commerceOfferVersion.productId, product.id));
+      await tx.delete(commerceProduct).where(eq(commerceProduct.id, product.id));
+    }
+    await tx.delete(racepicOfferConversionItem).where(eq(racepicOfferConversionItem.imageId, imageId));
+    await tx.delete(racepicImage).where(eq(racepicImage.id, imageId));
+  });
 };
 
 export type ManifestParticipant = {

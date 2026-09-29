@@ -314,7 +314,11 @@ export const abortUpload = async (upload: typeof racepicUpload.$inferSelect, bat
 
 // Bilder, deren processing_status vor DERIVED liegt, haben noch keine `derived/{id}/thumb.webp`
 // (die legt erst der Ingest-Worker an, siehe ingestWorker.ts) - fuer die gilt kein Presign-Versuch.
-const HAS_THUMB_STATUSES = ['DERIVED', 'ANALYZED', 'MATCHED'];
+// Exportiert, damit adminEvents.ts dieselbe Liste nutzt statt einer eigenen (Bug gefunden 2026-09-29:
+// eine eigene, unvollstaendige Ausschlussliste dort vergass DUPLICATE/FAILED - beide erreichen den
+// DERIVED-Schritt nie, das Admin-Grid presignte trotzdem eine nie existierende preview.webp, was als
+// leeres, kaputtes <img> endete statt "Wird verarbeitet...").
+export const HAS_THUMB_STATUSES = ['DERIVED', 'ANALYZED', 'MATCHED'];
 
 /**
  * Fuer die "Meine Bilder"-Ansicht im Studio (Paket 15): dieselbe presignte Vorschau-URL wie in der

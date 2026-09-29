@@ -3,6 +3,7 @@ import { getDb } from '../db/client';
 import { event, racepicAssignment, racepicDetection, racepicEvent, racepicImage, racepicMatchCandidate, racepicPhotographer, racepicPhotographerEvent, racepicProcessingStep } from '../db/schema';
 import { RacePicError } from './repository';
 import { presignGetObject } from './s3';
+import { HAS_THUMB_STATUSES } from './uploads';
 
 /**
  * Admin-Verwaltung von RacePic pro Event (Paket 5: Admin-Basis), siehe
@@ -209,9 +210,11 @@ export const listImagesForEvent = async (
       // 2026-09-22: bei `visibility=REMOVED` loescht `removeImage()` (publish.ts) alle
       // `derived/`-Varianten aus S3 - ein Presign dafuer war trotzdem "erfolgreich" (S3-Presigning
       // prueft nicht, ob das Objekt existiert), das Bild im Admin-Grid lud dann als kaputtes <img>
-      // statt gar keins anzuzeigen.
+      // statt gar keins anzuzeigen. Zweiter Fund derselben Bugklasse 2026-09-29: die Ausschlussliste
+      // war unvollstaendig (DUPLICATE/FAILED fehlten) - jetzt dieselbe Allowlist wie in uploads.ts
+      // (HAS_THUMB_STATUSES), statt hier eine eigene, staendig nachzupflegende Liste zu fuehren.
       previewUrl:
-        row.visibility === 'REMOVED' || ['UPLOADED', 'VALIDATED'].includes(row.processingStatus)
+        row.visibility === 'REMOVED' || !HAS_THUMB_STATUSES.includes(row.processingStatus)
           ? null
           : await presignGetObject(`derived/${row.id}/preview.webp`, 300).catch(() => null),
       visibility: row.visibility,

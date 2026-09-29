@@ -85,7 +85,9 @@ export const resolveProdConfig = (): StageConfig => {
     // localhost:8080 siehe Kommentar bei assetsCorsAllowedOrigins oben - gilt hier fuer die
     // Manifest-/Bild-CORS-Policy auf dem CloudFront-Verhalten (racepic-stack.ts), nicht fuer
     // direkten S3-Zugriff (der Browser spricht immer mit CloudFront/OAC).
-    racepicMediaCorsAllowedOrigins: [prodPublicBaseUrl, 'https://www.msc-oberlausitz.de', 'https://msc-oberlausitz.de', 'http://localhost:8080'],
+    // 8081/8082 zusaetzlich zu 8080: Vite weicht lokal auf den naechsten freien Port aus, sobald 8080
+    // durch einen anderen, projektfremden lokalen Prozess belegt ist (beobachtet 2026-09-29).
+    racepicMediaCorsAllowedOrigins: [prodPublicBaseUrl, 'https://www.msc-oberlausitz.de', 'https://msc-oberlausitz.de', 'http://localhost:8080', 'http://localhost:8081', 'http://localhost:8082'],
     // ACHTUNG: `??` faengt nur `undefined`/`null` ab, nicht einen von GitHub Actions gesetzten,
     // aber leeren String - `${{ vars.X }}` liefert bei einer nicht gesetzten Environment-Variable
     // IMMER einen leeren String, nie "unset" (siehe .github/workflows/ci-cd.yml). Deshalb hier

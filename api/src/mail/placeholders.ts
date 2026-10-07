@@ -14,6 +14,10 @@ export const PLACEHOLDER_CATALOG: PlaceholderCatalogItem[] = [
   { name: 'firstName', description: 'Vorname Fahrer', example: 'Max' },
   { name: 'lastName', description: 'Nachname Fahrer', example: 'Mustermann' },
   { name: 'driverName', description: 'Vollständiger Fahrername', example: 'Max Mustermann' },
+  { name: 'signerName', description: 'Vollständiger Name der unterzeichnenden Person', example: 'Erika Musterfrau' },
+  { name: 'signerRole', description: 'Rolle der unterzeichnenden Person', example: 'Beifahrer' },
+  { name: 'eventDates', description: 'Datumsbereich der Veranstaltung', example: '2026-09-12 - 2026-09-13' },
+  { name: 'signedAt', description: 'Zeitpunkt der Unterschrift', example: '2026-09-12T08:30:00.000Z' },
   { name: 'className', description: 'Klassenname', example: 'Klasse 4A' },
   { name: 'startNumber', description: 'Startnummer', example: '42' },
   {
@@ -82,7 +86,8 @@ export const REQUIRED_PLACEHOLDERS_BY_TEMPLATE: Record<string, string[]> = {
   payment_reminder_followup: [],
   email_confirmation: ['driverName', 'verificationUrl'],
   codriver_info: ['eventName', 'driverName', 'codriverName'],
-  doublestarter_migration_notice: ['eventName', 'driverName']
+  doublestarter_migration_notice: ['eventName', 'driverName'],
+  waiver_signed: ['eventName', 'driverName', 'signerName', 'signedAt']
 };
 
 export const KNOWN_PLACEHOLDER_NAMES = new Set(PLACEHOLDER_CATALOG.map((item) => item.name));

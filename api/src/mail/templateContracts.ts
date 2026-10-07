@@ -349,6 +349,12 @@ const CONTRACTS: Record<string, TemplateContract> = {
     includeEntryContextDefault: true,
     showBadgeDefault: false,
     defaultMailLabel: null
+  }),
+  waiver_signed: makeProcessContract({
+    requiredPlaceholders: REQUIRED_PLACEHOLDERS_BY_TEMPLATE.waiver_signed ?? [],
+    includeEntryContextDefault: false,
+    showBadgeDefault: false,
+    defaultMailLabel: null
   })
 };
 

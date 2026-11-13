@@ -16,6 +16,7 @@ export interface StageConfig {
   sesFromEmail: string;
   newsletterFromEmail: string;
   newsletterPublicBaseUrl: string;
+  newsletterLegacyWritesEnabled?: boolean;
   orgaNotificationRecipients: string[];
   publicVerifyBaseUrl: string;
   assetsCorsAllowedOrigins: string[];

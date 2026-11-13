@@ -8,8 +8,10 @@ import { ApiStack } from '../lib/stacks/api-stack';
 import { AuthStack } from '../lib/stacks/auth-stack';
 import { DataStack } from '../lib/stacks/data-stack';
 import { MigrationRunnerStack } from '../lib/stacks/migration-runner-stack';
+import { NewsletterStandbyStack } from '../lib/stacks/newsletter-standby-stack';
 import { RacePicStack } from '../lib/stacks/racepic-stack';
 import { StorageStack } from '../lib/stacks/storage-stack';
+import { StandbyArchiveStack } from '../lib/stacks/standby-archive-stack';
 
 const app = new cdk.App();
 
@@ -40,6 +42,23 @@ const authStack = new AuthStack(app, `${config.prefix}-auth-stack`, {
   env: config.env,
   config
 });
+
+// Separate deployment lane: never implicitly create or switch the newsletter
+// service as part of the existing Event production deploy.
+if (app.node.tryGetContext('standaloneNewsletter') === 'true') {
+  new NewsletterStandbyStack(app, `${config.prefix}-newsletter-standby-stack`, {
+    env: config.env,
+    config,
+    authStack,
+    writeEnabled: app.node.tryGetContext('newsletterWriteEnabled') === 'true'
+  });
+}
+if (app.node.tryGetContext('standbyArchive') === 'true') {
+  new StandbyArchiveStack(app, `${config.prefix}-standby-archive-stack`, {
+    env: config.env,
+    config
+  });
+}
 
 const dataStack = needsDataStack
   ? new DataStack(app, `${config.prefix}-data-stack`, {

@@ -464,6 +464,12 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   const path = event.requestContext.http.path;
   try {
     const stage = process.env.STAGE ?? 'dev';
+    const legacyNewsletterMutation = method === 'POST' && (
+      path.startsWith('/public/newsletter/') || path.startsWith('/admin/newsletter/')
+    );
+    if (legacyNewsletterMutation && process.env.NEWSLETTER_LEGACY_WRITES_ENABLED === 'false') {
+      return errorJson(503, 'Newsletter migration in progress', undefined, 'NEWSLETTER_LEGACY_WRITES_PAUSED');
+    }
     const adminAuth = path.startsWith('/admin/') ? getAuthContext(event) : null;
     const requireAdminMfa = process.env.REQUIRE_ADMIN_MFA === 'true';
     const isAdminMutation = path.startsWith('/admin/') && !['GET', 'OPTIONS'].includes(method);

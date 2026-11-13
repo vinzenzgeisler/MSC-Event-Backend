@@ -32,6 +32,7 @@ export const resolveProdConfig = (): StageConfig => {
     sesFromEmail: 'nennung@msc-oberlausitzer-dreilaendereck.eu',
     newsletterFromEmail: 'newsletter@msc-oberlausitz.de',
     newsletterPublicBaseUrl: 'https://www.msc-oberlausitz.de/newsletter',
+    newsletterLegacyWritesEnabled: (process.env.PROD_NEWSLETTER_LEGACY_WRITES_ENABLED ?? 'true').trim().toLowerCase() !== 'false',
     orgaNotificationRecipients,
     publicVerifyBaseUrl: `${prodPublicBaseUrl}/anmeldung/verify`,
     assetsCorsAllowedOrigins: [

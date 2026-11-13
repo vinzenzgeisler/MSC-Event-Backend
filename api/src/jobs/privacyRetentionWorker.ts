@@ -116,17 +116,19 @@ export const handler = async () => {
     [settings.rateLimitDays]
   );
 
-  await execute(
-    'newsletter_pending',
-    `delete from "newsletter_subscriber" where "status" = 'pending' and "created_at" < now() - ($1 * interval '1 day')`,
-    [settings.newsletterPendingDays]
-  );
+  if (process.env.NEWSLETTER_LEGACY_WRITES_ENABLED !== 'false') {
+    await execute(
+      'newsletter_pending',
+      `delete from "newsletter_subscriber" where "status" = 'pending' and "created_at" < now() - ($1 * interval '1 day')`,
+      [settings.newsletterPendingDays]
+    );
 
-  await execute(
-    'newsletter_revocation_evidence',
-    `delete from "newsletter_subscriber" where "status" = 'unsubscribed' and "unsubscribed_at" < now() - ($1 * interval '1 day')`,
-    [settings.newsletterEvidenceDays]
-  );
+    await execute(
+      'newsletter_revocation_evidence',
+      `delete from "newsletter_subscriber" where "status" = 'unsubscribed' and "unsubscribed_at" < now() - ($1 * interval '1 day')`,
+      [settings.newsletterEvidenceDays]
+    );
+  }
 
   await execute(
     'export_job',

@@ -1,0 +1,49 @@
+name: Production data backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Audit the live backups or also create a manual RDS snapshot
+        required: true
+        type: choice
+        options:
+          - audit
+          - snapshot
+        default: audit
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Audit production data and optionally create a snapshot
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          BACKUP_MODE: ${{ inputs.mode }}
+          BACKUP_RUN_ID: ${{ github.run_id }}
+          BACKUP_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: bash scripts/prod-data-backup.sh
+
+      - name: Upload backup manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-backup-manifest-${{ github.run_id }}
+          path: production-backup-manifest.json
+          if-no-files-found: ignore
+          retention-days: 30

@@ -47,6 +47,16 @@ evidence at each gate, and do not mark Event standby complete from a green CI ru
    until S3 **and** RDS isolated restore rehearsals, newsletter-only operation,
    costs and reopen instructions are verified.
 
+The protected `restore-rds` action takes a specific encrypted production
+snapshot ID. It restores a temporary `db.t3.micro` in the existing VPC with a
+new security group limited to that GitHub runner's IPv4 address, verifies SQL
+table counts over TLS, and deletes only that temporary instance and group.
+Its metadata-only manifest records the verification and cleanup status. If a
+runner is cancelled or cleanup fails, check and remove the temporary
+`dreiecksrennen-restore-<run id>` instance and security group before treating
+the rehearsal as complete. This action incurs temporary RDS compute/storage
+charges; it neither touches the source instance nor deletes its snapshot.
+
 If activation succeeds but its migration-seal write fails, rerun `activate`.
 The workflow tolerates the already-enabled API and writes the missing seal.
 Do not run `copy` or `final` after new writes begin.

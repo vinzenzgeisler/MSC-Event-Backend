@@ -57,6 +57,14 @@ runner is cancelled or cleanup fails, check and remove the temporary
 the rehearsal as complete. This action incurs temporary RDS compute/storage
 charges; it neither touches the source instance nor deletes its snapshot.
 
+The protected `restore-s3` action takes one bucket kind (`assets` or
+`documents`) and that bucket's AWS Backup recovery-point ARN. It restores all
+object versions into a new private, versioned bucket, verifies restored version
+metadata, then removes only that temporary bucket. Run it once for each bucket.
+If a restore fails or times out after starting, the temporary bucket is left
+for diagnosis; inspect the manifest and clean it explicitly after the AWS job
+has stopped. This rehearsal incurs temporary S3 restore/storage/request costs.
+
 If activation succeeds but its migration-seal write fails, rerun `activate`.
 The workflow tolerates the already-enabled API and writes the missing seal.
 Do not run `copy` or `final` after new writes begin.

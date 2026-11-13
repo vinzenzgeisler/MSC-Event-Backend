@@ -18,8 +18,20 @@ on:
           - archive-provision
           - archive-snapshot
           - restore-rds
+          - restore-s3
       snapshot_id:
         description: Encrypted production RDS snapshot ID for isolated restore rehearsal
+        required: false
+        type: string
+      bucket_kind:
+        description: S3 bucket kind to restore (assets or documents)
+        required: false
+        type: choice
+        options:
+          - assets
+          - documents
+      recovery_point_arn:
+        description: AWS Backup recovery point ARN for the selected S3 bucket
         required: false
         type: string
 
@@ -105,6 +117,22 @@ jobs:
         with:
           name: production-standby-rds-restore-${{ github.run_id }}
           path: production-standby-rds-restore-manifest.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Restore S3 recovery point to a private temporary versioned bucket
+        if: inputs.action == 'restore-s3'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          RESTORE_BUCKET_KIND: ${{ inputs.bucket_kind }}
+          RESTORE_RECOVERY_POINT_ARN: ${{ inputs.recovery_point_arn }}
+        run: bash scripts/prod-standby-s3-restore-test.sh
+      - name: Upload S3 restore metadata
+        if: always() && inputs.action == 'restore-s3'
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-standby-s3-restore-${{ github.run_id }}
+          path: production-standby-s3-restore-manifest.json
           if-no-files-found: ignore
           retention-days: 30
       - name: Provision independent newsletter stack with writes disabled

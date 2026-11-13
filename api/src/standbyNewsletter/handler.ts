@@ -35,7 +35,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
       return respond(event, 503, { ok: false, code: 'NEWSLETTER_STANDBY_NOT_ACTIVE' });
     }
     if (method === 'GET' && path === '/public/newsletter/config') {
-      return respond(event, 200, getNewsletterConfig(event.queryStringParameters?.locale));
+      const config = getNewsletterConfig(event.queryStringParameters?.locale);
+      return respond(event, 200, { ...config,
+        enabled: config.enabled && process.env.NEWSLETTER_WRITE_ENABLED === 'true' });
     }
     if (method === 'POST' && path === '/public/newsletter/subscriptions') {
       const input = validateNewsletterSignup(parseBody(event));

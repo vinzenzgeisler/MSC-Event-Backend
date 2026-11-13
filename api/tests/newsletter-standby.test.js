@@ -49,6 +49,8 @@ const event = (method, path, body) => ({
 (async () => {
   const blocked = await handler(event('POST', '/public/newsletter/subscriptions', {}));
   assert.equal(blocked.statusCode, 503, 'standby API must not accept writes before cutover');
+  const readOnlyConfig = await handler(event('GET', '/public/newsletter/config'));
+  assert.equal(JSON.parse(readOnlyConfig.body).enabled, false, 'standby config must not advertise signups');
   assert.equal(items.size, 0);
 
   await requestSignup(' Person@example.org ', 'cz');

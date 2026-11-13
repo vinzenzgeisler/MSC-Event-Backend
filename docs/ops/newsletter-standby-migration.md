@@ -7,6 +7,50 @@ independent AWS stack with DynamoDB Standard/on-demand, Lambda, API Gateway, SES
 and the existing website. No always-on PostgreSQL is needed after cutover. This
 is a target architecture, **not** a claim that the cutover has happened.
 
+## Implemented release lanes (not yet executed in production)
+
+The protected `newsletter-standby.yml` workflow provides separate manual actions.
+Each action requires approval of the `prod` GitHub environment; the normal
+`main` deploy is **not** the cutover control. Use the successful run artifact as
+evidence at each gate, and do not mark Event standby complete from a green CI run.
+
+1. `inventory`: inspect RDS, S3 version counts and last month's service costs
+   (costs may be `null` if the deploy role lacks Cost Explorer access).
+2. `archive-provision`, then `archive-snapshot`: create a retained AWS Backup
+   vault and independently capture both versioned S3 buckets. Preserve the
+   recovery-point ARNs outside the 30-day Actions artifact. An AWS Backup
+   `COMPLETED` state is not a restore rehearsal.
+3. `provision`: create the independent Cognito-authorized newsletter API,
+   DynamoDB PITR table, SES sender/feedback and retention jobs with *writes
+   disabled*. Record the `NewsletterApiUrl` stack output. The website and Event
+   admin frontend have separate newsletter API configuration PRs; they continue
+   using the old API while their new endpoint setting is unset.
+4. `audit`, then `copy`: read and copy subscribers plus consent evidence, with
+   strong-read per-key verification and count reconciliation. The new API
+   remains read-only; no public route changes.
+5. Verify the legacy newsletter outbox is drained. Set the production repository
+   variable `PROD_NEWSLETTER_LEGACY_WRITES_ENABLED=false`, run `freeze-legacy`,
+   and verify the legacy API, SES feedback and retention function environments
+   are false. The freeze prevents those jobs from changing legacy newsletter
+   subscriber rows, but old SES feedback arriving after the freeze still needs
+   a deliberate suppression reconciliation; check the old feedback queue and
+   repeat the final data reconciliation immediately before activation.
+6. `final` rebuilds the target from a consistent PostgreSQL snapshot and writes
+   a reconciliation marker. `activate` accepts that marker for at most 24 hours,
+   confirms the legacy API is frozen, enables new writes, and seals migration.
+   Then set both frontend/website newsletter API URL variables and deploy them;
+   verify signup, double opt-in, unsubscribe, admin permissions, SES feedback,
+   and delivery on the **live** endpoint. Until routing switches, the public
+   website is still coupled to RDS despite an active standalone API.
+7. Run the existing protected `prod-data-backup.yml` in `snapshot` mode again
+   after cutover to obtain the final Event database snapshot. Do not retire RDS
+   until S3 **and** RDS isolated restore rehearsals, newsletter-only operation,
+   costs and reopen instructions are verified.
+
+If activation succeeds but its migration-seal write fails, rerun `activate`.
+The workflow tolerates the already-enabled API and writes the missing seal.
+Do not run `copy` or `final` after new writes begin.
+
 The live implementation is coupled to PostgreSQL in more places than the two
 newsletter tables: `routes/newsletter.ts` writes `email_outbox`, reads the
 published `free_form` template and writes `audit_log`; `emailWorker.ts` sends

@@ -161,7 +161,8 @@ export class ApiStack extends Stack {
         NENNUNGSTOOL_URL: mailPublicBaseUrl,
         EMAIL_VERIFICATION_TOKEN_TTL_DAYS: '30',
         REQUIRE_ADMIN_MFA: 'false',
-        NEWSLETTER_ENABLED: 'true',
+        NEWSLETTER_ENABLED: props.config.newsletterLegacyWritesEnabled === false ? 'false' : 'true',
+        NEWSLETTER_LEGACY_WRITES_ENABLED: props.config.newsletterLegacyWritesEnabled === false ? 'false' : 'true',
         NEWSLETTER_PUBLIC_BASE_URL: props.config.newsletterPublicBaseUrl,
         NEWSLETTER_FROM_EMAIL: newsletterFromEmail
       },
@@ -235,6 +236,7 @@ export class ApiStack extends Stack {
       timeout: cdk.Duration.seconds(60),
       depsLockFilePath,
       environment: {
+        NEWSLETTER_LEGACY_WRITES_ENABLED: props.config.newsletterLegacyWritesEnabled === false ? 'false' : 'true',
         STAGE: props.config.stage,
         DB_SECRET_ARN: dbSecretArn,
         DB_HOST: dbHost,
@@ -341,6 +343,7 @@ export class ApiStack extends Stack {
       timeout: cdk.Duration.seconds(30),
       depsLockFilePath,
       environment: {
+        NEWSLETTER_LEGACY_WRITES_ENABLED: props.config.newsletterLegacyWritesEnabled === false ? 'false' : 'true',
         STAGE: props.config.stage,
         DB_SECRET_ARN: dbSecretArn,
         DB_HOST: dbHost,

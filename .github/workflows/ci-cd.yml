@@ -500,6 +500,7 @@ jobs:
         run: npm --workspace infra run synth -- -c stage=prod
         env:
           PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          PROD_NEWSLETTER_LEGACY_WRITES_ENABLED: ${{ vars.PROD_NEWSLETTER_LEGACY_WRITES_ENABLED }}
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
@@ -521,6 +522,7 @@ jobs:
         working-directory: infra
         env:
           PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          PROD_NEWSLETTER_LEGACY_WRITES_ENABLED: ${{ vars.PROD_NEWSLETTER_LEGACY_WRITES_ENABLED }}
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
@@ -545,6 +547,7 @@ jobs:
         working-directory: infra
         env:
           PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          PROD_NEWSLETTER_LEGACY_WRITES_ENABLED: ${{ vars.PROD_NEWSLETTER_LEGACY_WRITES_ENABLED }}
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
@@ -573,6 +576,7 @@ jobs:
         working-directory: infra
         env:
           PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          PROD_NEWSLETTER_LEGACY_WRITES_ENABLED: ${{ vars.PROD_NEWSLETTER_LEGACY_WRITES_ENABLED }}
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}

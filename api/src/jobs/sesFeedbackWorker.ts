@@ -56,7 +56,7 @@ export const processSesFeedback = async (feedback: SesFeedback) => {
   if (result.rowCount === 0) {
     throw new Error('SES_DELIVERY_NOT_FOUND');
   }
-  if (status === 'bounced' || status === 'complaint') {
+  if ((status === 'bounced' || status === 'complaint') && process.env.NEWSLETTER_LEGACY_WRITES_ENABLED !== 'false') {
     await pool.query(
       `update newsletter_subscriber n
        set status = $2,

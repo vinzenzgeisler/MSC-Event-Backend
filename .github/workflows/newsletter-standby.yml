@@ -1,0 +1,216 @@
+name: Newsletter standby preparation
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Protected, non-cutover preparation step
+        required: true
+        type: choice
+        options:
+          - inventory
+          - provision
+          - audit
+          - copy
+          - freeze-legacy
+          - final
+          - activate
+          - archive-provision
+          - archive-snapshot
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build and test
+        run: |
+          npm --workspace api run test:newsletter
+          npm --workspace infra run build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Inventory current costs and retained data footprint
+        if: inputs.action == 'inventory'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+        run: bash scripts/prod-standby-inventory.sh
+      - name: Upload metadata-only inventory
+        if: inputs.action == 'inventory'
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-standby-inventory-${{ github.run_id }}
+          path: production-standby-inventory.json
+          retention-days: 30
+      - name: Provision retained S3 backup vault and role
+        if: inputs.action == 'archive-provision'
+        working-directory: infra
+        env:
+          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+        run: >
+          npx cdk deploy dreiecksrennen-prod-standby-archive-stack
+          -c stage=prod -c standbyArchive=true
+          --exclusively --require-approval never
+      - name: Back up both S3 buckets with AWS Backup
+        if: inputs.action == 'archive-snapshot'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+        run: bash scripts/prod-standby-s3-backup.sh
+      - name: Upload S3 backup metadata
+        if: always() && inputs.action == 'archive-snapshot'
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-standby-s3-backup-${{ github.run_id }}
+          path: production-standby-s3-backup-manifest.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Provision independent newsletter stack with writes disabled
+        if: inputs.action == 'provision'
+        working-directory: infra
+        env:
+          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          if aws dynamodb describe-table --table-name dreiecksrennen-prod-newsletter-standby >/dev/null 2>&1; then
+            marker="$(aws dynamodb get-item --table-name dreiecksrennen-prod-newsletter-standby \
+              --key '{"pk":{"S":"META#cutover"},"sk":{"S":"STATE"}}' \
+              --consistent-read --query 'Item.pk.S' --output text)"
+            test "$marker" = 'None'
+          fi
+          npx cdk deploy dreiecksrennen-prod-newsletter-standby-stack \
+            -c stage=prod -c standaloneNewsletter=true -c newsletterWriteEnabled=false \
+            --exclusively --require-approval never
+      - name: Freeze legacy newsletter mutations through the existing API stack
+        if: inputs.action == 'freeze-legacy'
+        working-directory: infra
+        env:
+          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          PROD_NEWSLETTER_LEGACY_WRITES_ENABLED: ${{ vars.PROD_NEWSLETTER_LEGACY_WRITES_ENABLED }}
+          ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          test "$PROD_NEWSLETTER_LEGACY_WRITES_ENABLED" = 'false'
+          npx cdk deploy dreiecksrennen-prod-api-stack \
+            -c stage=prod --exclusively --require-approval never
+      - name: Verify legacy writes are frozen before final copy
+        if: inputs.action == 'final' || inputs.action == 'activate'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          for function in dreiecksrennen-prod-api-handler dreiecksrennen-prod-privacy-retention-worker dreiecksrennen-prod-ses-feedback-worker; do
+            state="$(aws lambda get-function-configuration \
+              --function-name "$function" --region "$AWS_REGION" \
+              --query 'Environment.Variables.NEWSLETTER_LEGACY_WRITES_ENABLED' --output text)"
+            test "$state" = 'false'
+          done
+      - name: Verify target is still read-only before copying
+        if: inputs.action == 'copy' || inputs.action == 'final'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          state="$(aws lambda get-function-configuration \
+            --function-name dreiecksrennen-prod-newsletter-standby-api --region "$AWS_REGION" \
+            --query 'Environment.Variables.NEWSLETTER_WRITE_ENABLED' --output text)"
+          test "$state" = 'false'
+      - name: Resolve source database connection metadata
+        if: inputs.action == 'audit' || inputs.action == 'copy' || inputs.action == 'final'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          outputs="$(aws cloudformation describe-stacks --stack-name dreiecksrennen-prod-data-stack --region "$AWS_REGION" --query 'Stacks[0].Outputs' --output json)"
+          secret="$(jq -r '.[] | select(.OutputKey == "DbSecretArn") | .OutputValue' <<< "$outputs")"
+          host="$(jq -r '.[] | select(.OutputKey == "DbEndpoint") | .OutputValue' <<< "$outputs")"
+          port="$(jq -r '.[] | select(.OutputKey == "DbPort") | .OutputValue' <<< "$outputs")"
+          name="$(jq -r '.[] | select(.OutputKey == "DbName") | .OutputValue' <<< "$outputs")"
+          test -n "$secret" && test -n "$host" && test -n "$name"
+          {
+            echo "DB_SECRET_ARN=$secret"
+            echo "DB_HOST=$host"
+            echo "DB_PORT=$port"
+            echo "DB_NAME=$name"
+            echo 'DB_USER=eventadmin'
+            echo 'DB_SSL=true'
+            echo 'DB_SSL_REJECT_UNAUTHORIZED=true'
+            echo 'NEWSLETTER_TABLE_NAME=dreiecksrennen-prod-newsletter-standby'
+          } >> "$GITHUB_ENV"
+      - name: Audit source and target counts
+        if: inputs.action == 'audit'
+        run: node api/dist/standbyNewsletter/migrate.js audit
+      - name: Copy newsletter records without enabling writes or changing routes
+        if: inputs.action == 'copy'
+        run: node api/dist/standbyNewsletter/migrate.js copy
+      - name: Final copy after legacy write freeze and outbox drain
+        if: inputs.action == 'final'
+        run: node api/dist/standbyNewsletter/migrate.js final
+      - name: Verify the recent final reconciliation marker
+        if: inputs.action == 'activate'
+        env:
+          PROD_NEWSLETTER_LEGACY_WRITES_ENABLED: ${{ vars.PROD_NEWSLETTER_LEGACY_WRITES_ENABLED }}
+        run: |
+          set -euo pipefail
+          test "$PROD_NEWSLETTER_LEGACY_WRITES_ENABLED" = 'false'
+          marker="$(aws dynamodb get-item --table-name dreiecksrennen-prod-newsletter-standby \
+            --key '{"pk":{"S":"META#final-import"},"sk":{"S":"STATE"}}' \
+            --consistent-read --output json)"
+          completed="$(jq -r '.Item.completedAt.S // empty' <<< "$marker")"
+          pending="$(jq -r '.Item.pendingNewsletterMail.N // empty' <<< "$marker")"
+          test -n "$completed" && test "$pending" = '0'
+          age="$(( $(date -u +%s) - $(date -u -d "$completed" +%s) ))"
+          test "$age" -ge 0 && test "$age" -le 86400
+          state="$(aws lambda get-function-configuration \
+            --function-name dreiecksrennen-prod-newsletter-standby-api \
+            --query 'Environment.Variables.NEWSLETTER_WRITE_ENABLED' --output text)"
+          test "$state" = 'false' || test "$state" = 'true'
+      - name: Activate independent newsletter writes
+        if: inputs.action == 'activate'
+        working-directory: infra
+        env:
+          PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
+          PROD_NEWSLETTER_LEGACY_WRITES_ENABLED: ${{ vars.PROD_NEWSLETTER_LEGACY_WRITES_ENABLED }}
+          ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+        run: >
+          npx cdk deploy dreiecksrennen-prod-newsletter-standby-stack
+          -c stage=prod -c standaloneNewsletter=true -c newsletterWriteEnabled=true
+          --exclusively --require-approval never
+      - name: Close the migration path after activation
+        if: inputs.action == 'activate'
+        run: |
+          set -euo pipefail
+          state="$(aws lambda get-function-configuration \
+            --function-name dreiecksrennen-prod-newsletter-standby-api \
+            --query 'Environment.Variables.NEWSLETTER_WRITE_ENABLED' --output text)"
+          test "$state" = 'true'
+          aws dynamodb put-item --table-name dreiecksrennen-prod-newsletter-standby \
+            --item "$(jq -cn --arg now "$(date -u +%FT%TZ)" \
+              '{pk:{S:"META#cutover"},sk:{S:"STATE"},kind:{S:"cutover"},activatedAt:{S:$now}}')" \
+            --condition-expression 'attribute_not_exists(pk)' || \
+            test "$(aws dynamodb get-item --table-name dreiecksrennen-prod-newsletter-standby \
+              --key '{"pk":{"S":"META#cutover"},"sk":{"S":"STATE"}}' \
+              --consistent-read --query 'Item.pk.S' --output text)" = 'META#cutover'

@@ -1,6 +1,6 @@
 # Production data during Event app standby
 
-The newsletter and Event app share the same production PostgreSQL database. **Do not stop or delete that database while the newsletter must work.** The API Lambda, scheduled email worker, SES, Cognito admin pool, and required S3 assets must remain available. The Event frontend may be hidden separately after its newsletter links have been checked.
+The newsletter and Event app share the same production PostgreSQL database. **Do not stop or delete that database while the newsletter must work.** The API Lambda, scheduled email worker, SES, Cognito admin pool, and required S3 assets must remain available. The Event frontend may be hidden separately after its newsletter links have been checked. The path to a cheaper independent newsletter is specified in [newsletter-standby-migration.md](newsletter-standby-migration.md).
 
 ## Backup pipeline
 
@@ -27,7 +27,8 @@ For loss or corruption of the live database, choose the latest valid point-in-ti
 
 ## Remaining work before cost-saving standby
 
-- Run the pipeline's `audit` and `snapshot` modes and verify results in AWS.
+- The `snapshot` mode succeeded on 2026-11-13 in [run 43418505604](https://github.com/vinzenzgeisler/MSC-Event-Backend/actions/runs/43418505604). Its manifest recorded the manual snapshot `dreiecksrennen-prod-postgres-public-manual-43418505604-1`, 30-day automated-backup retention, and `Enabled` versioning on the two primary S3 buckets. This proves snapshot availability at that time, not a restore or independent S3 backup.
+- Migrate the newsletter to a separate low-idle-cost store and runtime; verify its flows and current consent data before disconnecting PostgreSQL.
 - Inventory all live S3 buckets and Cognito; design independent backup for mutable files if needed, with costs reviewed first.
 - Rehearse a restore without replacing production or sending real emails.
 - Measure current costs and disable only Event-specific components that are proven independent of the newsletter.

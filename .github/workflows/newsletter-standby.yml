@@ -76,14 +76,16 @@ jobs:
         if: inputs.action == 'archive-provision'
         working-directory: infra
         env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
           PROD_PUBLIC_BASE_URL: ${{ vars.PROD_PUBLIC_BASE_URL }}
           ORGA_NOTIFICATION_RECIPIENTS: ${{ vars.ORGA_NOTIFICATION_RECIPIENTS }}
           CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
-        run: >
-          npx cdk deploy dreiecksrennen-prod-standby-archive-stack
-          -c stage=prod -c standbyArchive=true
-          --exclusively --require-approval never
+        run: |
+          bash ../scripts/prod-standby-archive-rollback-cleanup.sh
+          npx cdk deploy dreiecksrennen-prod-standby-archive-stack \
+            -c stage=prod -c standbyArchive=true \
+            --exclusively --require-approval never
       - name: Back up both S3 buckets with AWS Backup
         if: inputs.action == 'archive-snapshot'
         env:

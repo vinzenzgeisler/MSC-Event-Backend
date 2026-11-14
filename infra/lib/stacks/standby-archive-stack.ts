@@ -17,8 +17,8 @@ export class StandbyArchiveStack extends Stack {
       roleName: `${props.config.prefix}-standby-s3-backup-role`,
       assumedBy: new iam.ServicePrincipal('backup.amazonaws.com'),
       managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSBackupServiceRolePolicyForS3Backup'),
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSBackupServiceRolePolicyForS3Restore')
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AWSBackupServiceRolePolicyForS3Backup'),
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AWSBackupServiceRolePolicyForS3Restore')
       ]
     });
     new CfnOutput(this, 'StandbyBackupVaultName', { value: vault.backupVaultName });

@@ -19,7 +19,13 @@ const putVerified = async <T extends { pk: string; sk: string }>(item: T) => {
   const result = await client.send(new GetCommand({ TableName: table(),
     Key: { pk: item.pk, sk: item.sk }, ConsistentRead: true }));
   const expected = JSON.parse(JSON.stringify(item));
-  if (!isDeepStrictEqual(result.Item, expected)) throw new Error('Newsletter record reconciliation failed');
+  if (!isDeepStrictEqual(result.Item, expected)) {
+    const actual = result.Item ?? {};
+    const fields = [...new Set([...Object.keys(expected), ...Object.keys(actual)])]
+      .filter((field) => !isDeepStrictEqual(actual[field], expected[field]))
+      .sort();
+    throw new Error(`Newsletter record reconciliation failed: kind=${String((item as Record<string, unknown>).kind ?? 'unknown')}, fields=${result.Item ? fields.join(',') : 'missing-item'}`);
+  }
 };
 const mapSubscriber = (row: LegacySubscriber): Subscriber => ({
   pk: subscriberKey(String(row.email_norm)), sk: 'PROFILE', kind: 'subscriber',

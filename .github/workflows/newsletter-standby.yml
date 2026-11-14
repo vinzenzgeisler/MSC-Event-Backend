@@ -20,6 +20,7 @@ on:
           - archive-snapshot
           - restore-rds
           - restore-s3
+          - retire-rds
       snapshot_id:
         description: Encrypted production RDS snapshot ID for isolated restore rehearsal
         required: false
@@ -136,6 +137,21 @@ jobs:
         with:
           name: production-standby-s3-restore-${{ github.run_id }}
           path: production-standby-s3-restore-manifest.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Retire the Event RDS instance with a final snapshot
+        if: inputs.action == 'retire-rds'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          RETIRE_SNAPSHOT_ID: ${{ inputs.snapshot_id }}
+        run: bash scripts/prod-standby-rds-retire.sh
+      - name: Upload RDS retirement metadata
+        if: always() && inputs.action == 'retire-rds'
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-standby-rds-retire-${{ github.run_id }}
+          path: production-standby-rds-retire-manifest.json
           if-no-files-found: ignore
           retention-days: 30
       - name: Provision independent newsletter stack with writes disabled

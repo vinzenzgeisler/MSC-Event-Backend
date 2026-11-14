@@ -150,3 +150,7 @@ Accept standby only after the newsletter works without RDS, exports and consent
 evidence reconcile, a real backup restore succeeds, current monthly AWS costs
 have been measured, and reopening instructions have been exercised. Until then
 RDS remains online.
+
+## RDS retirement and reopening
+
+`retire-rds` (needs a post-cutover manual snapshot ID) verifies the cutover marker, frozen legacy writes and the snapshot, disables the Event schedules that need PostgreSQL, then deletes `dreiecksrennen-prod-postgres-public` with a final snapshot while retaining automated backups. The data stack's CloudFormation drift is intentional. To reopen: restore the final snapshot as `dreiecksrennen-prod-postgres-public` in the same subnet group, security group and parameter group, re-enable the schedules by deploying `main`, and reconnect to the *current* newsletter store; never overwrite DynamoDB from the snapshot.

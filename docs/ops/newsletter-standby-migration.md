@@ -10,6 +10,7 @@ is a target architecture, **not** a claim that the cutover has happened.
 ## Implemented release lanes (not yet executed in production)
 
 The protected `newsletter-standby.yml` workflow provides separate manual actions.
+The `cutover` action runs steps 5–6 (`freeze-legacy`, `final`, `activate`) in one approved run, so the legacy newsletter is not blocked by several separate approvals; `final` retries for up to ten minutes while the frozen legacy outbox drains. Set `PROD_NEWSLETTER_LEGACY_WRITES_ENABLED=false` immediately before dispatching it.
 Each action requires approval of the `prod` GitHub environment; the normal
 `main` deploy is **not** the cutover control. Use the successful run artifact as
 evidence at each gate, and do not mark Event standby complete from a green CI run.

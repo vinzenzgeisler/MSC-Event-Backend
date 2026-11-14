@@ -18,6 +18,8 @@ verified=false
 cleaned=false
 versions=0
 bytes=0
+source_versions=0
+source_bytes=0
 
 remove_temporary_bucket() {
   local listing deletion count
@@ -48,8 +50,9 @@ finish() {
   jq -n --arg at "$(date -u +%FT%TZ)" --arg kind "$kind" \
     --arg recovery "$recovery" --arg destination "$destination" \
     --argjson versions "$versions" --argjson bytes "$bytes" \
+    --argjson sourceVersions "$source_versions" --argjson sourceBytes "$source_bytes" \
     --argjson verified "$verified" --argjson cleaned "$cleaned" \
-    '{checkedAt:$at,kind:$kind,recoveryPointArn:$recovery,temporaryBucket:$destination,restoreVerified:$verified,restoredVersions:$versions,restoredVersionBytes:$bytes,temporaryResourcesCleaned:$cleaned}' > "$manifest"
+    '{checkedAt:$at,kind:$kind,recoveryPointArn:$recovery,temporaryBucket:$destination,restoreVerified:$verified,sourceVersions:$sourceVersions,sourceVersionBytes:$sourceBytes,restoredVersions:$versions,restoredVersionBytes:$bytes,temporaryResourcesCleaned:$cleaned}' > "$manifest"
   cat "$manifest"
   exit "$status"
 }
@@ -94,12 +97,16 @@ for attempt in $(seq 1 200); do
 done
 [[ "$completed" == true ]] || { echo 'S3 restore timed out' >&2; exit 1; }
 
-summary="$(aws s3api list-object-versions --bucket "$destination" --region "$region" \
-  --output json | jq '{versions:(.Versions // [] | length),bytes:(.Versions // [] | map(.Size // 0) | add // 0)}')"
-versions="$(jq '.versions' <<< "$summary")"
-bytes="$(jq '.bytes' <<< "$summary")"
-if [[ "$(jq -r '.BackupSizeInBytes // 0' <<< "$point")" -gt 0 && "$versions" -eq 0 ]]; then
-  echo 'Backup had data but restored bucket is empty' >&2
+source_inventory="$(aws s3api list-object-versions --bucket "$source_bucket" --region "$region" \
+  --output json | jq -c '[.Versions[]? | {key:.Key,size:.Size}] | sort_by(.key,.size)')"
+restored_inventory="$(aws s3api list-object-versions --bucket "$destination" --region "$region" \
+  --output json | jq -c '[.Versions[]? | {key:.Key,size:.Size}] | sort_by(.key,.size)')"
+source_versions="$(jq 'length' <<< "$source_inventory")"
+source_bytes="$(jq '[.[].size] | add // 0' <<< "$source_inventory")"
+versions="$(jq 'length' <<< "$restored_inventory")"
+bytes="$(jq '[.[].size] | add // 0' <<< "$restored_inventory")"
+if [[ "$source_versions" -eq 0 || "$source_bytes" -eq 0 || "$source_inventory" != "$restored_inventory" ]]; then
+  echo "S3 restore does not match source version keys and sizes (source: $source_versions versions, $source_bytes bytes; restored: $versions versions, $bytes bytes)" >&2
   exit 1
 fi
 verified=true
